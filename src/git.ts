@@ -273,7 +273,7 @@ export function commitWithMessage(message: string, cwd?: string): void {
     encoding: "utf-8",
     stdio: ["pipe", "inherit", "inherit"],
   });
-  
+
   if (result.status !== 0) {
     throw new GitCommandError(
       `Git commit failed (exit ${result.status}): ${result.error?.message || "unknown error"}`,
