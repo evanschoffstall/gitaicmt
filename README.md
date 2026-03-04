@@ -15,7 +15,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="MIT License" /></a>
 </p>
 
-<p>AI-powered git commit messages that actually make sense.<br/>Analyzes your diffs, splits logical changes, and writes Conventional Commits — all hands-free.<br/>Auto-stages if nothing is staged. No prompts. No decisions.</p>
+<p>AI-powered git commit messages that actually make sense.<br/>Analyzes your diffs, splits logical changes, and writes Conventional Commits — all hands-free.<br/>Auto-stages if nothing is staged. Shows the plan, asks once, done.</p>
 
 <br/>
 
