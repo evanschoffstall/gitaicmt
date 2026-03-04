@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Block commits with non-empty API keys in config files
+if git diff --cached --name-only | grep -q "gitaicmt.config.json"; then
+  if git diff --cached gitaicmt.config.json | grep -q '"apiKey".*"sk-'; then
+    echo "❌ ERROR: Attempting to commit OpenAI API key in gitaicmt.config.json"
+    echo "Please remove the API key and use environment variable OPENAI_API_KEY instead"
+    exit 1
+  fi
+fi
