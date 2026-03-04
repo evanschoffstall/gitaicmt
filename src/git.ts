@@ -3,9 +3,35 @@
  * Provides safe, testable interface for git interactions
  */
 
-import { execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { GIT_MAX_BUFFER } from "./constants.js";
 import { GitCommandError, InvalidPathError } from "./errors.js";
+
+// ============================================================================
+// Repository Validation
+// ============================================================================
+
+/**
+ * Check if the current directory is inside a git repository
+ * @param cwd - Optional working directory (defaults to process.cwd())
+ * @returns true if inside a git repository, false otherwise
+ */
+export function isGitRepository(cwd?: string): boolean {
+  try {
+    const result = spawnSync("git", ["rev-parse", "--git-dir"], {
+      cwd: cwd ?? process.cwd(),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    // Check if process executed successfully
+    if (result.error) {
+      return false;
+    }
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
 
 // ============================================================================
 // Path Validation
@@ -72,7 +98,7 @@ export function sanitizeFilePath(path: string): string {
 /**
  * Execute a git command safely with error handling
  * All git operations should use this function to ensure consistent error handling
- * @param command - The git command to execute (e.g., "git diff")
+ * @param args - Array of command arguments (avoids shell injection)
  * @param options - Optional configuration
  * @param options.cwd - Working directory (defaults to process.cwd())
  * @param options.input - Input to pipe to the command via stdin
@@ -81,25 +107,33 @@ export function sanitizeFilePath(path: string): string {
  * @throws {GitCommandError} If command exits with non-zero status
  */
 export function execGit(
-  command: string,
+  args: string[],
   options?: { cwd?: string; input?: string; maxBuffer?: number },
 ): string {
   const dir = options?.cwd ?? process.cwd();
   try {
-    return execSync(command, {
+    const result = spawnSync("git", args, {
       cwd: dir,
       encoding: "utf-8",
       maxBuffer: options?.maxBuffer ?? GIT_MAX_BUFFER,
       input: options?.input,
       stdio: options?.input ? ["pipe", "pipe", "pipe"] : "pipe",
     });
+    if (result.status !== 0) {
+      throw {
+        status: result.status,
+        stderr: result.stderr,
+        message: result.stderr || result.error?.message || "Git command failed",
+      };
+    }
+    return result.stdout as string;
   } catch (err: unknown) {
     const e = err as { status?: number; message?: string; stderr?: string };
     const stderr = e.stderr || "";
     const status = e.status || 1;
     throw new GitCommandError(
-      `Git command failed (exit ${status}): ${command}\n${stderr}`,
-      command,
+      `Git command failed (exit ${status}): git ${args.join(" ")}\n${stderr}`,
+      `git ${args.join(" ")}`,
       status,
     );
   }
@@ -116,7 +150,7 @@ export function execGit(
  * @throws {GitCommandError} If git command fails
  */
 export function getStagedDiff(cwd?: string): string {
-  return execGit("git diff --cached --unified=3", { cwd });
+  return execGit(["diff", "--cached", "--unified=3"], { cwd });
 }
 
 /**
@@ -126,7 +160,7 @@ export function getStagedDiff(cwd?: string): string {
  * @throws {GitCommandError} If git command fails
  */
 export function hasStagedChanges(cwd?: string): boolean {
-  const out = execGit("git diff --cached --name-only", { cwd });
+  const out = execGit(["diff", "--cached", "--name-only"], { cwd });
   return out.trim().length > 0;
 }
 
@@ -140,8 +174,7 @@ export function hasStagedChanges(cwd?: string): boolean {
  */
 export function getFileWorkingDiff(filePath: string, cwd?: string): string {
   const safe = sanitizeFilePath(filePath);
-  const escaped = safe.replace(/"/g, '\\\\"');
-  return execGit(`git diff -- "${escaped}"`, { cwd });
+  return execGit(["diff", "--", safe], { cwd });
 }
 
 // ============================================================================
@@ -151,13 +184,26 @@ export function getFileWorkingDiff(filePath: string, cwd?: string): string {
 /**
  * Unstage all changes (reset HEAD)
  * @param cwd - Optional working directory (defaults to process.cwd())
- * @throws {GitCommandError} If git command fails
+ * @throws {GitCommandError} If git command fails (except for empty staging area)
  */
 export function resetStaging(cwd?: string): void {
   try {
-    execGit("git reset HEAD -- .", { cwd });
-  } catch {
-    // Ignore errors (e.g., if nothing was staged)
+    execGit(["reset", "HEAD", "--", "."], { cwd });
+  } catch (err) {
+    // Only ignore "nothing to reset" errors
+    if (err instanceof GitCommandError) {
+      // Git returns 0 for empty reset, but check message just in case
+      const msg = err.message.toLowerCase();
+      if (
+        msg.includes("no changes") ||
+        msg.includes("nothing to reset") ||
+        msg.includes("did not match any files")
+      ) {
+        return; // Safe to ignore
+      }
+    }
+    // Re-throw unexpected errors (permission denied, repo corruption, etc.)
+    throw err;
   }
 }
 
@@ -174,11 +220,8 @@ export function stageFiles(paths: string[], cwd?: string): void {
   // Validate and sanitize all paths first
   const safe = paths.map(sanitizeFilePath);
 
-  // Stage each file individually to avoid shell expansion issues
-  for (const p of safe) {
-    const escaped = p.replace(/"/g, '\\\\"');
-    execGit(`git add -- "${escaped}"`, { cwd });
-  }
+  // Stage all files in one command using -- separator for safety
+  execGit(["add", "--", ...safe], { cwd });
 }
 
 /**
@@ -188,7 +231,7 @@ export function stageFiles(paths: string[], cwd?: string): void {
  * @throws {GitCommandError} If git command fails
  */
 export function stageAll(cwd?: string): void {
-  execGit("git add -A", { cwd });
+  execGit(["add", "-A"], { cwd });
 }
 
 /**
@@ -202,7 +245,7 @@ export function stagePatch(patchContent: string, cwd?: string): void {
   if (!patchContent || patchContent.trim().length === 0) {
     throw new GitCommandError("Cannot stage empty patch", "git apply --cached");
   }
-  execGit("git apply --cached --unidiff-zero -", {
+  execGit(["apply", "--cached", "--unidiff-zero", "-"], {
     cwd,
     input: patchContent,
   });
@@ -224,19 +267,18 @@ export function commitWithMessage(message: string, cwd?: string): void {
   }
 
   const dir = cwd ?? process.cwd();
-  try {
-    execSync("git commit -F -", {
-      cwd: dir,
-      input: message,
-      encoding: "utf-8",
-      stdio: ["pipe", "inherit", "inherit"],
-    });
-  } catch (err: unknown) {
-    const e = err as { status?: number; message?: string };
+  const result = spawnSync("git", ["commit", "-F", "-"], {
+    cwd: dir,
+    input: message,
+    encoding: "utf-8",
+    stdio: ["pipe", "inherit", "inherit"],
+  });
+  
+  if (result.status !== 0) {
     throw new GitCommandError(
-      `Git commit failed (exit ${e.status || 1}): ${e.message || "unknown error"}`,
+      `Git commit failed (exit ${result.status}): ${result.error?.message || "unknown error"}`,
       "git commit -F -",
-      e.status,
+      result.status || 1,
     );
   }
 }
@@ -248,6 +290,6 @@ export function commitWithMessage(message: string, cwd?: string): void {
  * @throws {GitCommandError} If git command fails
  */
 export function getStagedFiles(cwd?: string): string[] {
-  const out = execGit("git diff --cached --name-only", { cwd });
+  const out = execGit(["diff", "--cached", "--name-only"], { cwd });
   return out.trim().split("\n").filter(Boolean);
 }

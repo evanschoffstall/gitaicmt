@@ -9,7 +9,9 @@ import { chunkDiffs, formatFileDiff, getStats, parseDiff } from "./diff.js";
 import {
   commitWithMessage,
   getStagedDiff,
+  getStagedFiles,
   hasStagedChanges,
+  isGitRepository,
   resetStaging,
   stageAll,
   stageFiles,
@@ -45,7 +47,27 @@ function die(msg: string): never {
 
 /** Ensure changes are staged. If nothing is staged, auto-stage all changes. */
 function ensureStaged(): void {
-  if (hasStagedChanges()) return;
+  // First check if we're in a git repository
+  if (!isGitRepository()) {
+    die(
+      "Not a git repository. Run 'git init' first or cd into a git repository.",
+    );
+  }
+
+  try {
+    if (hasStagedChanges()) return;
+  } catch (err: unknown) {
+    // Git command failed - provide helpful error
+    if (err instanceof Error) {
+      if (err.message.includes("does not have any commits yet")) {
+        die(
+          "Git repository has no commits yet. Create an initial commit first:\n  git commit --allow-empty -m 'Initial commit'",
+        );
+      }
+    }
+    throw err; // Re-throw unexpected errors
+  }
+
   log(`${DIM}No staged changes detected, auto-staging all changes...${RESET}`);
   stageAll();
   if (!hasStagedChanges()) {
@@ -64,6 +86,7 @@ function formatCommitFile(f: PlannedCommitFile): string {
 /**
  * Stage files for a commit group, handling hunk-level staging.
  * This version stages whole files to avoid complex hunk-matching issues.
+ * Validates that all paths exist in the original diff before staging.
  */
 function stageGroupFiles(
   group: PlannedCommitFile[],
@@ -71,6 +94,16 @@ function stageGroupFiles(
 ): void {
   // Collect all unique file paths from the group
   const filesToStage = Array.from(new Set(group.map((f) => f.path)));
+
+  // SECURITY: Validate that all paths exist in the original diff
+  // This prevents AI from returning malicious or non-existent paths
+  for (const path of filesToStage) {
+    if (!originalFiles.has(path)) {
+      throw new Error(
+        `AI returned invalid file path not in original diff: ${path}`,
+      );
+    }
+  }
 
   if (filesToStage.length > 0) {
     try {
@@ -297,6 +330,17 @@ async function cmdCommit(autoConfirm: boolean) {
 
   // Execute each commit group
   let committed = 0;
+  let initialStagedFiles: string[] = [];
+
+  // Save initial staging state for recovery
+  try {
+    initialStagedFiles = getStagedFiles();
+  } catch (err) {
+    log(
+      `${YELLOW}Warning: Could not save initial staging state for recovery${RESET}`,
+    );
+  }
+
   try {
     for (let i = 0; i < mergedGroups.length; i++) {
       const g = mergedGroups[i];
@@ -325,19 +369,29 @@ async function cmdCommit(autoConfirm: boolean) {
     log(
       `${RED}${BOLD}Failed after ${committed}/${mergedGroups.length} commits.${RESET}`,
     );
-    // Try to restore remaining files to staged state
-    if (committed < mergedGroups.length) {
-      const remainingPaths = mergedGroups
-        .slice(committed)
-        .flatMap((g) => g.files.map((f) => f.path));
+
+    // Attempt to restore staging state
+    if (committed < mergedGroups.length && initialStagedFiles.length > 0) {
+      log(`${YELLOW}Attempting to restore initial staging state...${RESET}`);
       try {
-        stageFiles(remainingPaths);
-        log(`${YELLOW}Remaining files re-staged.${RESET}`);
-      } catch {
+        resetStaging();
+        if (initialStagedFiles.length > 0) {
+          stageFiles(initialStagedFiles);
+          log(`${GREEN}Initial staging state restored successfully.${RESET}`);
+        }
+      } catch (restoreErr) {
+        log(`${RED}Failed to restore staging state.${RESET}`);
         log(
-          `${RED}Could not re-stage files. Run: git add ${remainingPaths.join(" ")}${RESET}`,
+          `${YELLOW}Manual recovery: Review 'git status' and 'git log' to assess state.${RESET}`,
+        );
+        log(
+          `${YELLOW}Previous ${committed} commits were completed successfully.${RESET}`,
         );
       }
+    } else {
+      log(
+        `${YELLOW}Manual recovery required: Check 'git status' and 'git log'.${RESET}`,
+      );
     }
     throw err;
   }

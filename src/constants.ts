@@ -4,6 +4,18 @@
  */
 
 // ============================================================================
+// AI Analysis Configuration
+// ============================================================================
+
+/** Maximum files to analyze in a single grouping batch */
+export const MAX_FILES_PER_BATCH = 6;
+
+/**
+ * Reason: Batching large changesets improves processing speed and forces
+ * more granular commits. 6 files is a sweet spot between throughput and quality.
+ */
+
+// ============================================================================
 // Cache Configuration
 // ============================================================================
 
