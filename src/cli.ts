@@ -388,7 +388,9 @@ function cmdInit() {
 function cmdHelp() {
   log(`${BOLD}gitaicmt${RESET} — AI-powered git commits\n`);
   log(`${CYAN}Commands:${RESET}`);
-  log("  gitaicmt              Auto-detect, split & commit (shows plan, asks y/n)");
+  log(
+    "  gitaicmt              Auto-detect, split & commit (shows plan, asks y/n)",
+  );
   log("  gitaicmt -y           Same as above, but skip confirmation");
   log(
     "  gitaicmt plan         Preview planned commit groups without committing",
@@ -399,7 +401,9 @@ function cmdHelp() {
   log("  gitaicmt help         Show this help\n");
   log(`${CYAN}Usage:${RESET}`);
   log("  gitaicmt                         Detect, analyze, confirm & commit");
-  log("  gitaicmt -y                      Detect, analyze & commit (no prompt)");
+  log(
+    "  gitaicmt -y                      Detect, analyze & commit (no prompt)",
+  );
   log("  gitaicmt plan                    Preview the split before committing");
   log("  gitaicmt gen | git commit -F -   Pipe single message to git\n");
   log(`${CYAN}Config:${RESET}`);
