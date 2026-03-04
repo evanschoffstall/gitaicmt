@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createInterface } from "node:readline";
 import type { PlannedCommitFile } from "./ai.js";
 import { generateForChunks, planCommits } from "./ai.js";
 import { initConfig, loadConfig } from "./config.js";
@@ -160,6 +161,43 @@ function stageGroupFiles(
   }
 }
 
+/** Prompt the user for y/n. Re-prompts until a valid answer is given. */
+async function promptYesNo(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    while (true) {
+      const answer = await new Promise<string>((resolve) => {
+        rl.question(`${question} ${DIM}(y/n)${RESET} `, resolve);
+      });
+      const a = answer.trim().toLowerCase();
+      if (a === "y" || a === "yes") return true;
+      if (a === "n" || a === "no") return false;
+      // Invalid input — re-prompt (no default)
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+/** Display planned commit groups */
+function displayPlan(
+  groups: { files: PlannedCommitFile[]; message: string }[],
+): void {
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    log(`${BOLD}${GREEN}Commit ${i + 1}/${groups.length}:${RESET}`);
+    log(`  ${BOLD}${g.message.split("\n")[0]}${RESET}`);
+    const body = g.message.split("\n").slice(1).join("\n").trim();
+    if (body) {
+      for (const line of body.split("\n")) {
+        log(`  ${DIM}${line}${RESET}`);
+      }
+    }
+    log(`  ${DIM}Files: ${g.files.map(formatCommitFile).join(", ")}${RESET}`);
+    log("");
+  }
+}
+
 // -------- Commands --------
 
 /** Generate a single commit message (legacy / simple mode) */
@@ -223,23 +261,11 @@ async function cmdPlan() {
   );
   log("");
 
-  for (let i = 0; i < groups.length; i++) {
-    const g = groups[i];
-    log(`${BOLD}${GREEN}Commit ${i + 1}/${groups.length}:${RESET}`);
-    log(`  ${BOLD}${g.message.split("\n")[0]}${RESET}`);
-    const body = g.message.split("\n").slice(1).join("\n").trim();
-    if (body) {
-      for (const line of body.split("\n")) {
-        log(`  ${DIM}${line}${RESET}`);
-      }
-    }
-    log(`  ${DIM}Files: ${g.files.map(formatCommitFile).join(", ")}${RESET}`);
-    log("");
-  }
+  displayPlan(groups);
 }
 
-/** Analyze, split, and execute multiple commits (fully automated) */
-async function cmdCommit() {
+/** Analyze, split, and execute multiple commits */
+async function cmdCommit(autoConfirm: boolean) {
   const t0 = performance.now();
   ensureStaged();
 
@@ -255,10 +281,25 @@ async function cmdCommit() {
   const groups = await planCommits(files, formatFileDiff);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
+  log("");
   log(
-    `${BOLD}${CYAN}Planned ${groups.length} commit(s)${RESET} ${DIM}(${elapsed}s)${RESET}`,
+    `${BOLD}${CYAN}Planned ${groups.length} commit(s):${RESET} ${DIM}(${elapsed}s)${RESET}`,
   );
   log("");
+
+  displayPlan(groups);
+
+  // Confirm before committing
+  if (!autoConfirm) {
+    const confirmed = await promptYesNo(
+      `${BOLD}Commit ${groups.length} planned commit(s)?${RESET}`,
+    );
+    if (!confirmed) {
+      log(`${YELLOW}Aborted.${RESET}`);
+      return;
+    }
+    log("");
+  }
 
   // Build file lookup for hunk-level staging
   const fileMap = new Map(files.map((f) => [f.path, f]));
@@ -345,9 +386,10 @@ function cmdInit() {
 }
 
 function cmdHelp() {
-  log(`${BOLD}gitaicmt${RESET} — Fully automated AI-powered git commits\n`);
+  log(`${BOLD}gitaicmt${RESET} — AI-powered git commits\n`);
   log(`${CYAN}Commands:${RESET}`);
-  log("  gitaicmt              Auto-detect changes, split & commit (default)");
+  log("  gitaicmt              Auto-detect, split & commit (shows plan, asks y/n)");
+  log("  gitaicmt -y           Same as above, but skip confirmation");
   log(
     "  gitaicmt plan         Preview planned commit groups without committing",
   );
@@ -356,7 +398,8 @@ function cmdHelp() {
   log("  gitaicmt init         Create default gitaicmt.config.json");
   log("  gitaicmt help         Show this help\n");
   log(`${CYAN}Usage:${RESET}`);
-  log("  gitaicmt                         Detect, analyze & commit everything");
+  log("  gitaicmt                         Detect, analyze, confirm & commit");
+  log("  gitaicmt -y                      Detect, analyze & commit (no prompt)");
   log("  gitaicmt plan                    Preview the split before committing");
   log("  gitaicmt gen | git commit -F -   Pipe single message to git\n");
   log(`${CYAN}Config:${RESET}`);
