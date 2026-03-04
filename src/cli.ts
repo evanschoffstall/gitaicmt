@@ -416,13 +416,19 @@ function cmdHelp() {
 // -------- Entry --------
 
 async function main() {
-  const cmd = process.argv[2] ?? "";
+  const args = process.argv.slice(2);
+  const hasYFlag = args.includes("-y") || args.includes("--yes");
+  // Help flags are special — treat them as commands
+  const hasHelpFlag = args.includes("-h") || args.includes("--help");
+  const cmd = hasHelpFlag
+    ? "help"
+    : (args.find((a) => !a.startsWith("-")) ?? "");
 
   switch (cmd) {
     case "":
     case "commit":
     case "c":
-      await cmdCommit();
+      await cmdCommit(hasYFlag);
       break;
     case "plan":
     case "p":
