@@ -1,15 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../src/config.js";
-import { initConfig, loadConfig, resetConfigCache } from "../src/config.js";
+import {
+  DEFAULTS,
+  globalConfigPath,
+  initConfig,
+  loadConfig,
+  resetConfigCache,
+  userConfigPath,
+} from "../src/config.js";
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "gitaicmt-test-"));
@@ -310,6 +318,266 @@ describe("config", () => {
       expect(cfg.openai.model).toBe("gpt-4o");
       // Should not throw
       rmSync(dir, { recursive: true });
+    });
+  });
+
+  // ───── Path helpers ─────
+
+  describe("config path helpers", () => {
+    test("globalConfigPath returns /etc/gitaicmt/config.json", () => {
+      expect(globalConfigPath()).toBe("/etc/gitaicmt/config.json");
+    });
+
+    test("userConfigPath defaults to ~/.config/gitaicmt/config.json", () => {
+      const oldXdg = process.env["XDG_CONFIG_HOME"];
+      delete process.env["XDG_CONFIG_HOME"];
+
+      expect(userConfigPath()).toBe(
+        join(homedir(), ".config", "gitaicmt", "config.json"),
+      );
+
+      if (oldXdg !== undefined) process.env["XDG_CONFIG_HOME"] = oldXdg;
+    });
+
+    test("userConfigPath respects XDG_CONFIG_HOME", () => {
+      const oldXdg = process.env["XDG_CONFIG_HOME"];
+      process.env["XDG_CONFIG_HOME"] = "/tmp/custom-xdg";
+
+      expect(userConfigPath()).toBe("/tmp/custom-xdg/gitaicmt/config.json");
+
+      if (oldXdg !== undefined) process.env["XDG_CONFIG_HOME"] = oldXdg;
+      else delete process.env["XDG_CONFIG_HOME"];
+    });
+  });
+
+  // ───── Multi-level config loading ─────
+
+  describe("multi-level config", () => {
+    let savedXdg: string | undefined;
+
+    beforeEach(() => {
+      savedXdg = process.env["XDG_CONFIG_HOME"];
+      resetConfigCache();
+    });
+
+    afterEach(() => {
+      if (savedXdg !== undefined) process.env["XDG_CONFIG_HOME"] = savedXdg;
+      else delete process.env["XDG_CONFIG_HOME"];
+      resetConfigCache();
+    });
+
+    test("user config is loaded and merged with defaults", () => {
+      const tmp = makeTmpDir();
+      const xdgDir = join(tmp, "xdg");
+      const userDir = join(xdgDir, "gitaicmt");
+      mkdirSync(userDir, { recursive: true });
+      writeFileSync(
+        join(userDir, "config.json"),
+        JSON.stringify({ openai: { model: "user-model" } }),
+      );
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      // Use a local dir with NO config
+      const localDir = join(tmp, "project");
+      mkdirSync(localDir, { recursive: true });
+
+      const cfg = loadConfig(localDir);
+      expect(cfg.openai.model).toBe("user-model");
+      // Defaults preserved
+      expect(cfg.openai.maxTokens).toBe(512);
+      expect(cfg.commit.conventional).toBe(true);
+
+      rmSync(tmp, { recursive: true });
+    });
+
+    test("local config overrides user config", () => {
+      const tmp = makeTmpDir();
+      // User config
+      const xdgDir = join(tmp, "xdg");
+      const userDir = join(xdgDir, "gitaicmt");
+      mkdirSync(userDir, { recursive: true });
+      writeFileSync(
+        join(userDir, "config.json"),
+        JSON.stringify({
+          openai: { model: "user-model", temperature: 0.9 },
+          commit: { conventional: false },
+        }),
+      );
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      // Local config overrides model but not temperature
+      const localDir = join(tmp, "project");
+      mkdirSync(localDir, { recursive: true });
+      writeFileSync(
+        join(localDir, "gitaicmt.config.json"),
+        JSON.stringify({ openai: { model: "local-model" } }),
+      );
+
+      const cfg = loadConfig(localDir);
+      expect(cfg.openai.model).toBe("local-model"); // local wins
+      expect(cfg.openai.temperature).toBe(0.9); // from user config
+      expect(cfg.commit.conventional).toBe(false); // from user config
+
+      rmSync(tmp, { recursive: true });
+    });
+
+    test("local .gitaicmt.json also works in multi-level", () => {
+      const tmp = makeTmpDir();
+      const xdgDir = join(tmp, "xdg");
+      const userDir = join(xdgDir, "gitaicmt");
+      mkdirSync(userDir, { recursive: true });
+      writeFileSync(
+        join(userDir, "config.json"),
+        JSON.stringify({ openai: { temperature: 0.5 } }),
+      );
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      // Local uses alternate name
+      const localDir = join(tmp, "project");
+      mkdirSync(localDir, { recursive: true });
+      writeFileSync(
+        join(localDir, ".gitaicmt.json"),
+        JSON.stringify({ openai: { model: "alt-name-model" } }),
+      );
+
+      const cfg = loadConfig(localDir);
+      expect(cfg.openai.model).toBe("alt-name-model");
+      expect(cfg.openai.temperature).toBe(0.5);
+
+      rmSync(tmp, { recursive: true });
+    });
+
+    test("env var OPENAI_API_KEY fills in when no config sets it", () => {
+      const tmp = makeTmpDir();
+      const xdgDir = join(tmp, "xdg");
+      const userDir = join(xdgDir, "gitaicmt");
+      mkdirSync(userDir, { recursive: true });
+      writeFileSync(
+        join(userDir, "config.json"),
+        JSON.stringify({ openai: { model: "some-model" } }),
+      );
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      const oldKey = process.env["OPENAI_API_KEY"];
+      process.env["OPENAI_API_KEY"] = "sk-env-key";
+
+      const localDir = join(tmp, "project");
+      mkdirSync(localDir, { recursive: true });
+
+      const cfg = loadConfig(localDir);
+      expect(cfg.openai.apiKey).toBe("sk-env-key");
+
+      if (oldKey !== undefined) process.env["OPENAI_API_KEY"] = oldKey;
+      else delete process.env["OPENAI_API_KEY"];
+      rmSync(tmp, { recursive: true });
+    });
+
+    test("config apiKey in user config wins over env var", () => {
+      const tmp = makeTmpDir();
+      const xdgDir = join(tmp, "xdg");
+      const userDir = join(xdgDir, "gitaicmt");
+      mkdirSync(userDir, { recursive: true });
+      writeFileSync(
+        join(userDir, "config.json"),
+        JSON.stringify({ openai: { apiKey: "sk-from-user-cfg" } }),
+      );
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      const oldKey = process.env["OPENAI_API_KEY"];
+      process.env["OPENAI_API_KEY"] = "sk-env-key";
+
+      const localDir = join(tmp, "project");
+      mkdirSync(localDir, { recursive: true });
+
+      const cfg = loadConfig(localDir);
+      expect(cfg.openai.apiKey).toBe("sk-from-user-cfg");
+
+      if (oldKey !== undefined) process.env["OPENAI_API_KEY"] = oldKey;
+      else delete process.env["OPENAI_API_KEY"];
+      rmSync(tmp, { recursive: true });
+    });
+
+    test("no configs at any level returns pure defaults", () => {
+      const tmp = makeTmpDir();
+      const xdgDir = join(tmp, "xdg-empty");
+      mkdirSync(xdgDir, { recursive: true });
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      const localDir = join(tmp, "empty-project");
+      mkdirSync(localDir, { recursive: true });
+
+      const cfg = loadConfig(localDir);
+      expect(cfg.openai.model).toBe(DEFAULTS.openai.model);
+      expect(cfg.analysis.chunkSize).toBe(DEFAULTS.analysis.chunkSize);
+      expect(cfg.commit.conventional).toBe(DEFAULTS.commit.conventional);
+
+      rmSync(tmp, { recursive: true });
+    });
+
+    test("deep merge across user and local levels", () => {
+      const tmp = makeTmpDir();
+      const xdgDir = join(tmp, "xdg");
+      const userDir = join(xdgDir, "gitaicmt");
+      mkdirSync(userDir, { recursive: true });
+      writeFileSync(
+        join(userDir, "config.json"),
+        JSON.stringify({
+          openai: { model: "user-m", temperature: 0.8 },
+          commit: { language: "fr" },
+          performance: { parallel: false },
+        }),
+      );
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      const localDir = join(tmp, "project");
+      mkdirSync(localDir, { recursive: true });
+      writeFileSync(
+        join(localDir, "gitaicmt.config.json"),
+        JSON.stringify({
+          openai: { model: "local-m" },
+          analysis: { chunkSize: 1200 },
+        }),
+      );
+
+      const cfg = loadConfig(localDir);
+      // local wins on model
+      expect(cfg.openai.model).toBe("local-m");
+      // user wins on temperature (local didn't set it)
+      expect(cfg.openai.temperature).toBe(0.8);
+      // user wins on commit.language
+      expect(cfg.commit.language).toBe("fr");
+      // user wins on performance.parallel
+      expect(cfg.performance.parallel).toBe(false);
+      // local wins on analysis.chunkSize
+      expect(cfg.analysis.chunkSize).toBe(1200);
+      // defaults persist for unset values
+      expect(cfg.openai.maxTokens).toBe(512);
+      expect(cfg.commit.maxSubjectLength).toBe(72);
+
+      rmSync(tmp, { recursive: true });
+    });
+
+    test("malformed user config is silently ignored", () => {
+      const tmp = makeTmpDir();
+      const xdgDir = join(tmp, "xdg");
+      const userDir = join(xdgDir, "gitaicmt");
+      mkdirSync(userDir, { recursive: true });
+      writeFileSync(join(userDir, "config.json"), "NOT VALID JSON{{{");
+      process.env["XDG_CONFIG_HOME"] = xdgDir;
+
+      const localDir = join(tmp, "project");
+      mkdirSync(localDir, { recursive: true });
+      writeFileSync(
+        join(localDir, "gitaicmt.config.json"),
+        JSON.stringify({ openai: { model: "local-ok" } }),
+      );
+
+      const cfg = loadConfig(localDir);
+      expect(cfg.openai.model).toBe("local-ok");
+      // Defaults preserved since bad user config was skipped
+      expect(cfg.openai.maxTokens).toBe(512);
+
+      rmSync(tmp, { recursive: true });
     });
   });
 });

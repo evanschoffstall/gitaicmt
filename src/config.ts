@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 export interface OpenAISettings {
   apiKey: string;
@@ -38,7 +39,7 @@ export interface Config {
   performance: PerformanceSettings;
 }
 
-const DEFAULTS: Config = {
+export const DEFAULTS: Config = {
   openai: {
     apiKey: "",
     model: "gpt-4o-mini",
@@ -67,15 +68,32 @@ const DEFAULTS: Config = {
   },
 };
 
-const CONFIG_NAMES = ["gitaicmt.config.json", ".gitaicmt.json"];
+const LOCAL_CONFIG_NAMES = ["gitaicmt.config.json", ".gitaicmt.json"];
 
-function findConfig(cwd: string): string | null {
-  for (const name of CONFIG_NAMES) {
+/* ── Path helpers ─────────────────────────────────────────────── */
+
+/** System-wide config (Linux/macOS: /etc) */
+export function globalConfigPath(): string {
+  return "/etc/gitaicmt/config.json";
+}
+
+/** Per-user config (XDG_CONFIG_HOME or ~/.config) */
+export function userConfigPath(): string {
+  const xdg = process.env["XDG_CONFIG_HOME"];
+  const base = xdg || join(homedir(), ".config");
+  return join(base, "gitaicmt", "config.json");
+}
+
+/** Find a local (project-level) config in `cwd` */
+function findLocalConfig(cwd: string): string | null {
+  for (const name of LOCAL_CONFIG_NAMES) {
     const p = resolve(cwd, name);
     if (existsSync(p)) return p;
   }
   return null;
 }
+
+/* ── Deep merge ───────────────────────────────────────────────── */
 
 function deepMerge<T extends Record<string, unknown>>(
   base: T,
@@ -104,26 +122,57 @@ function deepMerge<T extends Record<string, unknown>>(
   return out as T;
 }
 
+/* ── Read a JSON config file (returns null on missing / bad JSON) */
+
+function readJsonConfig(path: string): Record<string, unknown> | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/* ── loadConfig ───────────────────────────────────────────────── */
+
 let _cached: Config | null = null;
 
+/**
+ * Load config with multi-level merge (lowest → highest priority):
+ *   DEFAULTS → global (/etc) → user (~/.config) → local (cwd) → env vars
+ */
 export function loadConfig(cwd?: string): Config {
   if (_cached) return _cached;
   const dir = cwd ?? process.cwd();
-  const file = findConfig(dir);
-  if (!file) {
-    _cached = DEFAULTS;
-    return _cached;
-  }
-  const raw = JSON.parse(readFileSync(file, "utf-8")) as Record<
-    string,
-    unknown
-  >;
-  _cached = deepMerge(
-    DEFAULTS as unknown as Record<string, unknown>,
-    raw,
-  ) as unknown as Config;
 
-  // Allow env override for API key
+  let merged: Record<string, unknown> = {
+    ...(DEFAULTS as unknown as Record<string, unknown>),
+  };
+
+  // 1. Global config
+  const globalRaw = readJsonConfig(globalConfigPath());
+  if (globalRaw) {
+    merged = deepMerge(merged, globalRaw) as Record<string, unknown>;
+  }
+
+  // 2. User config
+  const userRaw = readJsonConfig(userConfigPath());
+  if (userRaw) {
+    merged = deepMerge(merged, userRaw) as Record<string, unknown>;
+  }
+
+  // 3. Local config (project-level)
+  const localFile = findLocalConfig(dir);
+  if (localFile) {
+    const localRaw = readJsonConfig(localFile);
+    if (localRaw) {
+      merged = deepMerge(merged, localRaw) as Record<string, unknown>;
+    }
+  }
+
+  _cached = merged as unknown as Config;
+
+  // 4. Env override for API key (lowest-priority fallback)
   if (!_cached.openai.apiKey && process.env["OPENAI_API_KEY"]) {
     _cached.openai.apiKey = process.env["OPENAI_API_KEY"];
   }
