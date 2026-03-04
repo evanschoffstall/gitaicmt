@@ -111,7 +111,18 @@ gitaicmt single
 
 ## Configuration
 
-Run `gitaicmt init` to generate a `gitaicmt.config.json` in your project root
+Config is loaded and deep-merged in this order (last one wins):
+
+1. `/etc/gitaicmt/config.json`
+2. `~/.config/gitaicmt/config.json` (or `$XDG_CONFIG_HOME/gitaicmt/config.json`)
+3. `./gitaicmt.config.json` (or `./.gitaicmt.json`)
+4. `OPENAI_API_KEY` env var (API key fallback)
+
+Create a local config file:
+
+```bash
+gitaicmt init
+```
 
 ---
 
