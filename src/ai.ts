@@ -143,15 +143,43 @@ function buildUserPrompt(chunk: DiffChunk, stats?: DiffStats): string {
   return parts.join("\n");
 }
 
+/** Categorize a file path for the grouping prompt */
+function categorizeFile(path: string): string {
+  if (/^(README|CHANGELOG|LICENSE|AGENTS|docs\/)/i.test(path)) return "docs";
+  if (/^(package\.json|tsconfig|\.[a-z]*rc|\.config|bun\.lock)/i.test(path))
+    return "config/build";
+  if (/\.(test|spec)\.[a-z]+$/i.test(path) || /^tests?\//i.test(path))
+    return "test";
+  return "source";
+}
+
 function buildGroupingUserPrompt(
   fileDiffs: { path: string; diff: string }[],
 ): string {
-  const parts: string[] = [
-    `Analyzing ${fileDiffs.length} changed file(s). Group into logical commits.\n`,
-    "Each hunk is labeled with its 0-based index [Hunk N] for reference:\n",
-  ];
+  // Pre-categorize files so the AI sees the natural split boundaries
+  const byCategory = new Map<string, string[]>();
   for (const f of fileDiffs) {
-    parts.push(`=== ${f.path} ===`);
+    const cat = categorizeFile(f.path);
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat)!.push(f.path);
+  }
+
+  const parts: string[] = [
+    `Analyzing ${fileDiffs.length} changed file(s). Split into MULTIPLE logical commits.`,
+    "",
+    "File categories (hint for splitting):",
+  ];
+  for (const [cat, paths] of byCategory) {
+    parts.push(`  [${cat}] ${paths.join(", ")}`);
+  }
+  parts.push("");
+  parts.push(
+    "Each hunk is labeled with its 0-based index [Hunk N] for reference:",
+  );
+  parts.push("");
+
+  for (const f of fileDiffs) {
+    parts.push(`=== ${f.path} [${categorizeFile(f.path)}] ===`);
     parts.push(f.diff);
     parts.push("");
   }
@@ -465,17 +493,23 @@ export async function planCommits(
   const sys = buildGroupingSystemPrompt();
   const usr = buildGroupingUserPrompt(fileDiffs);
 
-  // Use higher token limit for grouping since it returns structured JSON
+  // Grouping returns structured JSON with multiple commits — needs much more
+  // tokens than a single commit message.  Scale with file count.
+  const groupingTokens = Math.max(
+    cfg.openai.maxTokens,
+    512 + files.length * 256,
+    2048,
+  );
+  // Also give more time for the larger response
+  const groupingTimeout = Math.max(cfg.performance.timeoutMs, 30_000);
   const signal =
-    cfg.performance.timeoutMs > 0
-      ? AbortSignal.timeout(cfg.performance.timeoutMs)
-      : undefined;
+    groupingTimeout > 0 ? AbortSignal.timeout(groupingTimeout) : undefined;
   const res = await client().chat.completions.create(
     {
       model: cfg.openai.model,
-      max_completion_tokens: Math.max(cfg.openai.maxTokens, 1024),
+      max_completion_tokens: groupingTokens,
       ...(supportsTemperature(cfg.openai.model)
-        ? { temperature: cfg.openai.temperature }
+        ? { temperature: Math.min(cfg.openai.temperature, 0.3) }
         : {}),
       messages: [
         { role: "system", content: sys },
