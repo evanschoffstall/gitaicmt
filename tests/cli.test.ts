@@ -8,7 +8,6 @@ import { join } from "node:path";
 // CLI integration tests — spawns the actual CLI binary
 // ═══════════════════════════════════════════════════════════════
 
-// @ts-expect-error - Bun-specific import.meta.dir
 const CLI = join(import.meta.dir, "..", "dist", "cli.js");
 
 function run(
