@@ -43,7 +43,7 @@ export const DEFAULTS: Config = {
   openai: {
     apiKey: "",
     model: "gpt-4o-mini",
-    maxTokens: 512,
+    maxTokens: 2000,
     temperature: 0.3,
   },
   analysis: {
