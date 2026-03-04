@@ -1,49 +1,15 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-
-export interface OpenAISettings {
-  apiKey: string;
-  model: string;
-  maxTokens: number;
-  temperature: number;
-}
-
-export interface AnalysisSettings {
-  maxDiffLines: number;
-  chunkSize: number;
-  groupByFile: boolean;
-  groupByHunk: boolean;
-}
-
-export interface CommitSettings {
-  conventional: boolean;
-  maxSubjectLength: number;
-  maxBodyLineLength: number;
-  includeScope: boolean;
-  includeBody: boolean;
-  language: string;
-}
-
-export interface PerformanceSettings {
-  parallel: boolean;
-  cacheEnabled: boolean;
-  cacheTTLSeconds: number;
-  timeoutMs: number;
-}
-
-export interface Config {
-  openai: OpenAISettings;
-  analysis: AnalysisSettings;
-  commit: CommitSettings;
-  performance: PerformanceSettings;
-}
+import { ConfigError } from "./errors.js";
+import type { Config } from "./schemas.js";
+import { ConfigSchema } from "./schemas.js";
 
 export const DEFAULTS: Config = {
   openai: {
     apiKey: "",
     model: "gpt-4o-mini",
-    maxTokens: 2000,
+    maxTokens: 512,
     temperature: 0.3,
   },
   analysis: {
@@ -95,27 +61,44 @@ function findLocalConfig(cwd: string): string | null {
 
 /* ── Deep merge ───────────────────────────────────────────────── */
 
+/** Check if value is a plain object (not array, null, or built-in) */
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return (
+    val !== null &&
+    typeof val === "object" &&
+    !Array.isArray(val) &&
+    Object.getPrototypeOf(val) === Object.prototype
+  );
+}
+
 function deepMerge<T extends Record<string, unknown>>(
   base: T,
   override: Record<string, unknown>,
 ): T {
-  const out = { ...base } as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...base };
   for (const key of Object.keys(override)) {
     const bv = (base as Record<string, unknown>)[key];
     const ov = override[key];
-    if (
-      bv &&
-      typeof bv === "object" &&
-      !Array.isArray(bv) &&
-      ov &&
-      typeof ov === "object" &&
-      !Array.isArray(ov)
-    ) {
-      out[key] = deepMerge(
-        bv as Record<string, unknown>,
-        ov as Record<string, unknown>,
-      );
+    // Only merge if both values are plain objects
+    if (isPlainObject(bv) && isPlainObject(ov)) {
+      out[key] = deepMerge(bv, ov);
     } else {
+      // Type-check basic types to prevent mismatches
+      if (bv !== undefined && ov !== null) {
+        const baseType = typeof bv;
+        const overrideType = typeof ov;
+        // Allow number -> number, string -> string, boolean -> boolean
+        // Arrays replace entirely (no element merge)
+        if (
+          baseType !== overrideType &&
+          !(baseType === "number" && overrideType === "number") &&
+          !(baseType === "string" && overrideType === "string") &&
+          !(baseType === "boolean" && overrideType === "boolean")
+        ) {
+          // Skip mismatched types; keep base value
+          continue;
+        }
+      }
       out[key] = ov;
     }
   }
@@ -140,6 +123,8 @@ let _cached: Config | null = null;
 /**
  * Load config with multi-level merge (lowest → highest priority):
  *   DEFAULTS → global (/etc) → user (~/.config) → local (cwd) → env vars
+ *
+ * @throws {ConfigError} If configuration is invalid
  */
 export function loadConfig(cwd?: string): Config {
   if (_cached) return _cached;
@@ -170,71 +155,29 @@ export function loadConfig(cwd?: string): Config {
     }
   }
 
-  _cached = merged as unknown as Config;
-
   // 4. Env override for API key (HIGHEST priority - overrides all configs)
   if (process.env["OPENAI_API_KEY"]) {
-    _cached.openai.apiKey = process.env["OPENAI_API_KEY"];
+    (merged.openai as Record<string, unknown>).apiKey =
+      process.env["OPENAI_API_KEY"];
   }
 
-  // 5. Validate config values are within reasonable bounds
-  validateConfig(_cached);
+  // 5. Validate with Zod schema
+  try {
+    _cached = ConfigSchema.parse(merged);
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && "errors" in err) {
+      const zodErr = err as {
+        errors: Array<{ path: string[]; message: string }>;
+      };
+      const errors = zodErr.errors
+        .map((e) => `  - ${e.path.join(".")}: ${e.message}`)
+        .join("\n");
+      throw new ConfigError(`Configuration validation failed:\n${errors}`);
+    }
+    throw new ConfigError(`Configuration validation failed: ${String(err)}`);
+  }
 
   return _cached;
-}
-
-/** Validate config values to prevent misconfigurations */
-function validateConfig(cfg: Config): void {
-  // OpenAI settings
-  if (cfg.openai.maxTokens < 1 || cfg.openai.maxTokens > 100000) {
-    throw new Error(
-      `openai.maxTokens must be between 1 and 100000, got: ${cfg.openai.maxTokens}`,
-    );
-  }
-  if (cfg.openai.temperature < 0 || cfg.openai.temperature > 2) {
-    throw new Error(
-      `openai.temperature must be between 0 and 2, got: ${cfg.openai.temperature}`,
-    );
-  }
-
-  // Analysis settings
-  if (cfg.analysis.maxDiffLines < 100 || cfg.analysis.maxDiffLines > 1000000) {
-    throw new Error(
-      `analysis.maxDiffLines must be between 100 and 1000000, got: ${cfg.analysis.maxDiffLines}`,
-    );
-  }
-  if (cfg.analysis.chunkSize < 50 || cfg.analysis.chunkSize > 100000) {
-    throw new Error(
-      `analysis.chunkSize must be between 50 and 100000, got: ${cfg.analysis.chunkSize}`,
-    );
-  }
-
-  // Commit settings
-  if (cfg.commit.maxSubjectLength < 20 || cfg.commit.maxSubjectLength > 200) {
-    throw new Error(
-      `commit.maxSubjectLength must be between 20 and 200, got: ${cfg.commit.maxSubjectLength}`,
-    );
-  }
-  if (cfg.commit.maxBodyLineLength < 40 || cfg.commit.maxBodyLineLength > 200) {
-    throw new Error(
-      `commit.maxBodyLineLength must be between 40 and 200, got: ${cfg.commit.maxBodyLineLength}`,
-    );
-  }
-
-  // Performance settings
-  if (
-    cfg.performance.cacheTTLSeconds < 0 ||
-    cfg.performance.cacheTTLSeconds > 86400
-  ) {
-    throw new Error(
-      `performance.cacheTTLSeconds must be between 0 and 86400, got: ${cfg.performance.cacheTTLSeconds}`,
-    );
-  }
-  if (cfg.performance.timeoutMs < 0 || cfg.performance.timeoutMs > 300000) {
-    throw new Error(
-      `performance.timeoutMs must be between 0 and 300000, got: ${cfg.performance.timeoutMs}`,
-    );
-  }
 }
 
 export function resetConfigCache(): void {
