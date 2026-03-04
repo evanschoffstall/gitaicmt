@@ -4,6 +4,55 @@ import { loadConfig } from "./config.js";
 // Git already respects .gitignore — no custom ignore patterns needed.
 // We pull diffs directly from staged/unstaged changes via git commands.
 
+/** Validate and sanitize file paths to prevent command injection */
+function sanitizeFilePath(path: string): string {
+  // Remove any shell metacharacters and dangerous patterns
+  if (
+    path.includes("\0") ||
+    path.includes(";") ||
+    path.includes("|") ||
+    path.includes("&") ||
+    path.includes("$") ||
+    path.includes("`") ||
+    path.includes("$(") ||
+    path.includes("\\n") ||
+    path.includes("\\r")
+  ) {
+    throw new Error(`Invalid file path contains dangerous characters: ${path}`);
+  }
+  // Prevent path traversal to absolute paths outside repo
+  if (path.startsWith("/") || path.includes("../..")) {
+    throw new Error(
+      `Invalid file path (absolute or excessive traversal): ${path}`,
+    );
+  }
+  return path;
+}
+
+/** Safe git command execution with error handling */
+function safeExecGit(
+  command: string,
+  options?: { cwd?: string; input?: string; maxBuffer?: number },
+): string {
+  const dir = options?.cwd ?? process.cwd();
+  try {
+    return execSync(command, {
+      cwd: dir,
+      encoding: "utf-8",
+      maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024,
+      input: options?.input,
+      stdio: options?.input ? ["pipe", "pipe", "pipe"] : "pipe",
+    });
+  } catch (err: unknown) {
+    const e = err as { status?: number; message?: string; stderr?: string };
+    const stderr = e.stderr || "";
+    const status = e.status || 1;
+    throw new Error(
+      `Git command failed (exit ${status}): ${command}\n${stderr}`,
+    );
+  }
+}
+
 /** A single hunk within a file diff */
 export interface DiffHunk {
   header: string; // @@ line
@@ -35,20 +84,11 @@ export interface DiffChunk {
 // --------------- Git helpers ---------------
 
 export function getStagedDiff(cwd?: string): string {
-  const dir = cwd ?? process.cwd();
-  return execSync("git diff --cached --unified=3", {
-    cwd: dir,
-    encoding: "utf-8",
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  return safeExecGit("git diff --cached --unified=3", { cwd });
 }
 
 export function hasStagedChanges(cwd?: string): boolean {
-  const dir = cwd ?? process.cwd();
-  const out = execSync("git diff --cached --name-only", {
-    cwd: dir,
-    encoding: "utf-8",
-  });
+  const out = safeExecGit("git diff --cached --name-only", { cwd });
   return out.trim().length > 0;
 }
 
@@ -233,48 +273,42 @@ export function getStats(files: FileDiff[], chunks: DiffChunk[]): DiffStats {
 
 /** Unstage everything */
 export function resetStaging(cwd?: string): void {
-  const dir = cwd ?? process.cwd();
-  execSync("git reset HEAD -- . 2>/dev/null || true", {
-    cwd: dir,
-    encoding: "utf-8",
-    stdio: "pipe",
-  });
+  try {
+    safeExecGit("git reset HEAD -- .", { cwd });
+  } catch {
+    // Ignore errors (e.g., if nothing was staged)
+  }
 }
 
 /** Stage specific files by path */
 export function stageFiles(paths: string[], cwd?: string): void {
   if (paths.length === 0) return;
-  const dir = cwd ?? process.cwd();
-  // Quote paths to handle spaces
-  const quoted = paths.map((p) => `"${p}"`).join(" ");
-  execSync(`git add ${quoted}`, { cwd: dir, encoding: "utf-8", stdio: "pipe" });
+  // Validate and sanitize all paths first
+  const safe = paths.map(sanitizeFilePath);
+  // Use -- to separate paths from options for extra safety
+  const quoted = safe.map((p) => `"${p}"`).join(" ");
+  safeExecGit(`git add -- ${quoted}`, { cwd });
 }
 
 /** Stage all changes (tracked and untracked, respecting .gitignore) */
 export function stageAll(cwd?: string): void {
-  const dir = cwd ?? process.cwd();
-  execSync("git add -A", { cwd: dir, encoding: "utf-8", stdio: "pipe" });
+  safeExecGit("git add -A", { cwd });
 }
 
 /** Get the unstaged working-tree diff for a specific file */
 export function getFileWorkingDiff(filePath: string, cwd?: string): string {
-  const dir = cwd ?? process.cwd();
-  return execSync(`git diff -- "${filePath}"`, {
-    cwd: dir,
-    encoding: "utf-8",
-    maxBuffer: 10 * 1024 * 1024,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  const safe = sanitizeFilePath(filePath);
+  return safeExecGit(`git diff -- "${safe}"`, { cwd });
 }
 
 /** Stage a specific hunk by applying a patch via `git apply --cached` */
 export function stagePatch(patchContent: string, cwd?: string): void {
-  const dir = cwd ?? process.cwd();
-  execSync("git apply --cached --unidiff-zero -", {
-    cwd: dir,
-    encoding: "utf-8",
+  if (!patchContent || patchContent.trim().length === 0) {
+    throw new Error("Cannot stage empty patch");
+  }
+  safeExecGit("git apply --cached --unidiff-zero -", {
+    cwd,
     input: patchContent,
-    stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
