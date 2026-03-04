@@ -182,7 +182,7 @@ describe("config", () => {
       rmSync(dir, { recursive: true });
     });
 
-    test("config apiKey takes precedence over env var", () => {
+    test("env var OPENAI_API_KEY takes precedence over config apiKey", () => {
       const dir = makeTmpDir();
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
@@ -193,7 +193,7 @@ describe("config", () => {
       resetConfigCache();
       const cfg = loadConfig(dir);
 
-      expect(cfg.openai.apiKey).toBe("sk-from-config");
+      expect(cfg.openai.apiKey).toBe("sk-from-env");
 
       if (oldKey !== undefined) process.env["OPENAI_API_KEY"] = oldKey;
       else delete process.env["OPENAI_API_KEY"];
@@ -472,7 +472,7 @@ describe("config", () => {
       rmSync(tmp, { recursive: true });
     });
 
-    test("config apiKey in user config wins over env var", () => {
+    test("env var OPENAI_API_KEY wins over user config apiKey", () => {
       const tmp = makeTmpDir();
       const xdgDir = join(tmp, "xdg");
       const userDir = join(xdgDir, "gitaicmt");
@@ -490,7 +490,7 @@ describe("config", () => {
       mkdirSync(localDir, { recursive: true });
 
       const cfg = loadConfig(localDir);
-      expect(cfg.openai.apiKey).toBe("sk-from-user-cfg");
+      expect(cfg.openai.apiKey).toBe("sk-env-key");
 
       if (oldKey !== undefined) process.env["OPENAI_API_KEY"] = oldKey;
       else delete process.env["OPENAI_API_KEY"];
