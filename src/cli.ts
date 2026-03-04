@@ -1,27 +1,24 @@
 #!/usr/bin/env node
 
 import { createInterface } from "node:readline";
-import type { PlannedCommitFile } from "./ai.js";
+import type { PlannedCommit, PlannedCommitFile } from "./ai.js";
 import { generateForChunks, planCommits } from "./ai.js";
 import { initConfig, loadConfig } from "./config.js";
-import type { DiffHunk, FileDiff } from "./diff.js";
+import type { FileDiff } from "./diff.js";
+import { chunkDiffs, formatFileDiff, getStats, parseDiff } from "./diff.js";
 import {
-  buildPatch,
-  chunkDiffs,
   commitWithMessage,
-  formatFileDiff,
-  getFileWorkingDiff,
   getStagedDiff,
-  getStats,
   hasStagedChanges,
-  parseDiff,
   resetStaging,
   stageAll,
   stageFiles,
-  stagePatch,
-} from "./diff.js";
+} from "./git.js";
 
 // -------- Helpers --------
+
+const VERSION = "1.0.0";
+let verboseMode = false;
 
 const RED = "\x1b[31m";
 const GREEN = "\x1b[32m";
@@ -33,6 +30,12 @@ const RESET = "\x1b[0m";
 
 function log(msg: string) {
   process.stderr.write(msg + "\n");
+}
+
+function verbose(msg: string) {
+  if (verboseMode) {
+    log(`${DIM}[verbose] ${msg}${RESET}`);
+  }
 }
 
 function die(msg: string): never {
@@ -60,103 +63,21 @@ function formatCommitFile(f: PlannedCommitFile): string {
 
 /**
  * Stage files for a commit group, handling hunk-level staging.
- * For files with specific hunks, uses content-matching against the current
- * working tree diff to handle line-number shifts between commits.
+ * This version stages whole files to avoid complex hunk-matching issues.
  */
 function stageGroupFiles(
   group: PlannedCommitFile[],
   originalFiles: Map<string, FileDiff>,
 ): void {
-  const wholeFiles: string[] = [];
-  const hunkFiles: PlannedCommitFile[] = [];
+  // Collect all unique file paths from the group
+  const filesToStage = Array.from(new Set(group.map((f) => f.path)));
 
-  for (const f of group) {
-    if (!f.hunks || f.hunks.length === 0) {
-      wholeFiles.push(f.path);
-    } else {
-      hunkFiles.push(f);
-    }
-  }
-
-  // Stage whole files
-  if (wholeFiles.length > 0) {
-    stageFiles(wholeFiles);
-  }
-
-  // Stage specific hunks via content-matching
-  for (const f of hunkFiles) {
-    const original = originalFiles.get(f.path);
-    if (!original) {
-      stageFiles([f.path]);
-      continue;
-    }
-
-    // Extract the changed-line content for each desired hunk
-    const desiredContents = f
-      .hunks!.map((i) => {
-        if (i >= original.hunks.length) return null;
-        const hunk = original.hunks[i];
-        return hunk.lines
-          .filter((l) => l.startsWith("+") || l.startsWith("-"))
-          .join("\n");
-      })
-      .filter((c): c is string => c !== null);
-
-    if (desiredContents.length === 0) {
-      stageFiles([f.path]);
-      continue;
-    }
-
-    // Get the CURRENT working tree diff for this file (line numbers may have
-    // shifted after previous commits)
-    let currentDiffRaw: string;
+  if (filesToStage.length > 0) {
     try {
-      currentDiffRaw = getFileWorkingDiff(f.path);
-    } catch {
-      stageFiles([f.path]);
-      continue;
-    }
-
-    if (!currentDiffRaw.trim()) {
-      stageFiles([f.path]);
-      continue;
-    }
-
-    const currentFiles = parseDiff(currentDiffRaw);
-    if (currentFiles.length === 0) {
-      stageFiles([f.path]);
-      continue;
-    }
-
-    const currentFile = currentFiles[0];
-
-    // Match current hunks to desired hunks by changed-line content
-    const hunksToStage: DiffHunk[] = [];
-    const usedCurrentHunks = new Set<number>();
-    for (const desiredContent of desiredContents) {
-      for (let ci = 0; ci < currentFile.hunks.length; ci++) {
-        if (usedCurrentHunks.has(ci)) continue;
-        const ch = currentFile.hunks[ci];
-        const chContent = ch.lines
-          .filter((l) => l.startsWith("+") || l.startsWith("-"))
-          .join("\n");
-        if (chContent === desiredContent) {
-          hunksToStage.push(ch);
-          usedCurrentHunks.add(ci);
-          break;
-        }
-      }
-    }
-
-    if (hunksToStage.length > 0) {
-      try {
-        const patch = buildPatch(currentFile, hunksToStage);
-        stagePatch(patch);
-      } catch {
-        stageFiles([f.path]);
-      }
-    } else {
-      stageFiles([f.path]);
+      stageFiles(filesToStage);
+    } catch (err) {
+      log(`${RED}Error staging files: ${err}${RESET}`);
+      throw err;
     }
   }
 }
@@ -200,15 +121,23 @@ function displayPlan(
 
 // -------- Commands --------
 
+/** Show version information */
+function cmdVersion() {
+  log(`gitaicmt v${VERSION}`);
+}
+
 /** Generate a single commit message (legacy / simple mode) */
 async function cmdGenerate() {
   const t0 = performance.now();
   ensureStaged();
 
+  verbose("Loading configuration");
   const cfg = loadConfig();
+  verbose("Getting staged diff");
   const raw = getStagedDiff();
   if (!raw.trim()) die("Staged diff is empty.");
 
+  verbose("Parsing diff");
   const files = parseDiff(raw);
   const totalLines = files.reduce(
     (s, f) => s + f.hunks.reduce((hs, h) => hs + h.lines.length, 0),
@@ -220,6 +149,7 @@ async function cmdGenerate() {
     );
   }
 
+  verbose("Chunking diffs");
   const chunks = chunkDiffs(files);
   const stats = getStats(files, chunks);
 
@@ -228,6 +158,7 @@ async function cmdGenerate() {
   );
   log(`${DIM}model: ${cfg.openai.model}${RESET}`);
 
+  verbose("Calling OpenAI API");
   const message = await generateForChunks(chunks, stats);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
@@ -264,6 +195,57 @@ async function cmdPlan() {
   displayPlan(groups);
 }
 
+/**
+ * Merge commits that touch the same files to avoid staging conflicts.
+ * When multiple commits reference the same file, combine them into one commit.
+ */
+function mergeCommitsByFile(groups: PlannedCommit[]): PlannedCommit[] {
+  const fileToGroup = new Map<string, number>();
+  const merged: PlannedCommit[] = [];
+
+  for (const group of groups) {
+    // Get all unique files in this group
+    const groupFiles = group.files.map((f) => f.path);
+
+    // Check if any of these files are already in a previous group
+    let mergeIntoIndex: number | null = null;
+    for (const file of groupFiles) {
+      if (fileToGroup.has(file)) {
+        mergeIntoIndex = fileToGroup.get(file)!;
+        break;
+      }
+    }
+
+    if (mergeIntoIndex !== null) {
+      // Merge into existing group
+      const target = merged[mergeIntoIndex];
+      // Add files that aren't already there
+      for (const f of group.files) {
+        if (!target.files.some((tf) => tf.path === f.path)) {
+          target.files.push({ path: f.path }); // Ignore hunks for simplicity
+        }
+      }
+      // Combine messages
+      target.message = target.message + "\n\n" + group.message;
+    } else {
+      // New group
+      const newGroup: PlannedCommit = {
+        files: group.files.map((f) => ({ path: f.path })), // Ignore hunks
+        message: group.message,
+      };
+      merged.push(newGroup);
+
+      // Track which files are in which group
+      const index = merged.length - 1;
+      for (const file of groupFiles) {
+        fileToGroup.set(file, index);
+      }
+    }
+  }
+
+  return merged;
+}
+
 /** Analyze, split, and execute multiple commits */
 async function cmdCommit(autoConfirm: boolean) {
   const t0 = performance.now();
@@ -287,12 +269,21 @@ async function cmdCommit(autoConfirm: boolean) {
   );
   log("");
 
-  displayPlan(groups);
+  // Merge commits that touch the same files to avoid staging conflicts
+  const mergedGroups = mergeCommitsByFile(groups);
+  if (mergedGroups.length < groups.length) {
+    log(
+      `${YELLOW}Note: Merged ${groups.length} commits into ${mergedGroups.length} to avoid file conflicts${RESET}`,
+    );
+    log("");
+  }
+
+  displayPlan(mergedGroups);
 
   // Confirm before committing
   if (!autoConfirm) {
     const confirmed = await promptYesNo(
-      `${BOLD}Commit ${groups.length} planned commit(s)?${RESET}`,
+      `${BOLD}Commit ${mergedGroups.length} planned commit(s)?${RESET}`,
     );
     if (!confirmed) {
       log(`${YELLOW}Aborted.${RESET}`);
@@ -307,11 +298,13 @@ async function cmdCommit(autoConfirm: boolean) {
   // Execute each commit group
   let committed = 0;
   try {
-    for (let i = 0; i < groups.length; i++) {
-      const g = groups[i];
+    for (let i = 0; i < mergedGroups.length; i++) {
+      const g = mergedGroups[i];
       const subject = g.message.split("\n")[0];
 
-      log(`${BOLD}${GREEN}[${i + 1}/${groups.length}]${RESET} ${subject}`);
+      log(
+        `${BOLD}${GREEN}[${i + 1}/${mergedGroups.length}]${RESET} ${subject}`,
+      );
       log(`  ${DIM}${g.files.map(formatCommitFile).join(", ")}${RESET}`);
 
       // Unstage everything, then stage only this group's files/hunks
@@ -330,11 +323,11 @@ async function cmdCommit(autoConfirm: boolean) {
     );
   } catch (err) {
     log(
-      `${RED}${BOLD}Failed after ${committed}/${groups.length} commits.${RESET}`,
+      `${RED}${BOLD}Failed after ${committed}/${mergedGroups.length} commits.${RESET}`,
     );
     // Try to restore remaining files to staged state
-    if (committed < groups.length) {
-      const remainingPaths = groups
+    if (committed < mergedGroups.length) {
+      const remainingPaths = mergedGroups
         .slice(committed)
         .flatMap((g) => g.files.map((f) => f.path));
       try {
@@ -398,12 +391,19 @@ function cmdHelp() {
   log("  gitaicmt single       One commit for all changes");
   log("  gitaicmt gen          Generate message to stdout (for piping)");
   log("  gitaicmt init         Create default gitaicmt.config.json");
+  log("  gitaicmt version      Show version information");
   log("  gitaicmt help         Show this help\n");
+  log(`${CYAN}Flags:${RESET}`);
+  log("  -y, --yes             Auto-confirm (skip prompts)");
+  log("  -v, --verbose         Show detailed operation logs");
+  log("  --version             Show version information");
+  log("  -h, --help            Show this help\n");
   log(`${CYAN}Usage:${RESET}`);
   log("  gitaicmt                         Detect, analyze, confirm & commit");
   log(
     "  gitaicmt -y                      Detect, analyze & commit (no prompt)",
   );
+  log("  gitaicmt -v plan                 Show verbose logs during planning");
   log("  gitaicmt plan                    Preview the split before committing");
   log("  gitaicmt gen | git commit -F -   Pipe single message to git\n");
   log(`${CYAN}Config:${RESET}`);
@@ -418,8 +418,20 @@ function cmdHelp() {
 async function main() {
   const args = process.argv.slice(2);
   const hasYFlag = args.includes("-y") || args.includes("--yes");
+  const hasVerboseFlag = args.includes("-v") || args.includes("--verbose");
+  const hasVersionFlag = args.includes("--version");
   // Help flags are special — treat them as commands
   const hasHelpFlag = args.includes("-h") || args.includes("--help");
+
+  // Set verbose mode globally
+  verboseMode = hasVerboseFlag;
+
+  // Version flag takes precedence
+  if (hasVersionFlag) {
+    cmdVersion();
+    return;
+  }
+
   const cmd = hasHelpFlag
     ? "help"
     : (args.find((a) => !a.startsWith("-")) ?? "");
@@ -445,6 +457,10 @@ async function main() {
       break;
     case "init":
       cmdInit();
+      break;
+    case "version":
+    case "--version":
+      cmdVersion();
       break;
     case "help":
     case "--help":
