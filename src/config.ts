@@ -5,6 +5,9 @@ import { ConfigError } from "./errors.js";
 import type { Config } from "./schemas.js";
 import { ConfigSchema } from "./schemas.js";
 
+// Re-export Config type for external use
+export type { Config };
+
 export const DEFAULTS: Config = {
   openai: {
     apiKey: "",
