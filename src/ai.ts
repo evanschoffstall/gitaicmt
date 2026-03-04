@@ -235,47 +235,124 @@ function supportsTemperature(model: string): boolean {
   return !/^(o1|o2|o3|o4|gpt-5)/i.test(model);
 }
 
-async function complete(system: string, user: string): Promise<string> {
+function isNonChatModelError(err: unknown): boolean {
+  const msg = String(
+    (err as { message?: string })?.message ?? err,
+  ).toLowerCase();
+  return (
+    msg.includes("not a chat model") ||
+    msg.includes("not supported in the v1/chat/completions")
+  );
+}
+
+function extractResponseText(raw: unknown): string {
+  const asObj = raw as {
+    output_text?: string;
+    output?: Array<{
+      content?: Array<{ type?: string; text?: string }>;
+    }>;
+  };
+
+  if (typeof asObj.output_text === "string" && asObj.output_text.trim()) {
+    return asObj.output_text.trim();
+  }
+
+  const parts: string[] = [];
+  for (const item of asObj.output ?? []) {
+    for (const c of item.content ?? []) {
+      if (
+        (c.type === "output_text" || c.type === "text") &&
+        typeof c.text === "string"
+      ) {
+        parts.push(c.text);
+      }
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+type CompleteOptions = {
+  maxTokens?: number;
+  timeoutMs?: number;
+  temperature?: number;
+};
+
+async function complete(
+  system: string,
+  user: string,
+  options?: CompleteOptions,
+): Promise<string> {
   const cfg = loadConfig();
-  const signal =
-    cfg.performance.timeoutMs > 0
-      ? AbortSignal.timeout(cfg.performance.timeoutMs)
-      : undefined;
+  const timeoutMs = options?.timeoutMs ?? cfg.performance.timeoutMs;
+  const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+  const maxTokens = options?.maxTokens ?? cfg.openai.maxTokens;
+  const temperature = options?.temperature ?? cfg.openai.temperature;
+
+  const chatPayload = {
+    model: cfg.openai.model,
+    max_completion_tokens: maxTokens,
+    ...(supportsTemperature(cfg.openai.model) ? { temperature } : {}),
+    messages: [
+      { role: "system" as const, content: system },
+      { role: "user" as const, content: user },
+    ],
+  };
 
   try {
-    const res = await client().chat.completions.create(
-      {
-        model: cfg.openai.model,
-        max_completion_tokens: cfg.openai.maxTokens,
-        ...(supportsTemperature(cfg.openai.model)
-          ? { temperature: cfg.openai.temperature }
-          : {}),
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      },
-      { signal },
-    );
-
+    const res = await client().chat.completions.create(chatPayload, { signal });
     const content = res.choices[0]?.message?.content;
-    if (!content || typeof content !== "string") {
-      throw new OpenAIError("API returned empty or invalid response");
+    if (typeof content === "string" && content.trim()) {
+      return content.trim();
+    }
+    throw new OpenAIError("API returned empty or invalid response");
+  } catch (err: unknown) {
+    // Some models are not supported on /v1/chat/completions.
+    // Retry automatically on /v1/responses for compatibility.
+    if (!isNonChatModelError(err)) {
+      if (err instanceof Error) {
+        if (err.name === "AbortError" || err.message.includes("timeout")) {
+          throw new OpenAIError(
+            `OpenAI API request timed out after ${timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
+          );
+        }
+        throw err;
+      }
+      throw new OpenAIError(`OpenAI API call failed: ${String(err)}`);
     }
 
-    return content.trim();
-  } catch (err: unknown) {
-    if (err instanceof Error) {
-      // Handle timeout specifically
-      if (err.name === "AbortError" || err.message.includes("timeout")) {
+    try {
+      const res = await client().responses.create(
+        {
+          model: cfg.openai.model,
+          instructions: system,
+          input: user,
+          max_output_tokens: maxTokens,
+          ...(supportsTemperature(cfg.openai.model) ? { temperature } : {}),
+        },
+        { signal },
+      );
+
+      const content = extractResponseText(res);
+      if (!content) {
         throw new OpenAIError(
-          `OpenAI API request timed out after ${cfg.performance.timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
+          "Responses API returned empty or invalid response",
         );
       }
-      // Re-throw with original message
-      throw err;
+      return content;
+    } catch (fallbackErr: unknown) {
+      if (fallbackErr instanceof Error) {
+        if (
+          fallbackErr.name === "AbortError" ||
+          fallbackErr.message.includes("timeout")
+        ) {
+          throw new OpenAIError(
+            `OpenAI API request timed out after ${timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
+          );
+        }
+        throw fallbackErr;
+      }
+      throw new OpenAIError(`OpenAI API call failed: ${String(fallbackErr)}`);
     }
-    throw new OpenAIError(`OpenAI API call failed: ${String(err)}`);
   }
 }
 
@@ -653,24 +730,11 @@ export async function planCommits(
     cfg.performance.timeoutMs,
     GROUPING_TIMEOUT_MS,
   );
-  const signal =
-    groupingTimeout > 0 ? AbortSignal.timeout(groupingTimeout) : undefined;
-  const res = await client().chat.completions.create(
-    {
-      model: cfg.openai.model,
-      max_completion_tokens: groupingTokens,
-      ...(supportsTemperature(cfg.openai.model)
-        ? { temperature: Math.min(cfg.openai.temperature, 0.3) }
-        : {}),
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: usr },
-      ],
-    },
-    { signal },
-  );
-
-  const raw = (res.choices[0]?.message?.content ?? "").trim();
+  const raw = await complete(sys, usr, {
+    maxTokens: groupingTokens,
+    timeoutMs: groupingTimeout,
+    temperature: Math.min(cfg.openai.temperature, 0.3),
+  });
 
   // Build lookup for validation
   const fileByPath = new Map(files.map((f) => [f.path, f]));
