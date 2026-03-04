@@ -8,6 +8,28 @@ import { ConfigSchema } from "./schemas.js";
 // Re-export Config type for external use
 export type { Config };
 
+/**
+ * Recommended text-generation models for gitaicmt (commit message generation).
+ *
+ * Stable defaults:
+ * - gpt-4o-mini
+ * - gpt-4o
+ * - gpt-4.1-mini
+ * - gpt-4.1
+ *
+ * Newer options:
+ * - gpt-5-mini
+ * - gpt-5
+ * - gpt-5.3-chat-latest
+ * - gpt-5.3-codex
+ *
+ * Also supported:
+ * - o3
+ * - o4-mini
+ *
+ * Note: search/audio/transcribe/tts/realtime model variants are intentionally
+ * omitted here because they are not suitable for commit-message text generation.
+ */
 export const DEFAULTS: Config = {
   openai: {
     apiKey: "",
