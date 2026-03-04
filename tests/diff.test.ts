@@ -625,7 +625,7 @@ describe("git staging helpers", () => {
   test("stageAll stages untracked files", () => {
     const { writeFileSync } = require("node:fs");
     const { join } = require("node:path");
-    const { stageAll, getStagedFiles } = require("../src/diff.js");
+    const { stageAll, getStagedFiles } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "new.txt"), "hello");
     stageAll(dir);
@@ -638,7 +638,7 @@ describe("git staging helpers", () => {
     const { writeFileSync } = require("node:fs");
     const { join } = require("node:path");
     const { execSync } = require("node:child_process");
-    const { resetStaging, hasStagedChanges } = require("../src/diff.js");
+    const { resetStaging, hasStagedChanges } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "file.txt"), "hi");
     execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
@@ -652,7 +652,7 @@ describe("git staging helpers", () => {
     const { writeFileSync } = require("node:fs");
     const { join } = require("node:path");
     const { execSync } = require("node:child_process");
-    const { commitWithMessage } = require("../src/diff.js");
+    const { commitWithMessage } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "file.txt"), "data");
     execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
@@ -669,7 +669,7 @@ describe("git staging helpers", () => {
     const { writeFileSync } = require("node:fs");
     const { join } = require("node:path");
     const { execSync } = require("node:child_process");
-    const { getStagedFiles } = require("../src/diff.js");
+    const { getStagedFiles } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "a.txt"), "a");
     writeFileSync(join(dir, "b.txt"), "b");
@@ -683,7 +683,7 @@ describe("git staging helpers", () => {
   test("stageFiles stages specific files only", () => {
     const { writeFileSync } = require("node:fs");
     const { join } = require("node:path");
-    const { stageFiles, getStagedFiles } = require("../src/diff.js");
+    const { stageFiles, getStagedFiles } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "a.txt"), "a");
     writeFileSync(join(dir, "b.txt"), "b");
