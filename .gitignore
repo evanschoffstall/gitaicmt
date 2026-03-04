@@ -1,0 +1,6 @@
+node_modules
+.vscode
+dist
+gitaicmt.config.json
+.env
+.env.*
