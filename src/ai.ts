@@ -1,8 +1,14 @@
+import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { loadConfig } from "./config.js";
 import type { DiffChunk, DiffStats, FileDiff } from "./diff.js";
 
 let _client: OpenAI | null = null;
+
+/** Reset the OpenAI client (called when config is reset) */
+export function resetClient(): void {
+  _client = null;
+}
 
 function client(): OpenAI {
   if (_client) return _client;
@@ -10,6 +16,12 @@ function client(): OpenAI {
   if (!cfg.openai.apiKey) {
     throw new Error(
       "No OpenAI API key. Set OPENAI_API_KEY env var or add openai.apiKey in gitaicmt.config.json",
+    );
+  }
+  // Validate API key format (basic check)
+  if (!cfg.openai.apiKey.startsWith("sk-") || cfg.openai.apiKey.length < 20) {
+    throw new Error(
+      "Invalid OpenAI API key format. Key should start with 'sk-' and be at least 20 characters.",
     );
   }
   _client = new OpenAI({ apiKey: cfg.openai.apiKey });
@@ -159,35 +171,62 @@ async function complete(system: string, user: string): Promise<string> {
     cfg.performance.timeoutMs > 0
       ? AbortSignal.timeout(cfg.performance.timeoutMs)
       : undefined;
-  const res = await client().chat.completions.create(
-    {
-      model: cfg.openai.model,
-      max_completion_tokens: cfg.openai.maxTokens,
-      ...(supportsTemperature(cfg.openai.model)
-        ? { temperature: cfg.openai.temperature }
-        : {}),
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    },
-    { signal },
-  );
-  return (res.choices[0]?.message?.content ?? "").trim();
+
+  try {
+    const res = await client().chat.completions.create(
+      {
+        model: cfg.openai.model,
+        max_completion_tokens: cfg.openai.maxTokens,
+        ...(supportsTemperature(cfg.openai.model)
+          ? { temperature: cfg.openai.temperature }
+          : {}),
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      },
+      { signal },
+    );
+
+    const content = res.choices[0]?.message?.content;
+    if (!content || typeof content !== "string") {
+      throw new Error("API returned empty or invalid response");
+    }
+
+    return content.trim();
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      // Handle timeout specifically
+      if (err.name === "AbortError" || err.message.includes("timeout")) {
+        throw new Error(
+          `OpenAI API request timed out after ${cfg.performance.timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
+        );
+      }
+      // Re-throw with original message
+      throw err;
+    }
+    throw new Error(`OpenAI API call failed: ${String(err)}`);
+  }
 }
 
 // --------------- Simple cache ---------------
 
 const cache = new Map<string, { msg: string; ts: number }>();
+const MAX_CACHE_SIZE = 1000; // Prevent unbounded memory growth
 
 function cacheKey(content: string): string {
-  // Fast hash — FNV-1a 32-bit
-  let h = 0x811c9dc5;
-  for (let i = 0; i < content.length; i++) {
-    h ^= content.charCodeAt(i);
-    h = (h * 0x01000193) >>> 0;
+  // Use SHA-256 for collision resistance (32-bit FNV-1a had collision risk)
+  return createHash("sha256").update(content).digest("hex");
+}
+
+/** Evict oldest entries when cache exceeds max size */
+function evictOldestCacheEntries(): void {
+  if (cache.size <= MAX_CACHE_SIZE) return;
+  const entries = Array.from(cache.entries()).sort((a, b) => a[1].ts - b[1].ts);
+  const toDelete = entries.slice(0, cache.size - MAX_CACHE_SIZE);
+  for (const [key] of toDelete) {
+    cache.delete(key);
   }
-  return h.toString(36);
 }
 
 function getFromCache(key: string): string | null {
@@ -206,6 +245,7 @@ function setCache(key: string, msg: string): void {
   const cfg = loadConfig();
   if (!cfg.performance.cacheEnabled) return;
   cache.set(key, { msg, ts: Date.now() });
+  evictOldestCacheEntries();
 }
 
 // --------------- Public API ---------------
@@ -273,6 +313,107 @@ function formatLabeledDiff(
     parts.push(...h.lines);
   }
   return parts.join("\n");
+}
+
+/** Type guard for valid PlannedCommit file entry */
+function isValidFileEntry(
+  f: unknown,
+  fileByPath: Map<string, FileDiff>,
+): f is PlannedCommitFile {
+  // Must be string or object with path
+  if (typeof f === "string") {
+    return fileByPath.has(f);
+  }
+  if (!f || typeof f !== "object") {
+    return false;
+  }
+  const obj = f as { path?: unknown; hunks?: unknown };
+  if (typeof obj.path !== "string" || !fileByPath.has(obj.path)) {
+    return false;
+  }
+  // If hunks provided, must be an array of numbers
+  if (obj.hunks !== undefined) {
+    if (!Array.isArray(obj.hunks)) return false;
+    const file = fileByPath.get(obj.path)!;
+    return obj.hunks.every(
+      (h) => typeof h === "number" && h >= 0 && h < file.hunks.length,
+    );
+  }
+  return true;
+}
+
+/** Validate and normalize AI grouping response */
+function validateAndNormalizeGrouping(
+  raw: unknown,
+  fileByPath: Map<string, FileDiff>,
+): PlannedCommit[] {
+  // Must be array
+  if (!Array.isArray(raw)) {
+    throw new Error("AI response is not an array");
+  }
+  if (raw.length === 0) {
+    throw new Error("AI returned empty commit group array");
+  }
+
+  const groups: PlannedCommit[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const g = raw[i];
+    if (!g || typeof g !== "object") {
+      throw new Error(`Commit group ${i} is not an object`);
+    }
+    const group = g as { files?: unknown; message?: unknown };
+
+    // Validate files array
+    if (!Array.isArray(group.files)) {
+      throw new Error(
+        `Commit group ${i} has invalid 'files' field (not an array)`,
+      );
+    }
+
+    // Validate message
+    if (
+      typeof group.message !== "string" ||
+      group.message.trim().length === 0
+    ) {
+      throw new Error(`Commit group ${i} has invalid or empty 'message' field`);
+    }
+
+    // Normalize file entries
+    const normalizedFiles: PlannedCommitFile[] = [];
+    for (const f of group.files) {
+      if (!isValidFileEntry(f, fileByPath)) {
+        continue; // Skip invalid entries
+      }
+      if (typeof f === "string") {
+        normalizedFiles.push({ path: f });
+      } else {
+        const obj = f as { path: string; hunks?: number[] };
+        const file = fileByPath.get(obj.path)!;
+        if (obj.hunks && obj.hunks.length > 0) {
+          const validHunks = obj.hunks.filter(
+            (h) => h >= 0 && h < file.hunks.length,
+          );
+          normalizedFiles.push(
+            validHunks.length > 0
+              ? { path: obj.path, hunks: validHunks }
+              : { path: obj.path },
+          );
+        } else {
+          normalizedFiles.push({ path: obj.path });
+        }
+      }
+    }
+
+    if (normalizedFiles.length > 0) {
+      groups.push({ files: normalizedFiles, message: group.message });
+    }
+  }
+
+  if (groups.length === 0) {
+    throw new Error("No valid commit groups after normalization");
+  }
+
+  return groups;
 }
 
 /**
