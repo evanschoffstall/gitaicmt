@@ -477,55 +477,25 @@ export async function planCommits(
   // Build lookup for validation
   const fileByPath = new Map(files.map((f) => [f.path, f]));
 
-  // Parse the JSON response
+  // Parse and validate the JSON response
   let groups: PlannedCommit[];
   try {
     // Strip code fences if AI included them despite instructions
     const cleaned = raw
       .replace(/^```(?:json)?\s*/m, "")
       .replace(/\s*```$/m, "");
-    const parsed = JSON.parse(cleaned) as Array<{
-      files: Array<string | { path: string; hunks?: number[] }>;
-      message: string;
-    }>;
 
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      throw new Error("Empty or invalid grouping response");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (parseErr) {
+      throw new Error(
+        `AI returned invalid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+      );
     }
 
-    // Normalize file entries — AI might return strings or objects
-    groups = parsed
-      .map((g) => ({
-        files: g.files
-          .map((f): PlannedCommitFile | null => {
-            if (typeof f === "string") {
-              return fileByPath.has(f) ? { path: f } : null;
-            }
-            if (
-              f &&
-              typeof f === "object" &&
-              typeof f.path === "string" &&
-              fileByPath.has(f.path)
-            ) {
-              const file = fileByPath.get(f.path)!;
-              // Validate hunk indices
-              if (Array.isArray(f.hunks) && f.hunks.length > 0) {
-                const validHunks = f.hunks.filter(
-                  (h) =>
-                    typeof h === "number" && h >= 0 && h < file.hunks.length,
-                );
-                return validHunks.length > 0
-                  ? { path: f.path, hunks: validHunks }
-                  : { path: f.path };
-              }
-              return { path: f.path };
-            }
-            return null;
-          })
-          .filter((f): f is PlannedCommitFile => f !== null),
-        message: g.message,
-      }))
-      .filter((g) => g.files.length > 0);
+    // Validate and normalize the structure
+    groups = validateAndNormalizeGrouping(parsed, fileByPath);
 
     // Track which files (and which hunks within files) have been assigned
     // For hunk-level tracking: map path → set of assigned hunk indices

@@ -344,21 +344,28 @@ export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
 
 /** Commit with a message (supports multi-line subject + body via stdin) */
 export function commitWithMessage(message: string, cwd?: string): void {
+  if (!message || message.trim().length === 0) {
+    throw new Error("Cannot commit with empty message");
+  }
   const dir = cwd ?? process.cwd();
-  execSync("git commit -F -", {
-    cwd: dir,
-    input: message,
-    stdio: ["pipe", "inherit", "inherit"],
-  });
+  try {
+    execSync("git commit -F -", {
+      cwd: dir,
+      input: message,
+      encoding: "utf-8",
+      stdio: ["pipe", "inherit", "inherit"],
+    });
+  } catch (err: unknown) {
+    const e = err as { status?: number; message?: string };
+    throw new Error(
+      `Git commit failed (exit ${e.status || 1}): ${e.message || "unknown error"}`,
+    );
+  }
 }
 
 /** Get list of currently staged file paths */
 export function getStagedFiles(cwd?: string): string[] {
-  const dir = cwd ?? process.cwd();
-  const out = execSync("git diff --cached --name-only", {
-    cwd: dir,
-    encoding: "utf-8",
-  });
+  const out = safeExecGit("git diff --cached --name-only", { cwd });
   return out.trim().split("\n").filter(Boolean);
 }
 

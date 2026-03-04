@@ -172,15 +172,76 @@ export function loadConfig(cwd?: string): Config {
 
   _cached = merged as unknown as Config;
 
-  // 4. Env override for API key (lowest-priority fallback)
-  if (!_cached.openai.apiKey && process.env["OPENAI_API_KEY"]) {
+  // 4. Env override for API key (HIGHEST priority - overrides all configs)
+  if (process.env["OPENAI_API_KEY"]) {
     _cached.openai.apiKey = process.env["OPENAI_API_KEY"];
   }
+
+  // 5. Validate config values are within reasonable bounds
+  validateConfig(_cached);
+
   return _cached;
+}
+
+/** Validate config values to prevent misconfigurations */
+function validateConfig(cfg: Config): void {
+  // OpenAI settings
+  if (cfg.openai.maxTokens < 1 || cfg.openai.maxTokens > 100000) {
+    throw new Error(
+      `openai.maxTokens must be between 1 and 100000, got: ${cfg.openai.maxTokens}`,
+    );
+  }
+  if (cfg.openai.temperature < 0 || cfg.openai.temperature > 2) {
+    throw new Error(
+      `openai.temperature must be between 0 and 2, got: ${cfg.openai.temperature}`,
+    );
+  }
+
+  // Analysis settings
+  if (cfg.analysis.maxDiffLines < 100 || cfg.analysis.maxDiffLines > 1000000) {
+    throw new Error(
+      `analysis.maxDiffLines must be between 100 and 1000000, got: ${cfg.analysis.maxDiffLines}`,
+    );
+  }
+  if (cfg.analysis.chunkSize < 50 || cfg.analysis.chunkSize > 100000) {
+    throw new Error(
+      `analysis.chunkSize must be between 50 and 100000, got: ${cfg.analysis.chunkSize}`,
+    );
+  }
+
+  // Commit settings
+  if (cfg.commit.maxSubjectLength < 20 || cfg.commit.maxSubjectLength > 200) {
+    throw new Error(
+      `commit.maxSubjectLength must be between 20 and 200, got: ${cfg.commit.maxSubjectLength}`,
+    );
+  }
+  if (cfg.commit.maxBodyLineLength < 40 || cfg.commit.maxBodyLineLength > 200) {
+    throw new Error(
+      `commit.maxBodyLineLength must be between 40 and 200, got: ${cfg.commit.maxBodyLineLength}`,
+    );
+  }
+
+  // Performance settings
+  if (
+    cfg.performance.cacheTTLSeconds < 0 ||
+    cfg.performance.cacheTTLSeconds > 86400
+  ) {
+    throw new Error(
+      `performance.cacheTTLSeconds must be between 0 and 86400, got: ${cfg.performance.cacheTTLSeconds}`,
+    );
+  }
+  if (cfg.performance.timeoutMs < 0 || cfg.performance.timeoutMs > 300000) {
+    throw new Error(
+      `performance.timeoutMs must be between 0 and 300000, got: ${cfg.performance.timeoutMs}`,
+    );
+  }
 }
 
 export function resetConfigCache(): void {
   _cached = null;
+  // Also reset OpenAI client to prevent stale API key usage
+  // Dynamic import to avoid circular dependency
+  import("./ai.js").then((ai) => ai.resetClient()).catch(() => {});
 }
 
 export function initConfig(cwd?: string): string {
