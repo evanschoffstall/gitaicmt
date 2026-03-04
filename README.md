@@ -78,14 +78,15 @@ That's it. Changes are auto-detected, analyzed, split into logical groups, and c
 
 ## Commands
 
-| Command           | Alias | Description                                      |
-| ----------------- | ----- | ------------------------------------------------ |
-| `gitaicmt`        | `c`   | Auto-detect changes, split & commit (default)    |
-| `gitaicmt plan`   | `p`   | Preview planned commit groups without committing |
-| `gitaicmt single` | `s`   | One commit message for all changes               |
-| `gitaicmt gen`    | `g`   | Generate message to stdout (for piping)          |
-| `gitaicmt init`   |       | Create default `gitaicmt.config.json`            |
-| `gitaicmt help`   | `-h`  | Show help                                        |
+| Command           | Alias | Description                                        |
+| ----------------- | ----- | -------------------------------------------------- |
+| `gitaicmt`        | `c`   | Auto-detect, split & commit (shows plan, asks y/n) |
+| `gitaicmt -y`     |       | Same as above, skip confirmation                   |
+| `gitaicmt plan`   | `p`   | Preview planned commit groups without committing   |
+| `gitaicmt single` | `s`   | One commit message for all changes                 |
+| `gitaicmt gen`    | `g`   | Generate message to stdout (for piping)            |
+| `gitaicmt init`   |       | Create default `gitaicmt.config.json`              |
+| `gitaicmt help`   | `-h`  | Show help                                          |
 
 > Changes are auto-staged if nothing is manually staged.
 
@@ -94,8 +95,11 @@ That's it. Changes are auto-detected, analyzed, split into logical groups, and c
 ## Examples
 
 ```bash
-# Auto-split into logical commits (auto-stages if needed)
+# Auto-split into logical commits (shows plan, asks y/n)
 gitaicmt
+
+# Same but skip the confirmation prompt
+gitaicmt -y
 
 # Preview the split before committing
 gitaicmt plan
