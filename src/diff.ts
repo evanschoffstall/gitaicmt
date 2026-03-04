@@ -1,57 +1,14 @@
-import { execSync } from "node:child_process";
+/**
+ * Diff parsing and chunking module
+ * Parses git diffs into structured data and chunks them for AI analysis
+ * All git command execution has been moved to git.ts
+ */
+
 import { loadConfig } from "./config.js";
 
-// Git already respects .gitignore — no custom ignore patterns needed.
-// We pull diffs directly from staged/unstaged changes via git commands.
-
-/** Validate and sanitize file paths to prevent command injection */
-function sanitizeFilePath(path: string): string {
-  // Remove any shell metacharacters and dangerous patterns
-  if (
-    path.includes("\0") ||
-    path.includes(";") ||
-    path.includes("|") ||
-    path.includes("&") ||
-    path.includes("$") ||
-    path.includes("`") ||
-    path.includes("$(") ||
-    path.includes("\\n") ||
-    path.includes("\\r")
-  ) {
-    throw new Error(`Invalid file path contains dangerous characters: ${path}`);
-  }
-  // Prevent path traversal to absolute paths outside repo
-  if (path.startsWith("/") || path.includes("../..")) {
-    throw new Error(
-      `Invalid file path (absolute or excessive traversal): ${path}`,
-    );
-  }
-  return path;
-}
-
-/** Safe git command execution with error handling */
-function safeExecGit(
-  command: string,
-  options?: { cwd?: string; input?: string; maxBuffer?: number },
-): string {
-  const dir = options?.cwd ?? process.cwd();
-  try {
-    return execSync(command, {
-      cwd: dir,
-      encoding: "utf-8",
-      maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024,
-      input: options?.input,
-      stdio: options?.input ? ["pipe", "pipe", "pipe"] : "pipe",
-    });
-  } catch (err: unknown) {
-    const e = err as { status?: number; message?: string; stderr?: string };
-    const stderr = e.stderr || "";
-    const status = e.status || 1;
-    throw new Error(
-      `Git command failed (exit ${status}): ${command}\n${stderr}`,
-    );
-  }
-}
+// ============================================================================
+// Type Definitions
+// ============================================================================
 
 /** A single hunk within a file diff */
 export interface DiffHunk {
@@ -81,24 +38,29 @@ export interface DiffChunk {
   lineCount: number;
 }
 
-// --------------- Git helpers ---------------
-
-export function getStagedDiff(cwd?: string): string {
-  return safeExecGit("git diff --cached --unified=3", { cwd });
+/** Quick summary stats */
+export interface DiffStats {
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+  chunks: number;
 }
 
-export function hasStagedChanges(cwd?: string): boolean {
-  const out = safeExecGit("git diff --cached --name-only", { cwd });
-  return out.trim().length > 0;
-}
-
-// --------------- Parser ---------------
+// ============================================================================
+// Parser
+// ============================================================================
 
 const FILE_HEADER = /^diff --git a\/(.+) b\/(.+)$/;
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 const STATUS_LINE =
   /^(new file|deleted file|similarity index|rename from|rename to|index )/;
 
+/**
+ * Parse a raw git diff into structured FileDiff objects
+ * Supports modified, added, deleted, and renamed files
+ * @param raw - Raw git diff output (unified format)
+ * @returns Array of parsed file diffs with hunks and statistics
+ */
 export function parseDiff(raw: string): FileDiff[] {
   const files: FileDiff[] = [];
   const lines = raw.split("\n");
@@ -166,9 +128,17 @@ export function parseDiff(raw: string): FileDiff[] {
   return files;
 }
 
-// --------------- Chunking ---------------
+// ============================================================================
+// Formatting
+// ============================================================================
 
-function formatFileDiff(f: FileDiff): string {
+/**
+ * Format a FileDiff into displayable unified diff text
+ * Includes --- and +++ headers, hunk headers, and diff lines
+ * @param f - The file diff to format
+ * @returns Formatted diff text ready for display
+ */
+export function formatFileDiff(f: FileDiff): string {
   const parts: string[] = [`--- ${f.oldPath ?? f.path}`, `+++ ${f.path}`];
   for (const h of f.hunks) {
     parts.push(h.header);
@@ -177,6 +147,52 @@ function formatFileDiff(f: FileDiff): string {
   return parts.join("\n");
 }
 
+/**
+ * Build a full patch string from a FileDiff (for selective hunk staging)
+ * Generates a complete patch that can be applied with `git apply`
+ * @param file - The file diff containing hunks
+ * @param hunks - Optional array of specific hunks to include (defaults to all)
+ * @returns Complete patch content in unified diff format with proper headers
+ */
+export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
+  const selectedHunks = hunks ?? file.hunks;
+  const lines: string[] = [];
+  const oldPath = file.oldPath ?? file.path;
+
+  if (file.status === "added") {
+    lines.push(`diff --git a/${file.path} b/${file.path}`);
+    lines.push("new file mode 100644");
+    lines.push("--- /dev/null");
+    lines.push(`+++ b/${file.path}`);
+  } else if (file.status === "deleted") {
+    lines.push(`diff --git a/${oldPath} b/${oldPath}`);
+    lines.push("deleted file mode 100644");
+    lines.push(`--- a/${oldPath}`);
+    lines.push("+++ /dev/null");
+  } else {
+    lines.push(`diff --git a/${oldPath} b/${file.path}`);
+    lines.push(`--- a/${oldPath}`);
+    lines.push(`+++ b/${file.path}`);
+  }
+
+  for (const h of selectedHunks) {
+    lines.push(h.header);
+    lines.push(...h.lines);
+  }
+  lines.push(""); // trailing newline
+  return lines.join("\n");
+}
+
+// ============================================================================
+// Chunking
+// ============================================================================
+
+/**
+ * Split diff files into chunks for AI analysis
+ * Respects config settings for grouping by file/hunk and chunk size limits
+ * @param files - Array of parsed file diffs to chunk
+ * @returns Array of diff chunks ready for AI processing
+ */
 export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
   const cfg = loadConfig();
   const maxLines = cfg.analysis.chunkSize;
@@ -252,14 +268,16 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
   return chunks;
 }
 
-/** Quick summary stats */
-export interface DiffStats {
-  filesChanged: number;
-  additions: number;
-  deletions: number;
-  chunks: number;
-}
+// ============================================================================
+// Stats
+// ============================================================================
 
+/**
+ * Calculate summary statistics for a set of files and chunks
+ * @param files - Array of file diffs
+ * @param chunks - Array of diff chunks
+ * @returns Statistics object with counts of files, additions, deletions, and chunks
+ */
 export function getStats(files: FileDiff[], chunks: DiffChunk[]): DiffStats {
   return {
     filesChanged: files.length,
@@ -268,106 +286,3 @@ export function getStats(files: FileDiff[], chunks: DiffChunk[]): DiffStats {
     chunks: chunks.length,
   };
 }
-
-// --------------- Git staging helpers for multi-commit ---------------
-
-/** Unstage everything */
-export function resetStaging(cwd?: string): void {
-  try {
-    safeExecGit("git reset HEAD -- .", { cwd });
-  } catch {
-    // Ignore errors (e.g., if nothing was staged)
-  }
-}
-
-/** Stage specific files by path */
-export function stageFiles(paths: string[], cwd?: string): void {
-  if (paths.length === 0) return;
-  // Validate and sanitize all paths first
-  const safe = paths.map(sanitizeFilePath);
-  // Use -- to separate paths from options for extra safety
-  const quoted = safe.map((p) => `"${p}"`).join(" ");
-  safeExecGit(`git add -- ${quoted}`, { cwd });
-}
-
-/** Stage all changes (tracked and untracked, respecting .gitignore) */
-export function stageAll(cwd?: string): void {
-  safeExecGit("git add -A", { cwd });
-}
-
-/** Get the unstaged working-tree diff for a specific file */
-export function getFileWorkingDiff(filePath: string, cwd?: string): string {
-  const safe = sanitizeFilePath(filePath);
-  return safeExecGit(`git diff -- "${safe}"`, { cwd });
-}
-
-/** Stage a specific hunk by applying a patch via `git apply --cached` */
-export function stagePatch(patchContent: string, cwd?: string): void {
-  if (!patchContent || patchContent.trim().length === 0) {
-    throw new Error("Cannot stage empty patch");
-  }
-  safeExecGit("git apply --cached --unidiff-zero -", {
-    cwd,
-    input: patchContent,
-  });
-}
-
-/** Build a full patch string from a FileDiff (for selective hunk staging) */
-export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
-  const selectedHunks = hunks ?? file.hunks;
-  const lines: string[] = [];
-  const oldPath = file.oldPath ?? file.path;
-
-  if (file.status === "added") {
-    lines.push(`diff --git a/${file.path} b/${file.path}`);
-    lines.push("new file mode 100644");
-    lines.push("--- /dev/null");
-    lines.push(`+++ b/${file.path}`);
-  } else if (file.status === "deleted") {
-    lines.push(`diff --git a/${oldPath} b/${oldPath}`);
-    lines.push("deleted file mode 100644");
-    lines.push(`--- a/${oldPath}`);
-    lines.push("+++ /dev/null");
-  } else {
-    lines.push(`diff --git a/${oldPath} b/${file.path}`);
-    lines.push(`--- a/${oldPath}`);
-    lines.push(`+++ b/${file.path}`);
-  }
-
-  for (const h of selectedHunks) {
-    lines.push(h.header);
-    lines.push(...h.lines);
-  }
-  lines.push(""); // trailing newline
-  return lines.join("\n");
-}
-
-/** Commit with a message (supports multi-line subject + body via stdin) */
-export function commitWithMessage(message: string, cwd?: string): void {
-  if (!message || message.trim().length === 0) {
-    throw new Error("Cannot commit with empty message");
-  }
-  const dir = cwd ?? process.cwd();
-  try {
-    execSync("git commit -F -", {
-      cwd: dir,
-      input: message,
-      encoding: "utf-8",
-      stdio: ["pipe", "inherit", "inherit"],
-    });
-  } catch (err: unknown) {
-    const e = err as { status?: number; message?: string };
-    throw new Error(
-      `Git commit failed (exit ${e.status || 1}): ${e.message || "unknown error"}`,
-    );
-  }
-}
-
-/** Get list of currently staged file paths */
-export function getStagedFiles(cwd?: string): string[] {
-  const out = safeExecGit("git diff --cached --name-only", { cwd });
-  return out.trim().split("\n").filter(Boolean);
-}
-
-/** Format a FileDiff into displayable diff text */
-export { formatFileDiff };
