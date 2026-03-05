@@ -89,11 +89,19 @@ function ensureStaged(): void {
 }
 
 /** Format a PlannedCommitFile for display */
-function formatCommitFile(f: PlannedCommitFile): string {
-  if (f.hunks && f.hunks.length > 0) {
-    return `${f.path} (hunks: ${f.hunks.join(", ")})`;
-  }
-  return f.path;
+function formatCommitFile(
+  f: PlannedCommitFile,
+  fileDiffs?: Map<string, FileDiff>,
+): string {
+  if (!f.hunks || f.hunks.length === 0) return f.path;
+  const total = fileDiffs?.get(f.path)?.hunks.length;
+  const idx = f.hunks.join(", ");
+  const word = f.hunks.length === 1 ? "hunk" : "hunks";
+  const suffix =
+    total !== undefined
+      ? `[${word} ${idx} / ${total}]`
+      : `[${word} ${idx}]`;
+  return `${f.path} ${suffix}`;
 }
 
 /** Prompt the user for y/n. Re-prompts until a valid answer is given. */
@@ -131,6 +139,7 @@ async function promptYesNo(question: string): Promise<boolean> {
 /** Display planned commit groups */
 function displayPlan(
   groups: { files: PlannedCommitFile[]; message: string }[],
+  fileDiffs?: Map<string, FileDiff>,
 ): void {
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i];
@@ -142,7 +151,9 @@ function displayPlan(
         log(`  ${DIM}${line}${RESET}`);
       }
     }
-    log(`  ${DIM}Files: ${g.files.map(formatCommitFile).join(", ")}${RESET}`);
+    log(
+      `  ${DIM}Files: ${g.files.map((f) => formatCommitFile(f, fileDiffs)).join(", ")}${RESET}`,
+    );
     log("");
   }
 }
@@ -220,7 +231,8 @@ async function cmdPlan() {
   );
   log("");
 
-  displayPlan(groups);
+  const fileMap = new Map(files.map((f) => [f.path, f]));
+  displayPlan(groups, fileMap);
 }
 
 /** Analyze, split, and execute multiple commits */
@@ -246,16 +258,20 @@ async function cmdCommit(autoConfirm: boolean) {
   );
   log("");
 
-  // Merge commits that touch the same files to avoid staging conflicts
+  // Deduplicate commits that would produce staging conflicts
   const mergedGroups = mergeCommitsByFile(groups);
   if (mergedGroups.length < groups.length) {
+    const dropped = groups.length - mergedGroups.length;
     log(
-      `${YELLOW}Note: Merged ${groups.length} commits into ${mergedGroups.length} to avoid file conflicts${RESET}`,
+      `${YELLOW}Note: Dropped ${dropped} duplicate commit(s) whose files were already covered${RESET}`,
     );
     log("");
   }
 
-  displayPlan(mergedGroups);
+  // Build file lookup for hunk-level staging
+  const fileMap = new Map(files.map((f) => [f.path, f]));
+
+  displayPlan(mergedGroups, fileMap);
 
   // Confirm before committing
   if (!autoConfirm) {
@@ -268,9 +284,6 @@ async function cmdCommit(autoConfirm: boolean) {
     }
     log("");
   }
-
-  // Build file lookup for hunk-level staging
-  const fileMap = new Map(files.map((f) => [f.path, f]));
 
   // Execute each commit group
   let committed = 0;
@@ -293,7 +306,7 @@ async function cmdCommit(autoConfirm: boolean) {
       log(
         `${BOLD}${GREEN}[${i + 1}/${mergedGroups.length}]${RESET} ${subject}`,
       );
-      log(`  ${DIM}${g.files.map(formatCommitFile).join(", ")}${RESET}`);
+      log(`  ${DIM}${g.files.map((f) => formatCommitFile(f, fileMap)).join(", ")}${RESET}`);
 
       // Unstage everything, then stage only this group's files/hunks
       resetStaging();
