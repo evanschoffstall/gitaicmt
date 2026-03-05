@@ -134,7 +134,7 @@ function buildSystemPrompt(): string {
   return parts.join("\n");
 }
 
-function buildGroupingSystemPrompt(): string {
+export function buildGroupingSystemPrompt(): string {
   const parts = [
     "You are an expert at analyzing git diffs and organizing them into logical, atomic commits.",
     "Given a set of file diffs with labeled hunks, group them into commits where each commit represents ONE coherent, complete change.",
@@ -247,7 +247,7 @@ function categorizeFile(path: string): string {
   return "source";
 }
 
-function buildGroupingUserPrompt(
+export function buildGroupingUserPrompt(
   files: FileDiff[],
   formatFileDiff: (f: FileDiff) => string,
 ): string {
