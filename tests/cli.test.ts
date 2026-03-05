@@ -266,7 +266,11 @@ describe("CLI", () => {
       // Remove API key from env
       const { stderr, exitCode } = run("gen", {
         cwd: dir,
-        env: { OPENAI_API_KEY: "", PATH: process.env["PATH"] ?? "" },
+        env: {
+          OPENAI_API_KEY: "",
+          XDG_CONFIG_HOME: dir,
+          PATH: process.env["PATH"] ?? "",
+        },
       });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("No OpenAI API key");
@@ -290,7 +294,11 @@ describe("CLI", () => {
       // Run gen — should auto-stage then fail at API key
       const { stderr, exitCode } = run("gen", {
         cwd: dir,
-        env: { OPENAI_API_KEY: "", PATH: process.env["PATH"] ?? "" },
+        env: {
+          OPENAI_API_KEY: "",
+          XDG_CONFIG_HOME: dir,
+          PATH: process.env["PATH"] ?? "",
+        },
       });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("auto-staging");
@@ -309,7 +317,11 @@ describe("CLI", () => {
 
       const { stderr, exitCode } = run("", {
         cwd: dir,
-        env: { OPENAI_API_KEY: "", PATH: process.env["PATH"] ?? "" },
+        env: {
+          OPENAI_API_KEY: "",
+          XDG_CONFIG_HOME: dir,
+          PATH: process.env["PATH"] ?? "",
+        },
       });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("auto-staging");

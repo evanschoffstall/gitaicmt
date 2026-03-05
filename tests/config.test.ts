@@ -23,13 +23,26 @@ function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "gitaicmt-test-"));
 }
 
+// Isolated XDG home — prevents real ~/.config/gitaicmt/config.json from leaking into tests
+let _savedXdgHome: string | undefined;
+let _testXdgDir: string;
+
 describe("config", () => {
   beforeEach(() => {
     resetConfigCache();
+    _savedXdgHome = process.env["XDG_CONFIG_HOME"];
+    _testXdgDir = mkdtempSync(join(tmpdir(), "gitaicmt-xdg-"));
+    process.env["XDG_CONFIG_HOME"] = _testXdgDir;
   });
 
   afterEach(() => {
     resetConfigCache();
+    if (_savedXdgHome !== undefined) {
+      process.env["XDG_CONFIG_HOME"] = _savedXdgHome;
+    } else {
+      delete process.env["XDG_CONFIG_HOME"];
+    }
+    rmSync(_testXdgDir, { recursive: true, force: true });
   });
 
   // ───── Defaults ─────
