@@ -8,6 +8,7 @@ import type { FileDiff } from "./diff.js";
 import { chunkDiffs, formatFileDiff, getStats, parseDiff } from "./diff.js";
 import {
   commitWithMessage,
+  filterIgnoredFiles,
   getStagedDiff,
   getStagedFiles,
   hasStagedChanges,
@@ -59,11 +60,14 @@ function ensureStaged(): void {
   } catch (err: unknown) {
     // Git command failed - provide helpful error
     if (err instanceof Error) {
-      if (err.message.includes("does not have any commits yet")) {
+      const msg = err.message.toLowerCase();
+      if (msg.includes("does not have any commits yet") || msg.includes("no commits")) {
         die(
           "Git repository has no commits yet. Create an initial commit first:\n  git commit --allow-empty -m 'Initial commit'",
         );
       }
+      // Re-throw with original message if not a known case
+      die(err.message);
     }
     throw err; // Re-throw unexpected errors
   }
@@ -87,6 +91,7 @@ function formatCommitFile(f: PlannedCommitFile): string {
  * Stage files for a commit group, handling hunk-level staging.
  * This version stages whole files to avoid complex hunk-matching issues.
  * Validates that all paths exist in the original diff before staging.
+ * Filters out gitignored files to prevent staging errors.
  */
 function stageGroupFiles(
   group: PlannedCommitFile[],
@@ -104,10 +109,39 @@ function stageGroupFiles(
       );
     }
   }
+  
+  // SECURITY: Validate hunk indices are within bounds
+  for (const fileRef of group) {
+    const file = originalFiles.get(fileRef.path);
+    if (!file) continue; // Already checked above
+    
+    if (fileRef.hunks && fileRef.hunks.length > 0) {
+      for (const hunkIndex of fileRef.hunks) {
+        if (hunkIndex < 0 || hunkIndex >= file.hunks.length) {
+          throw new Error(
+            `AI returned out-of-bounds hunk index ${hunkIndex} for ${fileRef.path} (max: ${file.hunks.length - 1})`,
+          );
+        }
+      }
+    }
+  }
 
   if (filesToStage.length > 0) {
+    // Filter out gitignored files to prevent staging errors
+    const safeToStage = filterIgnoredFiles(filesToStage);
+    
+    if (safeToStage.length === 0) {
+      log(`${YELLOW}Warning: All files in this group are gitignored, skipping${RESET}`);
+      return;
+    }
+    
+    if (safeToStage.length < filesToStage.length) {
+      const ignoredCount = filesToStage.length - safeToStage.length;
+      log(`${YELLOW}Warning: Skipping ${ignoredCount} gitignored file(s)${RESET}`);
+    }
+    
     try {
-      stageFiles(filesToStage);
+      stageFiles(safeToStage);
     } catch (err) {
       log(`${RED}Error staging files: ${err}${RESET}`);
       throw err;
@@ -118,11 +152,22 @@ function stageGroupFiles(
 /** Prompt the user for y/n. Re-prompts until a valid answer is given. */
 async function promptYesNo(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
+  
+  // Add timeout protection (5 minutes max) to prevent indefinite hangs
+  const PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      reject(new Error("User prompt timed out after 5 minutes"));
+    }, PROMPT_TIMEOUT_MS);
+  });
+  
   try {
     while (true) {
-      const answer = await new Promise<string>((resolve) => {
+      const answerPromise = new Promise<string>((resolve) => {
         rl.question(`${question} ${DIM}(y/n)${RESET} `, resolve);
       });
+      
+      const answer = await Promise.race([answerPromise, timeoutPromise]);
       const a = answer.trim().toLowerCase();
       if (a === "y" || a === "yes") return true;
       if (a === "n" || a === "no") return false;
@@ -355,6 +400,15 @@ async function cmdCommit(autoConfirm: boolean) {
       resetStaging();
       stageGroupFiles(g.files, fileMap);
 
+      // Skip if nothing ended up staged (files already committed, gitignored, etc.)
+      if (!hasStagedChanges()) {
+        log(
+          `${YELLOW}  (skipped — no stageable changes remain for this group)${RESET}`,
+        );
+        log("");
+        continue;
+      }
+
       // Commit
       commitWithMessage(g.message);
       committed++;
@@ -362,8 +416,10 @@ async function cmdCommit(autoConfirm: boolean) {
     }
 
     const totalElapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    const skipped = mergedGroups.length - committed;
+    const skippedNote = skipped > 0 ? `, ${skipped} skipped` : "";
     log(
-      `${GREEN}${BOLD}Done:${RESET} ${committed} commit(s) in ${totalElapsed}s`,
+      `${GREEN}${BOLD}Done:${RESET} ${committed} commit(s) in ${totalElapsed}s${skippedNote}`,
     );
   } catch (err) {
     log(
