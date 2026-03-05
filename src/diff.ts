@@ -65,7 +65,7 @@ export function parseDiff(raw: string): FileDiff[] {
   if (!raw || typeof raw !== "string") {
     return [];
   }
-  
+
   const files: FileDiff[] = [];
   const lines = raw.split("\n");
   let current: FileDiff | null = null;
@@ -111,12 +111,17 @@ export function parseDiff(raw: string): FileDiff[] {
       const countOld = parseInt(hMatch[2] ?? "1", 10);
       const startNew = parseInt(hMatch[3], 10);
       const countNew = parseInt(hMatch[4] ?? "1", 10);
-      
+
       // Validate hunk header numbers
-      if (isNaN(startOld) || isNaN(countOld) || isNaN(startNew) || isNaN(countNew)) {
+      if (
+        isNaN(startOld) ||
+        isNaN(countOld) ||
+        isNaN(startNew) ||
+        isNaN(countNew)
+      ) {
         continue; // Skip malformed hunk headers
       }
-      
+
       hunk = {
         header: line,
         startOld,
@@ -176,7 +181,7 @@ export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
   if (selectedHunks.length === 0) {
     return ""; // No hunks to apply
   }
-  
+
   const lines: string[] = [];
   const oldPath = file.oldPath ?? file.path;
 

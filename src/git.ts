@@ -45,7 +45,7 @@ function normalizePath(path: string): string {
   // Split into segments and resolve .. and .
   const segments = path.split(/[\\\/]+/).filter(Boolean);
   const resolved: string[] = [];
-  
+
   for (const seg of segments) {
     if (seg === "..") {
       // Attempting to go above root is suspicious
@@ -60,7 +60,7 @@ function normalizePath(path: string): string {
       resolved.push(seg);
     }
   }
-  
+
   return resolved.join("/");
 }
 
@@ -103,29 +103,20 @@ export function sanitizeFilePath(path: string): string {
 
   // Prevent leading dash (could be interpreted as flags)
   if (path.startsWith("-")) {
-    throw new InvalidPathError(
-      `Invalid file path starts with dash`,
-      path,
-    );
+    throw new InvalidPathError(`Invalid file path starts with dash`, path);
   }
 
   // Maximum path length check (prevent DoS)
   if (path.length > 4096) {
-    throw new InvalidPathError(
-      `File path exceeds maximum length`,
-      path,
-    );
+    throw new InvalidPathError(`File path exceeds maximum length`, path);
   }
 
   // Normalize to resolve .. and . segments, catching traversal attempts
   const normalized = normalizePath(path);
-  
+
   // Final check: ensure no attempts to escape repo root
   if (normalized.startsWith("..")) {
-    throw new InvalidPathError(
-      `Path traversal attempt detected`,
-      path,
-    );
+    throw new InvalidPathError(`Path traversal attempt detected`, path);
   }
 
   return normalized;
@@ -143,10 +134,10 @@ function sanitizeGitOutput(output: string): string {
   // Remove ANSI escape sequences (colors, cursor control, etc.)
   // Pattern: ESC [ ... m or ESC [ ... letter
   let cleaned = output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-  
+
   // Remove other escape sequences (bell, backspace, etc.)
   cleaned = cleaned.replace(/[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]/g, "");
-  
+
   return cleaned;
 }
 
@@ -358,7 +349,7 @@ export function getStagedFiles(cwd?: string): string[] {
  */
 export function filterIgnoredFiles(paths: string[], cwd?: string): string[] {
   if (paths.length === 0) return [];
-  
+
   try {
     // git check-ignore returns exit code 0 if files ARE ignored
     // We want to return files that are NOT ignored
@@ -367,24 +358,24 @@ export function filterIgnoredFiles(paths: string[], cwd?: string): string[] {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    
+
     // status 0 = some files are ignored (stdout contains ignored paths)
     // status 1 = no files are ignored (all paths are safe)
     // status 128 = error (treat as all safe to avoid breaking)
-    
+
     if (result.status === 1 || result.status === null) {
       // No files are ignored - all are safe
       return paths;
     }
-    
+
     if (result.status === 0) {
       // Some files are ignored - filter them out
       const ignoredPaths = new Set(
-        (result.stdout as string).trim().split("\n").filter(Boolean)
+        (result.stdout as string).trim().split("\n").filter(Boolean),
       );
       return paths.filter((p) => !ignoredPaths.has(p));
     }
-    
+
     // Unknown status or error - return all paths to avoid breaking the flow
     // Better to attempt staging and let git error than to silently skip files
     return paths;

@@ -61,7 +61,10 @@ function ensureStaged(): void {
     // Git command failed - provide helpful error
     if (err instanceof Error) {
       const msg = err.message.toLowerCase();
-      if (msg.includes("does not have any commits yet") || msg.includes("no commits")) {
+      if (
+        msg.includes("does not have any commits yet") ||
+        msg.includes("no commits")
+      ) {
         die(
           "Git repository has no commits yet. Create an initial commit first:\n  git commit --allow-empty -m 'Initial commit'",
         );
@@ -109,12 +112,12 @@ function stageGroupFiles(
       );
     }
   }
-  
+
   // SECURITY: Validate hunk indices are within bounds
   for (const fileRef of group) {
     const file = originalFiles.get(fileRef.path);
     if (!file) continue; // Already checked above
-    
+
     if (fileRef.hunks && fileRef.hunks.length > 0) {
       for (const hunkIndex of fileRef.hunks) {
         if (hunkIndex < 0 || hunkIndex >= file.hunks.length) {
@@ -129,17 +132,21 @@ function stageGroupFiles(
   if (filesToStage.length > 0) {
     // Filter out gitignored files to prevent staging errors
     const safeToStage = filterIgnoredFiles(filesToStage);
-    
+
     if (safeToStage.length === 0) {
-      log(`${YELLOW}Warning: All files in this group are gitignored, skipping${RESET}`);
+      log(
+        `${YELLOW}Warning: All files in this group are gitignored, skipping${RESET}`,
+      );
       return;
     }
-    
+
     if (safeToStage.length < filesToStage.length) {
       const ignoredCount = filesToStage.length - safeToStage.length;
-      log(`${YELLOW}Warning: Skipping ${ignoredCount} gitignored file(s)${RESET}`);
+      log(
+        `${YELLOW}Warning: Skipping ${ignoredCount} gitignored file(s)${RESET}`,
+      );
     }
-    
+
     try {
       stageFiles(safeToStage);
     } catch (err) {
@@ -152,7 +159,7 @@ function stageGroupFiles(
 /** Prompt the user for y/n. Re-prompts until a valid answer is given. */
 async function promptYesNo(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-  
+
   // Add timeout protection (5 minutes max) to prevent indefinite hangs
   const PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -161,13 +168,13 @@ async function promptYesNo(question: string): Promise<boolean> {
       reject(new Error("User prompt timed out after 5 minutes"));
     }, PROMPT_TIMEOUT_MS);
   });
-  
+
   try {
     while (true) {
       const answerPromise = new Promise<string>((resolve) => {
         rl.question(`${question} ${DIM}(y/n)${RESET} `, resolve);
       });
-      
+
       const answer = await Promise.race([answerPromise, timeoutPromise]);
       const a = answer.trim().toLowerCase();
       if (a === "y" || a === "yes") return true;
