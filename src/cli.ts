@@ -5,12 +5,7 @@ import type { PlannedCommitFile } from "./ai.js";
 import { generateForChunks, planCommits } from "./ai.js";
 import { initConfig, loadConfig } from "./config.js";
 import type { FileDiff } from "./diff.js";
-import {
-  chunkDiffs,
-  formatFileDiff,
-  getStats,
-  parseDiff,
-} from "./diff.js";
+import { chunkDiffs, formatFileDiff, getStats, parseDiff } from "./diff.js";
 import {
   commitWithMessage,
   getStagedDiff,
