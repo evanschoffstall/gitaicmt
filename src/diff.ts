@@ -62,6 +62,10 @@ const STATUS_LINE =
  * @returns Array of parsed file diffs with hunks and statistics
  */
 export function parseDiff(raw: string): FileDiff[] {
+  if (!raw || typeof raw !== "string") {
+    return [];
+  }
+  
   const files: FileDiff[] = [];
   const lines = raw.split("\n");
   let current: FileDiff | null = null;
@@ -69,12 +73,14 @@ export function parseDiff(raw: string): FileDiff[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (!line) continue; // Skip empty lines
 
     const fMatch = FILE_HEADER.exec(line);
     if (fMatch) {
       if (current) files.push(current);
       const oldP = fMatch[1];
       const newP = fMatch[2];
+      if (!oldP || !newP) continue; // Skip malformed headers
       current = {
         path: newP,
         oldPath: oldP !== newP ? oldP : null,
@@ -94,18 +100,29 @@ export function parseDiff(raw: string): FileDiff[] {
     else if (line.startsWith("deleted file")) current.status = "deleted";
     else if (line.startsWith("rename from")) {
       current.status = "renamed";
-      current.oldPath = line.slice("rename from ".length);
+      const oldName = line.slice("rename from ".length).trim();
+      if (oldName) current.oldPath = oldName;
     }
     if (STATUS_LINE.test(line)) continue;
 
     const hMatch = HUNK_HEADER.exec(line);
     if (hMatch) {
+      const startOld = parseInt(hMatch[1], 10);
+      const countOld = parseInt(hMatch[2] ?? "1", 10);
+      const startNew = parseInt(hMatch[3], 10);
+      const countNew = parseInt(hMatch[4] ?? "1", 10);
+      
+      // Validate hunk header numbers
+      if (isNaN(startOld) || isNaN(countOld) || isNaN(startNew) || isNaN(countNew)) {
+        continue; // Skip malformed hunk headers
+      }
+      
       hunk = {
         header: line,
-        startOld: parseInt(hMatch[1], 10),
-        countOld: parseInt(hMatch[2] ?? "1", 10),
-        startNew: parseInt(hMatch[3], 10),
-        countNew: parseInt(hMatch[4] ?? "1", 10),
+        startOld,
+        countOld,
+        startNew,
+        countNew,
         lines: [],
       };
       current.hunks.push(hunk);
@@ -156,6 +173,10 @@ export function formatFileDiff(f: FileDiff): string {
  */
 export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
   const selectedHunks = hunks ?? file.hunks;
+  if (selectedHunks.length === 0) {
+    return ""; // No hunks to apply
+  }
+  
   const lines: string[] = [];
   const oldPath = file.oldPath ?? file.path;
 
