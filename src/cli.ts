@@ -155,8 +155,9 @@ async function promptYesNo(question: string): Promise<boolean> {
   
   // Add timeout protection (5 minutes max) to prevent indefinite hangs
   const PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       reject(new Error("User prompt timed out after 5 minutes"));
     }, PROMPT_TIMEOUT_MS);
   });
@@ -174,6 +175,8 @@ async function promptYesNo(question: string): Promise<boolean> {
       // Invalid input — re-prompt (no default)
     }
   } finally {
+    // Always clear the timeout so it doesn't hold the event loop open
+    clearTimeout(timeoutId);
     rl.close();
   }
 }
@@ -582,6 +585,10 @@ async function main() {
   }
 }
 
-main().catch((err: Error) => {
-  die(err.message);
-});
+// Explicitly exit — the OpenAI HTTP agent and any other async handles
+// would otherwise keep the process alive indefinitely after completion.
+main()
+  .then(() => process.exit(0))
+  .catch((err: Error) => {
+    die(err.message);
+  });
