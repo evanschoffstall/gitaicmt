@@ -93,9 +93,7 @@ function formatCommitFile(
   const idx = f.hunks.join(", ");
   const word = f.hunks.length === 1 ? "hunk" : "hunks";
   const suffix =
-    total !== undefined
-      ? `[${word} ${idx} / ${total}]`
-      : `[${word} ${idx}]`;
+    total !== undefined ? `[${word} ${idx} / ${total}]` : `[${word} ${idx}]`;
   return `${f.path} ${suffix}`;
 }
 
@@ -301,7 +299,9 @@ async function cmdCommit(autoConfirm: boolean) {
       log(
         `${BOLD}${GREEN}[${i + 1}/${mergedGroups.length}]${RESET} ${subject}`,
       );
-      log(`  ${DIM}${g.files.map((f) => formatCommitFile(f, fileMap)).join(", ")}${RESET}`);
+      log(
+        `  ${DIM}${g.files.map((f) => formatCommitFile(f, fileMap)).join(", ")}${RESET}`,
+      );
 
       // Unstage everything, then stage only this group's files/hunks
       resetStaging();
