@@ -3,6 +3,8 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { PlannedCommit } from "../src/ai.js";
+import { fileRefsOverlap, mergeCommitsByFile } from "../src/merge.js";
 
 // ═══════════════════════════════════════════════════════════════
 // CLI integration tests — spawns the actual CLI binary
@@ -328,5 +330,163 @@ describe("CLI", () => {
 
       rmSync(dir, { recursive: true });
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Unit tests for merge helpers (src/merge.ts)
+// ═══════════════════════════════════════════════════════════════
+
+describe("fileRefsOverlap", () => {
+  test("whole-file vs whole-file → overlaps", () => {
+    expect(fileRefsOverlap({ path: "a.ts" }, { path: "a.ts" })).toBe(true);
+  });
+
+  test("whole-file vs hunked → overlaps", () => {
+    expect(
+      fileRefsOverlap({ path: "a.ts" }, { path: "a.ts", hunks: [0] }),
+    ).toBe(true);
+  });
+
+  test("hunked vs whole-file → overlaps", () => {
+    expect(
+      fileRefsOverlap({ path: "a.ts", hunks: [1] }, { path: "a.ts" }),
+    ).toBe(true);
+  });
+
+  test("same hunk → overlaps", () => {
+    expect(
+      fileRefsOverlap(
+        { path: "a.ts", hunks: [0, 1] },
+        { path: "a.ts", hunks: [1] },
+      ),
+    ).toBe(true);
+  });
+
+  test("disjoint hunks → no overlap", () => {
+    expect(
+      fileRefsOverlap(
+        { path: "a.ts", hunks: [0] },
+        { path: "a.ts", hunks: [1] },
+      ),
+    ).toBe(false);
+  });
+
+  test("disjoint multi-hunk → no overlap", () => {
+    expect(
+      fileRefsOverlap(
+        { path: "a.ts", hunks: [0, 2] },
+        { path: "a.ts", hunks: [1, 3] },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("mergeCommitsByFile", () => {
+  function commit(
+    msg: string,
+    ...files: PlannedCommit["files"]
+  ): PlannedCommit {
+    return { message: msg, files };
+  }
+
+  test("independent files — no merge", () => {
+    const groups = [
+      commit("feat: A", { path: "a.ts" }),
+      commit("feat: B", { path: "b.ts" }),
+    ];
+    const result = mergeCommitsByFile(groups);
+    expect(result).toHaveLength(2);
+    expect(result[0].message).toBe("feat: A");
+    expect(result[1].message).toBe("feat: B");
+  });
+
+  test("whole-file conflict → merged", () => {
+    const groups = [
+      commit("feat: A", { path: "a.ts" }),
+      commit("fix: A2", { path: "a.ts" }),
+    ];
+    const result = mergeCommitsByFile(groups);
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toContain("feat: A");
+    expect(result[0].message).toContain("fix: A2");
+  });
+
+  test("same hunk in two commits → merged", () => {
+    const groups = [
+      commit("feat: A", { path: "a.ts", hunks: [0] }),
+      commit("feat: B", { path: "a.ts", hunks: [0] }),
+    ];
+    const result = mergeCommitsByFile(groups);
+    expect(result).toHaveLength(1);
+  });
+
+  test("disjoint hunks on same file → NOT merged", () => {
+    const groups = [
+      commit("feat: hunk0", { path: "a.ts", hunks: [0] }),
+      commit("feat: hunk1", { path: "a.ts", hunks: [1] }),
+    ];
+    const result = mergeCommitsByFile(groups);
+    // Different hunks — they can be staged independently, keep separate
+    expect(result).toHaveLength(2);
+    // Hunk arrays preserved
+    expect(result[0].files[0].hunks).toEqual([0]);
+    expect(result[1].files[0].hunks).toEqual([1]);
+  });
+
+  test("cross-file hunk wiring preserved — two commits sharing a file at different hunks stay separate", () => {
+    const groups = [
+      // Commit 1: file A hunk 0 + file B whole (feature wiring)
+      commit("feat: feature", { path: "a.ts", hunks: [0] }, { path: "b.ts" }),
+      // Commit 2: file A hunk 1 (unrelated fix)
+      commit("fix: cleanup", { path: "a.ts", hunks: [1] }),
+    ];
+    const result = mergeCommitsByFile(groups);
+    expect(result).toHaveLength(2);
+    // Commit 1 intact: a.ts[0] + b.ts whole
+    expect(result[0].files.find((f) => f.path === "a.ts")?.hunks).toEqual([0]);
+    expect(
+      result[0].files.find((f) => f.path === "b.ts")?.hunks,
+    ).toBeUndefined();
+    // Commit 2 intact: a.ts[1]
+    expect(result[1].files[0].hunks).toEqual([1]);
+  });
+
+  test("whole-file in one commit conflicts with hunked entry → promoted to whole-file on merge", () => {
+    const groups = [
+      commit("feat: all", { path: "a.ts" }), // whole file
+      commit("fix: hunk", { path: "a.ts", hunks: [2] }), // specific hunk
+    ];
+    const result = mergeCommitsByFile(groups);
+    expect(result).toHaveLength(1);
+    // Conflicting file should be whole-file (safe superset)
+    const aFile = result[0].files.find((f) => f.path === "a.ts");
+    expect(aFile?.hunks).toBeUndefined();
+  });
+
+  test("messages combined with blank line separator on merge", () => {
+    const groups = [
+      commit("feat: A", { path: "shared.ts" }),
+      commit("fix: B", { path: "shared.ts" }),
+    ];
+    const result = mergeCommitsByFile(groups);
+    expect(result[0].message).toBe("feat: A\n\nfix: B");
+  });
+
+  test("three-way: first and third conflict but second is clean", () => {
+    const groups = [
+      commit("feat: A", { path: "a.ts", hunks: [0] }),
+      commit("feat: B", { path: "b.ts" }),
+      commit("fix: A2", { path: "a.ts", hunks: [0] }), // conflicts with first
+    ];
+    const result = mergeCommitsByFile(groups);
+    expect(result).toHaveLength(2);
+    // The a.ts conflict should be merged
+    const aGroup = result.find((g) => g.files.some((f) => f.path === "a.ts"))!;
+    expect(aGroup.message).toContain("feat: A");
+    expect(aGroup.message).toContain("fix: A2");
+    // b.ts commit untouched
+    const bGroup = result.find((g) => g.files.some((f) => f.path === "b.ts"))!;
+    expect(bGroup.message).toBe("feat: B");
   });
 });

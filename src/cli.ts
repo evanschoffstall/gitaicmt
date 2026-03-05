@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
 import { createInterface } from "node:readline";
-import type { PlannedCommit, PlannedCommitFile } from "./ai.js";
+import type { PlannedCommitFile } from "./ai.js";
 import { generateForChunks, planCommits } from "./ai.js";
 import { initConfig, loadConfig } from "./config.js";
 import type { FileDiff } from "./diff.js";
-import { chunkDiffs, formatFileDiff, getStats, parseDiff } from "./diff.js";
+import {
+  buildPatch,
+  chunkDiffs,
+  formatFileDiff,
+  getStats,
+  parseDiff,
+} from "./diff.js";
 import {
   commitWithMessage,
   filterIgnoredFiles,
@@ -16,7 +22,9 @@ import {
   resetStaging,
   stageAll,
   stageFiles,
+  stagePatch,
 } from "./git.js";
+import { mergeCommitsByFile } from "./merge.js";
 
 // -------- Helpers --------
 
@@ -92,7 +100,9 @@ function formatCommitFile(f: PlannedCommitFile): string {
 
 /**
  * Stage files for a commit group, handling hunk-level staging.
- * This version stages whole files to avoid complex hunk-matching issues.
+ * Files with specific hunks are staged via `git apply --cached` using a patch
+ * built from only those hunks. Files without hunks (whole-file) are staged
+ * normally with `git add`.
  * Validates that all paths exist in the original diff before staging.
  * Filters out gitignored files to prevent staging errors.
  */
@@ -100,25 +110,21 @@ function stageGroupFiles(
   group: PlannedCommitFile[],
   originalFiles: Map<string, FileDiff>,
 ): void {
-  // Collect all unique file paths from the group
-  const filesToStage = Array.from(new Set(group.map((f) => f.path)));
+  // Separate whole-file entries from hunk-specific entries
+  const wholeFiles: string[] = [];
+  const hunkEntries: { file: FileDiff; hunkIndices: number[] }[] = [];
 
-  // SECURITY: Validate that all paths exist in the original diff
-  // This prevents AI from returning malicious or non-existent paths
-  for (const path of filesToStage) {
-    if (!originalFiles.has(path)) {
+  for (const fileRef of group) {
+    // SECURITY: Validate that all paths exist in the original diff
+    if (!originalFiles.has(fileRef.path)) {
       throw new Error(
-        `AI returned invalid file path not in original diff: ${path}`,
+        `AI returned invalid file path not in original diff: ${fileRef.path}`,
       );
     }
-  }
-
-  // SECURITY: Validate hunk indices are within bounds
-  for (const fileRef of group) {
-    const file = originalFiles.get(fileRef.path);
-    if (!file) continue; // Already checked above
+    const file = originalFiles.get(fileRef.path)!;
 
     if (fileRef.hunks && fileRef.hunks.length > 0) {
+      // SECURITY: Validate hunk indices are within bounds
       for (const hunkIndex of fileRef.hunks) {
         if (hunkIndex < 0 || hunkIndex >= file.hunks.length) {
           throw new Error(
@@ -126,31 +132,52 @@ function stageGroupFiles(
           );
         }
       }
+      hunkEntries.push({ file, hunkIndices: fileRef.hunks });
+    } else {
+      wholeFiles.push(fileRef.path);
     }
   }
 
-  if (filesToStage.length > 0) {
-    // Filter out gitignored files to prevent staging errors
-    const safeToStage = filterIgnoredFiles(filesToStage);
-
+  // Stage whole files via git add
+  if (wholeFiles.length > 0) {
+    // Filter out gitignored files
+    const safeToStage = filterIgnoredFiles(wholeFiles);
     if (safeToStage.length === 0) {
       log(
-        `${YELLOW}Warning: All files in this group are gitignored, skipping${RESET}`,
+        `${YELLOW}Warning: All whole-file entries in this group are gitignored, skipping${RESET}`,
       );
-      return;
+    } else {
+      if (safeToStage.length < wholeFiles.length) {
+        const ignoredCount = wholeFiles.length - safeToStage.length;
+        log(
+          `${YELLOW}Warning: Skipping ${ignoredCount} gitignored file(s)${RESET}`,
+        );
+      }
+      try {
+        stageFiles(safeToStage);
+      } catch (err) {
+        log(`${RED}Error staging files: ${err}${RESET}`);
+        throw err;
+      }
     }
+  }
 
-    if (safeToStage.length < filesToStage.length) {
-      const ignoredCount = filesToStage.length - safeToStage.length;
+  // Stage specific hunks via patch (git apply --cached)
+  for (const { file, hunkIndices } of hunkEntries) {
+    const selectedHunks = hunkIndices.map((i) => file.hunks[i]);
+    const patch = buildPatch(file, selectedHunks);
+    if (!patch.trim()) {
       log(
-        `${YELLOW}Warning: Skipping ${ignoredCount} gitignored file(s)${RESET}`,
+        `${YELLOW}Warning: empty patch for ${file.path} hunks [${hunkIndices.join(", ")}], skipping${RESET}`,
       );
+      continue;
     }
-
     try {
-      stageFiles(safeToStage);
+      stagePatch(patch);
     } catch (err) {
-      log(`${RED}Error staging files: ${err}${RESET}`);
+      log(
+        `${RED}Error staging hunks [${hunkIndices.join(", ")}] for ${file.path}: ${err}${RESET}`,
+      );
       throw err;
     }
   }
@@ -281,57 +308,6 @@ async function cmdPlan() {
   log("");
 
   displayPlan(groups);
-}
-
-/**
- * Merge commits that touch the same files to avoid staging conflicts.
- * When multiple commits reference the same file, combine them into one commit.
- */
-function mergeCommitsByFile(groups: PlannedCommit[]): PlannedCommit[] {
-  const fileToGroup = new Map<string, number>();
-  const merged: PlannedCommit[] = [];
-
-  for (const group of groups) {
-    // Get all unique files in this group
-    const groupFiles = group.files.map((f) => f.path);
-
-    // Check if any of these files are already in a previous group
-    let mergeIntoIndex: number | null = null;
-    for (const file of groupFiles) {
-      if (fileToGroup.has(file)) {
-        mergeIntoIndex = fileToGroup.get(file)!;
-        break;
-      }
-    }
-
-    if (mergeIntoIndex !== null) {
-      // Merge into existing group
-      const target = merged[mergeIntoIndex];
-      // Add files that aren't already there
-      for (const f of group.files) {
-        if (!target.files.some((tf) => tf.path === f.path)) {
-          target.files.push({ path: f.path }); // Ignore hunks for simplicity
-        }
-      }
-      // Combine messages
-      target.message = target.message + "\n\n" + group.message;
-    } else {
-      // New group
-      const newGroup: PlannedCommit = {
-        files: group.files.map((f) => ({ path: f.path })), // Ignore hunks
-        message: group.message,
-      };
-      merged.push(newGroup);
-
-      // Track which files are in which group
-      const index = merged.length - 1;
-      for (const file of groupFiles) {
-        fileToGroup.set(file, index);
-      }
-    }
-  }
-
-  return merged;
 }
 
 /** Analyze, split, and execute multiple commits */

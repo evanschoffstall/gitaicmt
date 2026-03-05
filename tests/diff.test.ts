@@ -694,3 +694,233 @@ describe("git staging helpers", () => {
     cleanupDir(dir);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// Hunk-level staging via buildPatch + stagePatch
+// ═══════════════════════════════════════════════════════════════
+
+describe("hunk-level staging (buildPatch + stagePatch)", () => {
+  const { execSync } = require("node:child_process");
+  const { writeFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  const { mkdtempSync, rmSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+
+  function makeGitDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "gitaicmt-hunk-"));
+    execSync(
+      'git init && git config user.email "test@test.com" && git config user.name "Test"',
+      { cwd: dir, stdio: "pipe" },
+    );
+    return dir;
+  }
+
+  function cleanupDir(dir: string) {
+    rmSync(dir, { recursive: true });
+  }
+
+  test("stagePatch stages only the patched lines, not the whole file", () => {
+    const {
+      stagePatch,
+      getStagedDiff,
+      hasStagedChanges,
+    } = require("../src/git.js");
+    const dir = makeGitDir();
+
+    // Commit base file with 30 lines across two regions
+    const baseLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+    writeFileSync(join(dir, "multi.ts"), baseLines.join("\n") + "\n");
+    execSync("git add multi.ts && git commit -m 'init'", {
+      cwd: dir,
+      stdio: "pipe",
+    });
+
+    // Modify two separate regions (simulates two independent hunks)
+    const modifiedLines = [...baseLines];
+    modifiedLines[0] = "line 1 CHANGED"; // Region A — line 1
+    modifiedLines[25] = "line 26 CHANGED"; // Region B — line 26 (far away, separate hunk)
+    writeFileSync(join(dir, "multi.ts"), modifiedLines.join("\n") + "\n");
+
+    // Parse the working diff to get the FileDiff with two hunks
+    const rawDiff = execSync("git diff multi.ts", {
+      cwd: dir,
+      encoding: "utf-8",
+    }) as string;
+    const { parseDiff: pd } = require("../src/diff.js");
+    const files = pd(rawDiff);
+    expect(files).toHaveLength(1);
+    const fileDiff = files[0];
+    expect(fileDiff.hunks.length).toBeGreaterThanOrEqual(2);
+
+    // Stage only the first hunk using buildPatch + stagePatch
+    const patch = buildPatch(fileDiff, [fileDiff.hunks[0]]);
+    expect(patch.trim()).not.toBe("");
+    stagePatch(patch, dir);
+
+    // Index should have staged changes
+    expect(hasStagedChanges(dir)).toBe(true);
+
+    // Staged diff should contain the first hunk's change but NOT the second hunk's change
+    const stagedDiff = getStagedDiff(dir);
+    expect(stagedDiff).toContain("line 1 CHANGED");
+    expect(stagedDiff).not.toContain("line 26 CHANGED");
+
+    cleanupDir(dir);
+  });
+
+  test("staging hunk 1 only includes that region", () => {
+    const { stagePatch, getStagedDiff } = require("../src/git.js");
+    const dir = makeGitDir();
+
+    const baseLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+    writeFileSync(join(dir, "split.ts"), baseLines.join("\n") + "\n");
+    execSync("git add split.ts && git commit -m 'init'", {
+      cwd: dir,
+      stdio: "pipe",
+    });
+
+    const modifiedLines = [...baseLines];
+    modifiedLines[0] = "line 1 FEAT_A"; // Hunk 0 — feature A
+    modifiedLines[25] = "line 26 FEAT_B"; // Hunk 1 — feature B
+    writeFileSync(join(dir, "split.ts"), modifiedLines.join("\n") + "\n");
+
+    const rawDiff = execSync("git diff split.ts", {
+      cwd: dir,
+      encoding: "utf-8",
+    }) as string;
+    const { parseDiff: pd } = require("../src/diff.js");
+    const files = pd(rawDiff);
+    const fileDiff = files[0];
+    expect(fileDiff.hunks.length).toBeGreaterThanOrEqual(2);
+
+    // Stage only hunk 1 (feature B)
+    const patch = buildPatch(fileDiff, [fileDiff.hunks[1]]);
+    stagePatch(patch, dir);
+
+    const stagedDiff = getStagedDiff(dir);
+    expect(stagedDiff).not.toContain("line 1 FEAT_A");
+    expect(stagedDiff).toContain("line 26 FEAT_B");
+
+    cleanupDir(dir);
+  });
+
+  test("staging both hunks separately then committing produces two commits with correct content", () => {
+    const {
+      stagePatch,
+      getStagedDiff,
+      hasStagedChanges,
+      resetStaging,
+      commitWithMessage,
+    } = require("../src/git.js");
+    const dir = makeGitDir();
+
+    // Commit an initial file
+    execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
+    const baseLines = Array.from({ length: 30 }, (_, i) => `fn${i + 1}() {}`);
+    writeFileSync(join(dir, "app.ts"), baseLines.join("\n") + "\n");
+    execSync("git add app.ts && git commit -m 'add app.ts'", {
+      cwd: dir,
+      stdio: "pipe",
+    });
+
+    // Make two unrelated changes
+    const modifiedLines = [...baseLines];
+    modifiedLines[0] = "fn1() { /* feat A */ }";
+    modifiedLines[27] = "fn28() { /* feat B */ }";
+    writeFileSync(join(dir, "app.ts"), modifiedLines.join("\n") + "\n");
+
+    const rawDiff = execSync("git diff app.ts", {
+      cwd: dir,
+      encoding: "utf-8",
+    }) as string;
+    const { parseDiff: pd } = require("../src/diff.js");
+    const files = pd(rawDiff);
+    const fileDiff = files[0];
+    expect(fileDiff.hunks.length).toBeGreaterThanOrEqual(2);
+
+    // ── Commit 1: stage only hunk 0 ──
+    stagePatch(buildPatch(fileDiff, [fileDiff.hunks[0]]), dir);
+    expect(hasStagedChanges(dir)).toBe(true);
+    const staged1 = getStagedDiff(dir);
+    expect(staged1).toContain("feat A");
+    expect(staged1).not.toContain("feat B");
+    commitWithMessage("feat(app): add feat A", dir);
+
+    // ── Commit 2: stage only hunk 1 ──
+    resetStaging(dir);
+    stagePatch(buildPatch(fileDiff, [fileDiff.hunks[1]]), dir);
+    expect(hasStagedChanges(dir)).toBe(true);
+    const staged2 = getStagedDiff(dir);
+    expect(staged2).not.toContain("feat A");
+    expect(staged2).toContain("feat B");
+    commitWithMessage("feat(app): add feat B", dir);
+
+    // Verify two separate commits were created
+    const log = execSync("git log --oneline -2", {
+      cwd: dir,
+      encoding: "utf-8",
+    }) as string;
+    expect(log).toContain("feat A");
+    expect(log).toContain("feat B");
+
+    cleanupDir(dir);
+  });
+
+  test("cross-file hunk wiring: stage hunk 0 from file A + whole file B together", () => {
+    const {
+      stagePatch,
+      stageFiles,
+      getStagedDiff,
+      getStagedFiles,
+    } = require("../src/git.js");
+    const dir = makeGitDir();
+
+    execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
+
+    // File A: two unrelated changes (feature + unrelated fix)
+    const fileABase = Array.from({ length: 30 }, (_, i) => `a${i + 1}`);
+    writeFileSync(join(dir, "a.ts"), fileABase.join("\n") + "\n");
+    // File B: one change (related to feature in file A's hunk 0)
+    writeFileSync(join(dir, "b.ts"), "import nothing\n");
+    execSync("git add a.ts b.ts && git commit -m 'init files'", {
+      cwd: dir,
+      stdio: "pipe",
+    });
+
+    // Modify file A in two regions
+    const fileAMod = [...fileABase];
+    fileAMod[0] = "a1_feature"; // hunk 0 — linked to file B
+    fileAMod[25] = "a26_unrelated"; // hunk 1 — unrelated
+    writeFileSync(join(dir, "a.ts"), fileAMod.join("\n") + "\n");
+    // Modify file B (whole file, linked to file A hunk 0)
+    writeFileSync(join(dir, "b.ts"), "import { a1_feature } from './a'\n");
+
+    // Parse file A's diff to get hunks
+    const rawDiffA = execSync("git diff a.ts", {
+      cwd: dir,
+      encoding: "utf-8",
+    }) as string;
+    const { parseDiff: pd } = require("../src/diff.js");
+    const filesA = pd(rawDiffA);
+    const fileDiffA = filesA[0];
+    expect(fileDiffA.hunks.length).toBeGreaterThanOrEqual(2);
+
+    // Cross-file commit: file A hunk 0 + file B (whole)
+    stagePatch(buildPatch(fileDiffA, [fileDiffA.hunks[0]]), dir);
+    stageFiles(["b.ts"], dir);
+
+    const staged = getStagedDiff(dir);
+    const stagedFiles = getStagedFiles(dir);
+
+    // Both files staged
+    expect(stagedFiles).toContain("a.ts");
+    expect(stagedFiles).toContain("b.ts");
+    // Correct content in index
+    expect(staged).toContain("a1_feature");
+    expect(staged).toContain("a1_feature"); // from b.ts import
+    // File A's unrelated hunk should NOT be staged
+    expect(staged).not.toContain("a26_unrelated");
+
+    cleanupDir(dir);
+  });
+});
