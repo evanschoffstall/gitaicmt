@@ -24,15 +24,15 @@ export function resetClient(): void {
 
 function client(): OpenAI {
   const cfg = loadConfig();
-  
+
   // Reset client if API key changed
   if (_client && _lastApiKey !== cfg.openai.apiKey) {
     _client = null;
     _lastApiKey = null;
   }
-  
+
   if (_client) return _client;
-  
+
   if (!cfg.openai.apiKey) {
     throw new ConfigError(
       "No OpenAI API key. Set OPENAI_API_KEY env var or add openai.apiKey in gitaicmt.config.json",
@@ -51,20 +51,22 @@ function client(): OpenAI {
       `Invalid OpenAI API key format (prefix: ${keyPrefix}...). Expected format: sk-... or sk-proj-... or org-... with at least 20 characters.`,
     );
   }
-  
+
   // Validate model name format
   const model = cfg.openai.model.trim();
   if (!model || model.length === 0) {
     throw new ConfigError("OpenAI model name cannot be empty");
   }
   if (model.length > 100) {
-    throw new ConfigError(`OpenAI model name too long (max 100 chars): ${model.slice(0, 50)}...`);
+    throw new ConfigError(
+      `OpenAI model name too long (max 100 chars): ${model.slice(0, 50)}...`,
+    );
   }
   // Check for suspicious characters in model name
   if (!/^[a-zA-Z0-9._-]+$/.test(model)) {
     throw new ConfigError(`Invalid characters in OpenAI model name: ${model}`);
   }
-  
+
   _lastApiKey = cfg.openai.apiKey;
   _client = new OpenAI({ apiKey: cfg.openai.apiKey });
   return _client;
@@ -138,43 +140,80 @@ function buildGroupingSystemPrompt(): string {
     "Given a set of file diffs with labeled hunks, group them into commits where each commit represents ONE coherent, complete change.",
     "",
     "CRITICAL RULES:",
-    "1. Group changes that serve the SAME logical purpose into a SINGLE commit.",
-    "2. A good commit is atomic: it does ONE thing completely, potentially touching multiple files.",
-    "3. Multiple files and hunks CAN and SHOULD be in the same commit if they implement the same feature, fix, or refactor.",
-    "4. Split into separate commits when changes serve DIFFERENT logical purposes:",
-    "   - Documentation changes separate from code changes (unless docs are part of the feature)",
-    "   - Config/build/dependency changes as separate commits (unless part of feature setup)",
-    "   - Distinct features, refactors, or bugfixes as separate commits",
-    "   - Independent changes to different modules as separate commits",
+    "1. Group changes that serve the SAME logical purpose into a SINGLE commit — regardless of how many files or hunks are involved.",
+    "2. A good commit is atomic: it does ONE thing completely. That one thing may span multiple files AND specific hunks within those files.",
+    "3. CROSS-FILE HUNK WIRING (MANDATORY): When a hunk in one file is functionally linked to a hunk in another file,",
+    "   you MUST wire those specific hunks into the SAME commit, even when those files also contain unrelated hunks.",
+    "   Linked hunk examples (non-exhaustive):",
+    "     • Defining a type/constant in file A  ↔  using that type/constant in file B",
+    "     • Adding a function in file A          ↔  calling it in file B",
+    "     • Changing a function signature in A   ↔  updating every call-site in B, C, D",
+    "     • Adding an error class in errors.ts   ↔  throwing/catching it in handler.ts",
+    "     • Schema change in models.ts           ↔  migration + test that validates it",
+    "   For each such relationship, list every involved file WITH the specific hunks array.",
+    "4. Split into separate commits ONLY when changes serve genuinely DIFFERENT logical purposes:",
+    "   - Documentation changes separate from code (unless docs are part of the feature)",
+    "   - Config/build/dependency changes as their own commits (unless part of feature setup)",
+    "   - Distinct, unrelated features or bugfixes",
+    "   - Independent changes to completely unrelated modules",
     "",
     "5. Test files SHOULD be committed WITH the source code they test (same logical change).",
-    "6. Within a single file, hunks addressing the same concern should stay together.",
-    "7. Use multiple commits when you have truly independent changes, not just because you can.",
+    "6. Hunks from the SAME file that address different concerns MUST be split — reference them by index in separate commits.",
+    "7. Hunks from DIFFERENT files that address the SAME concern MUST be wired together — list each file with its relevant hunks.",
+    "8. Use multiple commits only for truly independent changes, not just because you can.",
     "",
-    "EXAMPLE 1 - Keep together: src/auth.ts (API key validation), src/errors.ts (new error type), test/auth.test.ts (tests)",
-    "→ Single Commit: feat(auth): add API key validation",
+    "═══ EXAMPLES ═══",
     "",
-    "EXAMPLE 2 - Split apart: package.json (license fix), src/cache.ts (cache eviction), README.md (doc update)",
-    "→ Commit 1: chore: fix license field in package.json",
-    "→ Commit 2: refactor(cache): add bounded eviction",
-    "→ Commit 3: docs: update configuration section",
+    "EXAMPLE 1 — Keep together (multiple whole files, same logical change):",
+    "  src/auth.ts (API key validation), src/errors.ts (new AuthError), tests/auth.test.ts (tests)",
+    '→ [{"files": [{"path": "src/auth.ts"}, {"path": "src/errors.ts"}, {"path": "tests/auth.test.ts"}], "message": "feat(auth): add API key validation"}]',
     "",
-    "EXAMPLE 3 - Mixed: src/handler.ts (new feature + unrelated bugfix in different hunks)",
-    '→ Commit 1: {"path": "src/handler.ts", "hunks": [0, 2]} → feat: add retry logic',
-    '→ Commit 2: {"path": "src/handler.ts", "hunks": [1]} → fix: handle null response',
+    "EXAMPLE 2 — Split apart (unrelated whole-file changes):",
+    "  package.json (license fix), src/cache.ts (eviction), README.md (doc update)",
+    '→ [{"files": [{"path": "package.json"}], "message": "chore: fix license field"},',
+    '   {"files": [{"path": "src/cache.ts"}], "message": "refactor(cache): add bounded eviction"},',
+    '   {"files": [{"path": "README.md"}], "message": "docs: update configuration section"}]',
     "",
-    "For each group, provide the commit message following these rules:",
+    "EXAMPLE 3 — Intra-file hunk split (one file, hunks serve different purposes):",
+    "  src/handler.ts: [Hunk 0] add retry logic, [Hunk 1] fix null response (unrelated), [Hunk 2] add retry counter",
+    '→ [{"files": [{"path": "src/handler.ts", "hunks": [0, 2]}], "message": "feat: add retry logic"},',
+    '   {"files": [{"path": "src/handler.ts", "hunks": [1]}], "message": "fix: handle null response"}]',
+    "",
+    "EXAMPLE 4 — Cross-file hunk wiring (hunks across files are linked):",
+    "  src/parser.ts: [Hunk 0] define ParseError type, [Hunk 1] unrelated whitespace cleanup",
+    "  src/handler.ts: [Hunk 0] add imports, [Hunk 1] throw ParseError (linked to parser.ts Hunk 0)",
+    "  tests/parser.test.ts: [Hunk 0] test ParseError (linked to parser.ts Hunk 0)",
+    '→ [{"files": [{"path": "src/parser.ts", "hunks": [0]}, {"path": "src/handler.ts", "hunks": [0, 1]}, {"path": "tests/parser.test.ts", "hunks": [0]}],',
+    '    "message": "feat(parser): add ParseError type and integrate into handler"},',
+    '   {"files": [{"path": "src/parser.ts", "hunks": [1]}], "message": "style(parser): clean up whitespace"}]',
+    "",
+    "EXAMPLE 5 — Multi-file hunk wiring across many files:",
+    "  src/models.ts: [Hunk 0] add 'createdAt' field to User, [Hunk 1] unrelated fix",
+    "  src/db.ts:     [Hunk 0] migration for 'createdAt', [Hunk 1] unrelated index fix",
+    "  src/api.ts:    [Hunk 0] expose 'createdAt' in response, [Hunk 1] unrelated logging",
+    "  tests/user.test.ts: [Hunk 0] test 'createdAt'",
+    '→ [{"files": [{"path": "src/models.ts", "hunks": [0]}, {"path": "src/db.ts", "hunks": [0]},',
+    '              {"path": "src/api.ts", "hunks": [0]}, {"path": "tests/user.test.ts", "hunks": [0]}],',
+    '    "message": "feat(user): add createdAt field with migration and API exposure"},',
+    '   {"files": [{"path": "src/models.ts", "hunks": [1]}], "message": "fix(models): ..."},',
+    '   {"files": [{"path": "src/db.ts", "hunks": [1]}], "message": "perf(db): ..."},',
+    '   {"files": [{"path": "src/api.ts", "hunks": [1]}], "message": "chore(api): ..."}]',
+    "",
+    "For each commit, write a message following these rules:",
     ...commitFormatInstructions(),
     "",
-    "Respond with ONLY valid JSON — an array of objects, each with:",
-    '  { "files": [{"path": "file.ts", "hunks": [0, 1]}, {"path": "other.ts"}], "message": "the commit message" }',
+    "OUTPUT FORMAT — respond with ONLY valid JSON, an array of commit objects:",
+    '  [{ "files": [{"path": "file.ts", "hunks": [0, 2]}, {"path": "other.ts"}], "message": "..." }, ...]',
     "",
-    "Each file entry has:",
-    '  - "path" (required): the file path',
-    '  - "hunks" (optional): array of 0-based hunk indices to include. Omit to include ALL hunks for that file.',
+    "Each file entry:",
+    '  - "path"  (required): the file path as shown in the diff',
+    '  - "hunks" (optional): 0-based hunk indices to include. Omit to include ALL hunks for that file.',
     "",
-    "Use hunk indices when a single file has changes that belong in different commits.",
-    "Order the array so foundational/dependency changes come first.",
+    "KEY REMINDERS:",
+    "  • Related hunks from DIFFERENT files → same commit, each with their hunks array.",
+    "  • Unrelated hunks within the SAME file → different commits, each with their own hunks array.",
+    "  • Every hunk must appear in exactly one commit — do not duplicate or omit any.",
+    "  • Order commits so foundational/dependency changes come first.",
     "Do NOT wrap the JSON in code fences. Output raw JSON only.",
   ];
   return parts.join("\n");
@@ -209,33 +248,50 @@ function categorizeFile(path: string): string {
 }
 
 function buildGroupingUserPrompt(
-  fileDiffs: { path: string; diff: string }[],
+  files: FileDiff[],
+  formatFileDiff: (f: FileDiff) => string,
 ): string {
   // Pre-categorize files so the AI sees the natural split boundaries
   const byCategory = new Map<string, string[]>();
-  for (const f of fileDiffs) {
+  for (const f of files) {
     const cat = categorizeFile(f.path);
     if (!byCategory.has(cat)) byCategory.set(cat, []);
     byCategory.get(cat)!.push(f.path);
   }
 
   const parts: string[] = [
-    `Analyzing ${fileDiffs.length} changed file(s). Organize into logical, atomic commits.`,
+    `Analyzing ${files.length} changed file(s). Organize into logical, atomic commits.`,
     "",
     "File categories (for context):",
   ];
   for (const [cat, paths] of byCategory) {
     parts.push(`  [${cat}] ${paths.join(", ")}`);
   }
+
+  // Hunk reference map — scan this to find cross-file hunk relationships BEFORE reading full diffs
   parts.push("");
   parts.push(
-    "Each hunk is labeled with its 0-based index [Hunk N] for reference:",
+    "HUNK REFERENCE MAP (use this to identify linked hunks across files):",
+  );
+  for (const f of files) {
+    if (f.hunks.length === 0) {
+      parts.push(`  ${f.path}: (no hunks — file-level change only)`);
+    } else {
+      parts.push(`  ${f.path}:`);
+      for (let i = 0; i < f.hunks.length; i++) {
+        parts.push(`    [Hunk ${i}] ${f.hunks[i].header}`);
+      }
+    }
+  }
+  parts.push("");
+  parts.push(
+    "FULL DIFFS — each hunk is labeled [Hunk N] matching the reference map above:",
   );
   parts.push("");
 
-  for (const f of fileDiffs) {
+  for (const f of files) {
     parts.push(`=== ${f.path} [${categorizeFile(f.path)}] ===`);
-    parts.push(f.diff);
+    parts.push(formatLabeledDiff(f, formatFileDiff));
     parts.push("");
   }
   return parts.join("\n");
@@ -340,7 +396,7 @@ async function complete(
         );
       }
     }
-    
+
     // Some models are not supported on /v1/chat/completions.
     // Retry automatically on /v1/responses for compatibility.
     if (!isNonChatModelError(err)) {
@@ -379,7 +435,10 @@ async function complete(
             `OpenAI API request timed out after ${timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
           );
         }
-        throw new OpenAIError(`OpenAI API call failed: ${fallbackErr.message}`, fallbackErr);
+        throw new OpenAIError(
+          `OpenAI API call failed: ${fallbackErr.message}`,
+          fallbackErr,
+        );
       }
       throw new OpenAIError(`OpenAI API call failed: ${String(fallbackErr)}`);
     }
@@ -438,14 +497,14 @@ function getFromCache(key: string): string | null {
   return entry.msg;
 }
 
-/** 
+/**
  * Set cache entry synchronously to avoid race conditions and memory leaks.
  * Cache operations are fast (Map.set is O(1)), no need for async locking.
  */
 function setCache(key: string, msg: string): void {
   const cfg = loadConfig();
   if (!cfg.performance.cacheEnabled) return;
-  
+
   cache.set(key, { msg, ts: Date.now() });
   // Evict on every write to keep cache bounded
   evictOldestCacheEntries();
@@ -693,7 +752,7 @@ export async function planCommits(
   recursionDepth = 0,
 ): Promise<PlannedCommit[]> {
   const cfg = loadConfig();
-  
+
   // Prevent unbounded recursion (max depth of 5 allows ~7776 files with batch size 6)
   const MAX_RECURSION_DEPTH = 5;
   if (recursionDepth > MAX_RECURSION_DEPTH) {
@@ -737,7 +796,9 @@ export async function planCommits(
 
     // Process each batch in parallel with incremented depth
     const batchResults = await Promise.all(
-      batches.map((batch) => planCommits(batch, formatFileDiff, recursionDepth + 1)),
+      batches.map((batch) =>
+        planCommits(batch, formatFileDiff, recursionDepth + 1),
+      ),
     );
 
     // Flatten and return all commits
@@ -747,15 +808,9 @@ export async function planCommits(
   // For a single file with multiple hunks, still run grouping to split hunks
   // For multiple files (≤6), always run grouping
 
-  // Build per-file diffs with labeled hunks for the grouping prompt
-  const fileDiffs = files.map((f) => ({
-    path: f.path,
-    diff: formatLabeledDiff(f, formatFileDiff),
-  }));
-
   // Ask AI to group files/hunks into logical commits
   const sys = buildGroupingSystemPrompt();
-  const usr = buildGroupingUserPrompt(fileDiffs);
+  const usr = buildGroupingUserPrompt(files, formatFileDiff);
 
   // Grouping returns structured JSON with multiple commits — needs much more
   // tokens than a single commit message.  Scale with file count.
@@ -868,7 +923,9 @@ export async function planCommits(
     }
   } catch {
     // Fallback: one commit for everything
-    const allContent = fileDiffs.map((f) => f.diff).join("\n");
+    const allContent = files
+      .map((f) => formatLabeledDiff(f, formatFileDiff))
+      .join("\n");
     const allChunk: DiffChunk = {
       id: 0,
       files: files.map((f) => f.path),
