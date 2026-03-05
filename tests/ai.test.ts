@@ -231,22 +231,22 @@ function makeMultiHunkFileDiff(
 // ═══════════════════════════════════════════════════════════════
 
 describe("grouping system prompt", () => {
-  test("contains CROSS-FILE HUNK WIRING rule", async () => {
+  test("describes cross-file hunk wiring as non-optional", async () => {
     const { buildGroupingSystemPrompt } = await import("../src/ai.js");
     const prompt = buildGroupingSystemPrompt();
-    expect(prompt).toContain("CROSS-FILE HUNK WIRING");
+    expect(prompt).toContain("THIS IS NOT OPTIONAL");
   });
 
-  test("mentions MANDATORY requirement for cross-file wiring", async () => {
+  test("instructs AI to scan hunk map before reading diffs", async () => {
     const { buildGroupingSystemPrompt } = await import("../src/ai.js");
     const prompt = buildGroupingSystemPrompt();
-    expect(prompt).toContain("MANDATORY");
+    expect(prompt).toContain("STEP 1");
+    expect(prompt).toContain("HUNK REFERENCE MAP");
   });
 
   test("includes concrete cross-file linking examples (type in A, used in B)", async () => {
     const { buildGroupingSystemPrompt } = await import("../src/ai.js");
     const prompt = buildGroupingSystemPrompt();
-    // Verify at least 4 examples exist
     expect(prompt).toContain("EXAMPLE 1");
     expect(prompt).toContain("EXAMPLE 2");
     expect(prompt).toContain("EXAMPLE 3");
@@ -257,7 +257,6 @@ describe("grouping system prompt", () => {
   test("examples show JSON with per-file hunks arrays", async () => {
     const { buildGroupingSystemPrompt } = await import("../src/ai.js");
     const prompt = buildGroupingSystemPrompt();
-    // Should contain JSON snippet with hunks arrays
     expect(prompt).toContain('"hunks"');
     expect(prompt).toContain('"path"');
     expect(prompt).toContain('"message"');
@@ -269,18 +268,38 @@ describe("grouping system prompt", () => {
     expect(prompt).toContain("exactly one commit");
   });
 
-  test("instructs related hunks from different files to go in same commit", async () => {
+  test("instructs linked hunks from different files to go in same commit", async () => {
     const { buildGroupingSystemPrompt } = await import("../src/ai.js");
     const prompt = buildGroupingSystemPrompt();
-    expect(prompt).toContain("DIFFERENT files");
+    // STEP 2 wiring section
+    expect(prompt).toContain("STEP 2");
     expect(prompt).toContain("same commit");
   });
 
   test("instructs unrelated hunks in same file to go in different commits", async () => {
     const { buildGroupingSystemPrompt } = await import("../src/ai.js");
     const prompt = buildGroupingSystemPrompt();
-    expect(prompt).toContain("SAME file");
     expect(prompt).toContain("different commits");
+  });
+
+  test("shows wrong vs right example for hunk precision", async () => {
+    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const prompt = buildGroupingSystemPrompt();
+    expect(prompt).toContain("WRONG");
+    expect(prompt).toContain("RIGHT");
+  });
+
+  test("states any combination of files and hunks is valid", async () => {
+    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const prompt = buildGroupingSystemPrompt();
+    expect(prompt).toContain("ANY COMBINATION IS VALID");
+    expect(prompt).toContain("NO restriction");
+  });
+
+  test("includes final checklist before output", async () => {
+    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const prompt = buildGroupingSystemPrompt();
+    expect(prompt).toContain("FINAL CHECKLIST");
   });
 });
 
