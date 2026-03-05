@@ -125,6 +125,23 @@ index abc1234..def5678 100644
 +}
 +// EOF`;
 
+const NO_NEWLINE_DIFF = `diff --git a/public/readme.html b/public/readme.html
+index abc1234..def5678 100644
+--- a/public/readme.html
++++ b/public/readme.html
+@@ -42,7 +42,7 @@
+ <body>
+ <h1>Title</h1>
+ <p>Old paragraph.</p>
+-<p>Footer old</p>
++<p>Footer new</p>
+ </body>
+ </html>
+-<last line without newline>
+\\ No newline at end of file
++<last line without newline updated>
+\\ No newline at end of file`;
+
 // ═══════════════════════════════════════════════════════════════
 
 beforeEach(() => {
@@ -554,6 +571,17 @@ describe("buildPatch", () => {
     const files = parseDiff(SIMPLE_MODIFY_DIFF);
     const patch = buildPatch(files[0]);
     expect(patch.endsWith("\n")).toBe(true);
+  });
+
+  test("preserves \\ No newline at end of file markers", () => {
+    const files = parseDiff(NO_NEWLINE_DIFF);
+    expect(files).toHaveLength(1);
+    const patch = buildPatch(files[0]);
+    expect(patch).toContain("\\ No newline at end of file");
+    // The marker must appear after the relevant diff line, not be dropped
+    const markerCount = (patch.match(/\\ No newline at end of file/g) ?? [])
+      .length;
+    expect(markerCount).toBe(2); // one for old side, one for new side
   });
 });
 

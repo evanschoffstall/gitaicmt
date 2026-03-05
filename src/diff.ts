@@ -139,7 +139,10 @@ export function parseDiff(raw: string): FileDiff[] {
     }
     if (
       hunk &&
-      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))
+      (line.startsWith("+") ||
+        line.startsWith("-") ||
+        line.startsWith(" ") ||
+        line.startsWith("\\"))
     ) {
       hunk.lines.push(line);
       if (line.startsWith("+")) current.additions++;
