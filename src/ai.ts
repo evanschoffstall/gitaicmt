@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { loadConfig } from "./config.js";
 import {
   CACHE_MAX_SIZE,
+  DEFAULT_EMPTY_COMMIT_MESSAGE,
   GROUPING_TIMEOUT_MS,
   MAX_COMMIT_GROUPS,
   MAX_COMMIT_MESSAGE_LENGTH,
@@ -13,15 +14,25 @@ import type { DiffChunk, DiffStats, FileDiff } from "./diff.js";
 import { ConfigError, OpenAIError, ValidationError } from "./errors.js";
 
 let _client: OpenAI | null = null;
+let _lastApiKey: string | null = null;
 
 /** Reset the OpenAI client (called when config is reset) */
 export function resetClient(): void {
   _client = null;
+  _lastApiKey = null;
 }
 
 function client(): OpenAI {
-  if (_client) return _client;
   const cfg = loadConfig();
+  
+  // Reset client if API key changed
+  if (_client && _lastApiKey !== cfg.openai.apiKey) {
+    _client = null;
+    _lastApiKey = null;
+  }
+  
+  if (_client) return _client;
+  
   if (!cfg.openai.apiKey) {
     throw new ConfigError(
       "No OpenAI API key. Set OPENAI_API_KEY env var or add openai.apiKey in gitaicmt.config.json",
@@ -34,12 +45,27 @@ function client(): OpenAI {
     cfg.openai.apiKey.startsWith(prefix),
   );
   if (!hasValidPrefix || cfg.openai.apiKey.length < 20) {
-    // Don't log the actual key to avoid accidental leakage
-    const keyPreview = cfg.openai.apiKey.slice(0, 8) + "...";
+    // Don't log any part of the actual key to prevent accidental leakage
+    const keyPrefix = cfg.openai.apiKey.slice(0, 3);
     throw new ConfigError(
-      `Invalid OpenAI API key format (starts with: ${keyPreview}). Expected format: sk-... or sk-proj-... or org-... with at least 20 characters.`,
+      `Invalid OpenAI API key format (prefix: ${keyPrefix}...). Expected format: sk-... or sk-proj-... or org-... with at least 20 characters.`,
     );
   }
+  
+  // Validate model name format
+  const model = cfg.openai.model.trim();
+  if (!model || model.length === 0) {
+    throw new ConfigError("OpenAI model name cannot be empty");
+  }
+  if (model.length > 100) {
+    throw new ConfigError(`OpenAI model name too long (max 100 chars): ${model.slice(0, 50)}...`);
+  }
+  // Check for suspicious characters in model name
+  if (!/^[a-zA-Z0-9._-]+$/.test(model)) {
+    throw new ConfigError(`Invalid characters in OpenAI model name: ${model}`);
+  }
+  
+  _lastApiKey = cfg.openai.apiKey;
   _client = new OpenAI({ apiKey: cfg.openai.apiKey });
   return _client;
 }
@@ -306,16 +332,20 @@ async function complete(
     }
     throw new OpenAIError("API returned empty or invalid response");
   } catch (err: unknown) {
+    // Check for timeout/abort
+    if (err instanceof Error) {
+      if (err.name === "AbortError" || err.message.includes("timeout")) {
+        throw new OpenAIError(
+          `OpenAI API request timed out after ${timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
+        );
+      }
+    }
+    
     // Some models are not supported on /v1/chat/completions.
     // Retry automatically on /v1/responses for compatibility.
     if (!isNonChatModelError(err)) {
       if (err instanceof Error) {
-        if (err.name === "AbortError" || err.message.includes("timeout")) {
-          throw new OpenAIError(
-            `OpenAI API request timed out after ${timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
-          );
-        }
-        throw err;
+        throw new OpenAIError(`OpenAI API call failed: ${err.message}`, err);
       }
       throw new OpenAIError(`OpenAI API call failed: ${String(err)}`);
     }
@@ -349,7 +379,7 @@ async function complete(
             `OpenAI API request timed out after ${timeoutMs}ms. Try increasing performance.timeoutMs in config.`,
           );
         }
-        throw fallbackErr;
+        throw new OpenAIError(`OpenAI API call failed: ${fallbackErr.message}`, fallbackErr);
       }
       throw new OpenAIError(`OpenAI API call failed: ${String(fallbackErr)}`);
     }
@@ -359,9 +389,6 @@ async function complete(
 // --------------- Simple cache ---------------
 
 const cache = new Map<string, { msg: string; ts: number }>();
-// Simple mutex for cache operations to prevent race conditions
-let cacheLock: Promise<void> = Promise.resolve();
-
 function cacheKey(content: string): string {
   // Use SHA-256 for collision resistance (32-bit FNV-1a had collision risk)
   // Include cache version and config-sensitive params to invalidate when settings change
@@ -411,16 +438,17 @@ function getFromCache(key: string): string | null {
   return entry.msg;
 }
 
+/** 
+ * Set cache entry synchronously to avoid race conditions and memory leaks.
+ * Cache operations are fast (Map.set is O(1)), no need for async locking.
+ */
 function setCache(key: string, msg: string): void {
   const cfg = loadConfig();
   if (!cfg.performance.cacheEnabled) return;
-
-  // Acquire lock to prevent concurrent modification
-  cacheLock = cacheLock.then(async () => {
-    cache.set(key, { msg, ts: Date.now() });
-    // Evict on every write to keep cache bounded
-    evictOldestCacheEntries();
-  });
+  
+  cache.set(key, { msg, ts: Date.now() });
+  // Evict on every write to keep cache bounded
+  evictOldestCacheEntries();
 }
 
 // --------------- Public API ---------------
@@ -464,7 +492,7 @@ export async function generateForChunks(
 ): Promise<string> {
   const cfg = loadConfig();
 
-  if (chunks.length === 0) return "chore: empty commit";
+  if (chunks.length === 0) return DEFAULT_EMPTY_COMMIT_MESSAGE;
   if (chunks.length === 1) return generateForChunk(chunks[0], stats);
 
   // Process chunks — parallel or sequential
@@ -653,6 +681,7 @@ function validateAndNormalizeGrouping(
  * For single files with few hunks, skips grouping and generates message directly.
  * @param files - Array of parsed file diffs to analyze
  * @param formatFileDiff - Function to format a FileDiff into diff text
+ * @param recursionDepth - Internal parameter to prevent unbounded recursion
  * @returns Ordered array of planned commits with hunk-level granularity and messages
  * @throws {OpenAIError} If API call fails
  * @throws {ConfigError} If API key is missing or invalid
@@ -661,8 +690,18 @@ function validateAndNormalizeGrouping(
 export async function planCommits(
   files: FileDiff[],
   formatFileDiff: (f: FileDiff) => string,
+  recursionDepth = 0,
 ): Promise<PlannedCommit[]> {
   const cfg = loadConfig();
+  
+  // Prevent unbounded recursion (max depth of 5 allows ~7776 files with batch size 6)
+  const MAX_RECURSION_DEPTH = 5;
+  if (recursionDepth > MAX_RECURSION_DEPTH) {
+    throw new ValidationError(
+      `Maximum recursion depth exceeded while planning commits. Too many files (${files.length}) to process safely.`,
+      { depth: recursionDepth, fileCount: files.length },
+    );
+  }
 
   // For a single file with a single hunk, skip grouping — just generate a message
   if (files.length === 1 && files[0].hunks.length <= 1) {
@@ -696,9 +735,9 @@ export async function planCommits(
       }
     }
 
-    // Process each batch in parallel
+    // Process each batch in parallel with incremented depth
     const batchResults = await Promise.all(
-      batches.map((batch) => planCommits(batch, formatFileDiff)),
+      batches.map((batch) => planCommits(batch, formatFileDiff, recursionDepth + 1)),
     );
 
     // Flatten and return all commits

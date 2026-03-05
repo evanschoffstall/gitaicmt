@@ -102,3 +102,12 @@ export const DIFF_CONTEXT_LINES = 3;
  * Reason: Standard git default. Provides enough context for AI to
  * understand changes without bloating diff size.
  */
+
+// ============================================================================
+// Default Messages
+// ============================================================================
+
+/** Default commit message for empty diffs */
+export const DEFAULT_EMPTY_COMMIT_MESSAGE = "chore: empty commit";
+
+/** Reason: Conventional Commits format for edge case handling */

@@ -108,19 +108,21 @@ function deepMerge<T extends Record<string, unknown>>(
     if (isPlainObject(bv) && isPlainObject(ov)) {
       out[key] = deepMerge(bv, ov);
     } else {
-      // Type-check basic types to prevent mismatches
-      if (bv !== undefined && ov !== null) {
+      // Type-check to prevent mismatches that would break config schema
+      if (bv !== undefined && ov !== null && ov !== undefined) {
         const baseType = typeof bv;
         const overrideType = typeof ov;
-        // Allow number -> number, string -> string, boolean -> boolean
-        // Arrays replace entirely (no element merge)
-        if (
-          baseType !== overrideType &&
-          !(baseType === "number" && overrideType === "number") &&
-          !(baseType === "string" && overrideType === "string") &&
-          !(baseType === "boolean" && overrideType === "boolean")
-        ) {
-          // Skip mismatched types; keep base value
+        const baseIsArray = Array.isArray(bv);
+        const overrideIsArray = Array.isArray(ov);
+        
+        // Check for type mismatches
+        if (baseIsArray !== overrideIsArray) {
+          // Skip: array/non-array mismatch
+          continue;
+        }
+        
+        if (!baseIsArray && baseType !== overrideType) {
+          // Skip: primitive type mismatch (number/string, string/boolean, etc.)
           continue;
         }
       }
@@ -207,9 +209,6 @@ export function loadConfig(cwd?: string): Config {
 
 export function resetConfigCache(): void {
   _cached = null;
-  // Also reset OpenAI client to prevent stale API key usage
-  // Dynamic import to avoid circular dependency
-  import("./ai.js").then((ai) => ai.resetClient()).catch(() => {});
 }
 
 export function initConfig(cwd?: string): string {
