@@ -19,11 +19,73 @@ export function fileRefsOverlap(
 }
 
 /**
- * Merge commits that would produce staging conflicts.
- * Two commits conflict when they reference the same file AND their hunk ranges
- * overlap (or either uses whole-file staging).
- * Commits that touch the same file at DIFFERENT hunks are left separate —
- * hunk-level patch staging handles them correctly.
+ * Given an already-committed file reference `existing` and an incoming one for
+ * the same path, return how to resolve the conflict surgically.
+ *
+ * Returns:
+ *  - `existingPromotion`: if non-null, replace the existing entry with this
+ *    (used to promote a hunked entry to whole-file when incoming is whole-file)
+ *  - `incomingRemainder`: the file entry the incoming commit should keep after
+ *    removing covered content. Null = fully absorbed, drop the file entirely.
+ */
+function resolveFileConflict(
+  existing: PlannedCommitFile,
+  incoming: PlannedCommitFile,
+): {
+  existingPromotion: PlannedCommitFile | null;
+  incomingRemainder: PlannedCommitFile | null;
+} {
+  const existingWhole = !existing.hunks || existing.hunks.length === 0;
+  const incomingWhole = !incoming.hunks || incoming.hunks.length === 0;
+
+  if (existingWhole) {
+    // Existing whole-file already covers everything → drop incoming entirely
+    return { existingPromotion: null, incomingRemainder: null };
+  }
+
+  if (incomingWhole) {
+    // Incoming wants the whole file but existing only has specific hunks.
+    // Promote existing to whole-file (it now owns all changes), drop incoming.
+    return {
+      existingPromotion: { path: existing.path },
+      incomingRemainder: null,
+    };
+  }
+
+  // Both have explicit hunks — remove the ones already covered by `existing`
+  const coveredSet = new Set(existing.hunks);
+  const remaining = incoming.hunks!.filter((h) => !coveredSet.has(h));
+
+  if (remaining.length === 0) {
+    // All incoming hunks are already covered → drop incoming entirely
+    return { existingPromotion: null, incomingRemainder: null };
+  }
+
+  // Some hunks remain → incoming keeps only the uncovered ones
+  return {
+    existingPromotion: null,
+    incomingRemainder: { ...incoming, hunks: remaining },
+  };
+}
+
+/**
+ * Deduplicate commits that would produce staging conflicts.
+ *
+ * For each incoming commit, each file is checked against all already-processed
+ * commits.  Only the CONFLICTING FILE is resolved — non-conflicting files in
+ * the same incoming commit survive as their own new commit.  This means the
+ * common case of the AI accidentally assigning the same file to two commits
+ * results in the duplicate being silently dropped rather than merging the
+ * entire second commit (with its unrelated files) into the first.
+ *
+ * Resolution rules per file:
+ *  - existing covers it fully (whole-file or same/superset hunks): drop it
+ *  - incoming is whole-file but existing is hunked: promote existing to
+ *    whole-file, drop incoming
+ *  - both hunked with partial overlap: incoming keeps only uncovered hunks
+ *
+ * Commits that touch the same file at completely DIFFERENT hunks are left
+ * separate — hunk-level patch staging handles them correctly.
  */
 export function mergeCommitsByFile(groups: PlannedCommit[]): PlannedCommit[] {
   // fileRefs[i] maps path → PlannedCommitFile for merged group i
@@ -31,50 +93,49 @@ export function mergeCommitsByFile(groups: PlannedCommit[]): PlannedCommit[] {
   const merged: PlannedCommit[] = [];
 
   for (const group of groups) {
-    // Find the first existing merged group that conflicts with this one
-    let mergeIntoIndex: number | null = null;
-    outer: for (let i = 0; i < merged.length; i++) {
-      const refs = fileRefs[i];
-      for (const f of group.files) {
-        const existing = refs.get(f.path);
-        if (existing && fileRefsOverlap(existing, f)) {
-          mergeIntoIndex = i;
-          break outer;
+    const survivingFiles: PlannedCommitFile[] = [];
+
+    for (const f of group.files) {
+      // Walk through the file resolution, potentially shrinking it
+      let resolved: PlannedCommitFile | null = { ...f };
+
+      for (let i = 0; i < merged.length && resolved !== null; i++) {
+        const existing = fileRefs[i].get(f.path);
+        if (!existing) continue;
+        if (!fileRefsOverlap(existing, resolved)) continue;
+
+        const { existingPromotion, incomingRemainder } = resolveFileConflict(
+          existing,
+          resolved,
+        );
+
+        // Apply promotion to the existing group if needed
+        if (existingPromotion !== null) {
+          const idx = merged[i].files.findIndex((tf) => tf.path === f.path);
+          if (idx >= 0) merged[i].files[idx] = existingPromotion;
+          fileRefs[i].set(f.path, existingPromotion);
         }
+
+        resolved = incomingRemainder;
+      }
+
+      if (resolved !== null) {
+        survivingFiles.push(resolved);
       }
     }
 
-    if (mergeIntoIndex !== null) {
-      // Merge into conflicting group — preserve hunks where possible
-      const target = merged[mergeIntoIndex];
-      const refs = fileRefs[mergeIntoIndex];
-      for (const f of group.files) {
-        const existing = refs.get(f.path);
-        if (!existing) {
-          // New file for this group — add as-is, preserving hunks
-          target.files.push({ ...f });
-          refs.set(f.path, { ...f });
-        } else {
-          // Conflicting file: promote to whole-file (safe superset)
-          const idx = target.files.findIndex((tf) => tf.path === f.path);
-          if (idx >= 0) {
-            target.files[idx] = { path: f.path }; // whole-file
-          }
-          refs.set(f.path, { path: f.path });
-        }
-      }
-      target.message = target.message + "\n\n" + group.message;
-    } else {
-      // No conflict — add as a new group, preserving all hunk info
+    if (survivingFiles.length > 0) {
+      // At least one file survived — create a new group with the original message
       const newGroup: PlannedCommit = {
-        files: group.files.map((f) => ({ ...f })),
+        files: survivingFiles,
         message: group.message,
       };
       merged.push(newGroup);
       const refs = new Map<string, PlannedCommitFile>();
-      for (const f of newGroup.files) refs.set(f.path, { ...f });
+      for (const f of survivingFiles) refs.set(f.path, { ...f });
       fileRefs.push(refs);
     }
+    // All files covered elsewhere → drop this group entirely
   }
 
   return merged;
