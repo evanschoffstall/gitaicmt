@@ -227,6 +227,52 @@ describe("stageGroupFiles — hunk-level staging", () => {
     }
   });
 
+  // Regression: whole-file staging must NOT pick up unstaged working-tree changes.
+  // Previously stageGroupFiles used `git add` for whole-file entries, which
+  // staged everything in the working tree — including changes the user never
+  // staged themselves.
+  test("whole-file staging does not include unstaged working-tree changes", () => {
+    const dir = makeGitDir();
+    try {
+      // Base file — 30 lines
+      const baseLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+      writeFileSync(join(dir, "app.ts"), baseLines.join("\n") + "\n");
+      execSync("git add app.ts && git commit -m 'base'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      // Stage only hunk 0 (top of file)
+      const STAGED_MARKER = "STAGED_CHANGE";
+      const UNSTAGED_MARKER = "UNSTAGED_CHANGE";
+      const staged = [...baseLines];
+      staged[1] = `line 2 ${STAGED_MARKER}`;
+      writeFileSync(join(dir, "app.ts"), staged.join("\n") + "\n");
+      execSync("git add app.ts", { cwd: dir, stdio: "pipe" });
+
+      // Now make an additional change to the working tree (not staged)
+      const withUnstaged = [...staged];
+      withUnstaged[27] = `line 28 ${UNSTAGED_MARKER}`;
+      writeFileSync(join(dir, "app.ts"), withUnstaged.join("\n") + "\n");
+
+      // Build fileMap from the STAGED diff only (as cmdCommit does)
+      const stagedDiff = getStagedDiff(dir);
+      const files = parseDiff(stagedDiff);
+      expect(files).toHaveLength(1);
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      // Simulate what cmdCommit does: unstage everything, then re-stage via stageGroupFiles
+      resetStaging(dir);
+      stageGroupFiles([{ path: "app.ts" }], fileMap, dir);
+
+      const result = getStagedDiff(dir);
+      expect(result).toContain(STAGED_MARKER); // originally staged change — must be present
+      expect(result).not.toContain(UNSTAGED_MARKER); // unstaged change — must NOT appear
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   test("staging hunks:[0,1] stages both hunks", () => {
     const dir = makeGitDir();
     try {

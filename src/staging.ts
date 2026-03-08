@@ -8,7 +8,7 @@
 import type { PlannedCommitFile } from "./ai.js";
 import type { FileDiff } from "./diff.js";
 import { buildPatch } from "./diff.js";
-import { filterIgnoredFiles, stageFiles, stagePatch } from "./git.js";
+import { stagePatch } from "./git.js";
 
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
@@ -36,9 +36,10 @@ export function stageGroupFiles(
   originalFiles: Map<string, FileDiff>,
   cwd?: string,
 ): void {
-  // Separate whole-file entries from hunk-specific entries
-  const wholeFiles: string[] = [];
-  const hunkEntries: { file: FileDiff; hunkIndices: number[] }[] = [];
+  // Build entries: whole-file → all hunks; hunk-specific → those hunks.
+  // Always stage via patch (git apply --cached) so that only the originally-staged
+  // content is re-applied and any unstaged working-tree changes are left untouched.
+  const entries: { file: FileDiff; hunkIndices: number[] }[] = [];
 
   for (const fileRef of group) {
     // SECURITY: Validate that all paths exist in the original diff
@@ -58,37 +59,15 @@ export function stageGroupFiles(
           );
         }
       }
-      hunkEntries.push({ file, hunkIndices: fileRef.hunks });
+      entries.push({ file, hunkIndices: fileRef.hunks });
     } else {
-      wholeFiles.push(fileRef.path);
+      // Whole-file: use all hunks so we never accidentally pick up unstaged changes
+      entries.push({ file, hunkIndices: file.hunks.map((_, i) => i) });
     }
   }
 
-  // Stage whole files via git add
-  if (wholeFiles.length > 0) {
-    const safeToStage = filterIgnoredFiles(wholeFiles, cwd);
-    if (safeToStage.length === 0) {
-      log(
-        `${YELLOW}Warning: All whole-file entries in this group are gitignored, skipping${RESET}`,
-      );
-    } else {
-      if (safeToStage.length < wholeFiles.length) {
-        const ignoredCount = wholeFiles.length - safeToStage.length;
-        log(
-          `${YELLOW}Warning: Skipping ${ignoredCount} gitignored file(s)${RESET}`,
-        );
-      }
-      try {
-        stageFiles(safeToStage, cwd);
-      } catch (err) {
-        log(`${RED}Error staging files: ${err}${RESET}`);
-        throw err;
-      }
-    }
-  }
-
-  // Stage specific hunks via patch (git apply --cached)
-  for (const { file, hunkIndices } of hunkEntries) {
+  // Stage all entries via patch (git apply --cached)
+  for (const { file, hunkIndices } of entries) {
     const selectedHunks = hunkIndices.map((i) => file.hunks[i]);
     const patch = buildPatch(file, selectedHunks);
     if (!patch.trim()) {
