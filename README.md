@@ -52,6 +52,7 @@
 ```bash
 bun install
 bun run build
+bun link
 ```
 
 ### 2 · Set your API key
