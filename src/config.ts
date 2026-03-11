@@ -147,6 +147,14 @@ function readJsonConfig(path: string): null | Record<string, unknown> {
 
 let _cached: Config | null = null;
 
+export function initConfig(cwd?: string): string {
+  const dir = cwd ?? process.cwd();
+  const target = resolve(dir, "gitaicmt.config.json");
+  if (existsSync(target)) return target;
+  writeFileSync(target, JSON.stringify(DEFAULTS, null, 2) + "\n", "utf-8");
+  return target;
+}
+
 /**
  * Load config with multi-level merge (lowest → highest priority):
  *   DEFAULTS → global (/etc) → user (~/.config) → local (cwd) → env vars
