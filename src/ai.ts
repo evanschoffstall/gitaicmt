@@ -13,6 +13,7 @@ import {
   buildMergePrompt,
   buildSystemPrompt,
   buildUserPrompt,
+  type GroupingPromptContext,
 } from "./ai-prompt-builders.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./ai-types.js";
 import { validateAndNormalizeGrouping } from "./ai-validation.js";
@@ -110,8 +111,12 @@ export async function planCommits(
 
     if (madeBatchingProgress) {
       const batchResults = await Promise.all(
-        batches.map((batch) =>
-          planCommits(batch, formatFileDiff, recursionDepth + 1),
+        batches.map((batch, batchIndex) =>
+          planCommits(batch, formatFileDiff, recursionDepth + 1, {
+            allFiles: promptContext?.allFiles ?? files,
+            batchCount: batches.length,
+            batchIndex,
+          }),
         ),
       );
       return await finalizePlannedGroups(files, batchResults.flat());
@@ -119,7 +124,7 @@ export async function planCommits(
   }
 
   const sys = buildGroupingSystemPrompt();
-  const usr = buildGroupingUserPrompt(files, formatFileDiff);
+  const usr = buildGroupingUserPrompt(files, formatFileDiff, promptContext);
   const groupingTokens = Math.max(
     cfg.openai.maxTokens,
     Math.max(MIN_COMMIT_MESSAGE_TOKENS, GROUPING_BASE_TOKENS) +

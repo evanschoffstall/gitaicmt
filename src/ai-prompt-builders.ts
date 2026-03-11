@@ -144,25 +144,32 @@ export function buildGroupingSystemPrompt(): string {
 export function buildGroupingUserPrompt(
   files: FileDiff[],
   formatFileDiff: (f: FileDiff) => string,
+  context?: GroupingPromptContext,
 ): string {
-  const byCategory = new Map<string, string[]>();
-  for (const file of files) {
-    const category = categorizeFile(file.path);
-    const paths = byCategory.get(category);
-    if (paths) {
-      paths.push(file.path);
-    } else {
-      byCategory.set(category, [file.path]);
-    }
-  }
+  const allFiles = context?.allFiles ?? files;
 
   const parts: string[] = [
     `Analyzing ${formatScalar(files.length)} changed file(s). Organize into logical, atomic commits.`,
-    "",
-    "File categories (for context):",
   ];
-  for (const [category, paths] of byCategory) {
-    parts.push(`  [${category}] ${paths.join(", ")}`);
+
+  if (allFiles.length !== files.length || (context?.batchCount ?? 1) > 1) {
+    const batchNumber = (context?.batchIndex ?? 0) + 1;
+    const batchCount = context?.batchCount ?? 1;
+    parts.push(
+      "",
+      "Overall changeset context:",
+      `  This prompt covers batch ${formatScalar(batchNumber)} of ${formatScalar(batchCount)} from an overall ${formatScalar(allFiles.length)}-file changeset.`,
+      "  Plan commits for this batch with the whole changeset in mind.",
+      "  Avoid creating narrow cleanup-only commits when the batch appears to be one part of a broader sweep across the overall file map.",
+      "",
+      "Overall file map:",
+      ...summarizeFileAreas(allFiles),
+    );
+  }
+
+  parts.push("", "Files in this prompt:");
+  for (const file of files) {
+    parts.push(`  - ${file.path}`);
   }
 
   parts.push("");
@@ -188,7 +195,7 @@ export function buildGroupingUserPrompt(
   parts.push("");
 
   for (const file of files) {
-    parts.push(`=== ${file.path} [${categorizeFile(file.path)}] ===`);
+    parts.push(`=== ${file.path} ===`);
     parts.push(formatLabeledDiff(file, formatFileDiff));
     parts.push("");
   }
