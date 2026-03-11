@@ -25,6 +25,11 @@ import {
 
 const { beforeEach, describe, expect, test } = await import("bun:test");
 
+function commitMessage(subject: string, ...bullets: string[]): string {
+  const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
+  return [subject, "", ...body].join("\n");
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Test fixtures — realistic git diff outputs
 // ═══════════════════════════════════════════════════════════════
@@ -698,7 +703,7 @@ describe("git staging helpers", () => {
     const dir = makeGitDir();
     writeFileSync(join(dir, "file.txt"), "data");
     execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
-    commitWithMessage("test: a commit message", dir);
+    commitWithMessage(commitMessage("test: a commit message"), dir);
     const log = execSync("git log --oneline -1", {
       cwd: dir,
       encoding: "utf-8",
@@ -857,7 +862,7 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
     const staged1 = getStagedDiff(dir);
     expect(staged1).toContain("feat A");
     expect(staged1).not.toContain("feat B");
-    commitWithMessage("feat(app): add feat A", dir);
+    commitWithMessage(commitMessage("feat(app): add feat A"), dir);
 
     // ── Commit 2: stage only hunk 1 ──
     resetStaging(dir);
@@ -866,7 +871,7 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
     const staged2 = getStagedDiff(dir);
     expect(staged2).not.toContain("feat A");
     expect(staged2).toContain("feat B");
-    commitWithMessage("feat(app): add feat B", dir);
+    commitWithMessage(commitMessage("feat(app): add feat B"), dir);
 
     // Verify two separate commits were created
     const log = execSync("git log --oneline -2", {

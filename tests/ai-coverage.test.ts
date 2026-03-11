@@ -430,7 +430,6 @@ describe("ai coverage", () => {
     const result = await ai.planCommits([file], formatFileDiff);
 
     expect(result).toEqual([
-      { files: [{ path: "src/app.ts" }], message: "feat(app): update app" },
       {
         files: [{ path: "src/app.ts" }],
         message: commitMessage("feat(app): update app"),
@@ -514,7 +513,9 @@ describe("ai coverage", () => {
         {
           choices: [
             {
-              message: { content: commitMessage("fix(app): cover second hunk") },
+              message: {
+                content: commitMessage("fix(app): cover second hunk"),
+              },
             },
           ],
         },
@@ -567,7 +568,9 @@ describe("ai coverage", () => {
         {
           choices: [
             {
-              message: { content: commitMessage("chore(core): fallback grouping") },
+              message: {
+                content: commitMessage("chore(core): fallback grouping"),
+              },
             },
           ],
         },
@@ -600,7 +603,9 @@ describe("ai coverage", () => {
         {
           choices: [
             {
-              message: { content: commitMessage("chore(core): collapse groups") },
+              message: {
+                content: commitMessage("chore(core): collapse groups"),
+              },
             },
           ],
         },
@@ -645,7 +650,9 @@ describe("ai coverage", () => {
     const grouping = [
       {
         files: files.map((file) => ({ path: file.path })),
-        message: "chore(tooling): bundle quality workflow updates",
+        message: commitMessage(
+          "chore(tooling): bundle quality workflow updates",
+        ),
       },
     ];
     const calls = installOpenAiMock({
@@ -689,15 +696,19 @@ describe("ai coverage", () => {
           { hunks: [0, 1], path: "package.json" },
           { hunks: [0], path: "scripts/check.json" },
         ],
-        message: "chore(tooling): add lint config and check manifest",
+        message: commitMessage(
+          "chore(tooling): add lint config and check manifest",
+        ),
       },
       {
         files: [{ path: "scripts/check.ts" }],
-        message: "feat(scripts): add configurable bun check runner",
+        message: commitMessage(
+          "feat(scripts): add configurable bun check runner",
+        ),
       },
       {
         files: [{ path: "logo.svg" }],
-        message: "style(branding): refresh logo artwork",
+        message: commitMessage("style(branding): refresh logo artwork"),
       },
     ];
     const calls = installOpenAiMock({
@@ -717,11 +728,15 @@ describe("ai coverage", () => {
                       { hunks: [0], path: "scripts/check.json" },
                       { path: "scripts/check.ts" },
                     ],
-                    message: "chore(tooling): add bun check workflow",
+                    message: commitMessage(
+                      "chore(tooling): add bun check workflow",
+                    ),
                   },
                   {
                     files: [{ path: "logo.svg" }],
-                    message: "style(branding): refresh logo artwork",
+                    message: commitMessage(
+                      "style(branding): refresh logo artwork",
+                    ),
                   },
                 ]),
               },
@@ -743,11 +758,11 @@ describe("ai coverage", () => {
           { hunks: [0], path: "scripts/check.json" },
           { path: "scripts/check.ts" },
         ],
-        message: "chore(tooling): add bun check workflow",
+        message: commitMessage("chore(tooling): add bun check workflow"),
       },
       {
         files: [{ path: "logo.svg" }],
-        message: "style(branding): refresh logo artwork",
+        message: commitMessage("style(branding): refresh logo artwork"),
       },
     ]);
   });
@@ -773,13 +788,17 @@ describe("ai coverage", () => {
                     files: firstBatchFiles
                       .slice(0, 12)
                       .map((file) => ({ path: file.path })),
-                    message: "chore(tooling): add baseline tooling configs",
+                    message: commitMessage(
+                      "chore(tooling): add baseline tooling configs",
+                    ),
                   },
                   {
                     files: firstBatchFiles
                       .slice(12)
                       .map((file) => ({ path: file.path })),
-                    message: "chore(tooling): add extended tooling configs",
+                    message: commitMessage(
+                      "chore(tooling): add extended tooling configs",
+                    ),
                   },
                 ]),
               },
@@ -795,17 +814,23 @@ describe("ai coverage", () => {
                     files: secondBatchFiles
                       .slice(0, 2)
                       .map((file) => ({ path: file.path })),
-                    message: "chore(tooling): add reporting config set A",
+                    message: commitMessage(
+                      "chore(tooling): add reporting config set A",
+                    ),
                   },
                   {
                     files: secondBatchFiles
                       .slice(2)
                       .map((file) => ({ path: file.path })),
-                    message: "chore(tooling): add reporting config set B",
+                    message: commitMessage(
+                      "chore(tooling): add reporting config set B",
+                    ),
                   },
                   {
                     files: [{ path: "logo.svg" }],
-                    message: "style(branding): refresh logo artwork",
+                    message: commitMessage(
+                      "style(branding): refresh logo artwork",
+                    ),
                   },
                 ]),
               },
@@ -819,7 +844,9 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: firstBatchFiles.map((file) => ({ path: file.path })),
-                    message: "chore(tooling): add batch-one quality configs",
+                    message: commitMessage(
+                      "chore(tooling): add batch-one quality configs",
+                    ),
                   },
                 ]),
               },
@@ -835,11 +862,15 @@ describe("ai coverage", () => {
                     files: secondBatchFiles.map((file) => ({
                       path: file.path,
                     })),
-                    message: "chore(tooling): add batch-two reporting configs",
+                    message: commitMessage(
+                      "chore(tooling): add batch-two reporting configs",
+                    ),
                   },
                   {
                     files: [{ path: "logo.svg" }],
-                    message: "style(branding): refresh logo artwork",
+                    message: commitMessage(
+                      "style(branding): refresh logo artwork",
+                    ),
                   },
                 ]),
               },
@@ -853,11 +884,15 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: configFiles.map((file) => ({ path: file.path })),
-                    message: "chore(tooling): add quality workflow foundation",
+                    message: commitMessage(
+                      "chore(tooling): add quality workflow foundation",
+                    ),
                   },
                   {
                     files: [{ path: "logo.svg" }],
-                    message: "style(branding): refresh logo artwork",
+                    message: commitMessage(
+                      "style(branding): refresh logo artwork",
+                    ),
                   },
                 ]),
               },
@@ -873,12 +908,12 @@ describe("ai coverage", () => {
     expect(calls.chat).toHaveLength(5);
     expect(result).toHaveLength(2);
     expect(result[0]?.message).toBe(
-      "chore(tooling): add quality workflow foundation",
+      commitMessage("chore(tooling): add quality workflow foundation"),
     );
     expect(result[0]?.files).toHaveLength(28);
     expect(result[1]).toEqual({
       files: [{ path: "logo.svg" }],
-      message: "style(branding): refresh logo artwork",
+      message: commitMessage("style(branding): refresh logo artwork"),
     });
 
     const firstBatchPayload = calls.chat[0]?.payload as {
@@ -920,16 +955,21 @@ describe("ai coverage", () => {
           { path: ".secretlintrc" },
           { hunks: [0], path: ".gitignore" },
         ],
-        message:
+        message: commitMessage(
           "chore(security): add secret scanning config and ignore outputs",
+        ),
       },
       {
         files: [{ hunks: [0], path: ".jscpd.json" }],
-        message: "chore(quality): add jscpd duplicate code detection config",
+        message: commitMessage(
+          "chore(quality): add jscpd duplicate code detection config",
+        ),
       },
       {
         files: [{ path: "bun.lock" }],
-        message: "chore(deps): update bun lockfile with new linting toolchain",
+        message: commitMessage(
+          "chore(deps): update bun lockfile with new linting toolchain",
+        ),
       },
       {
         files: [
@@ -937,12 +977,15 @@ describe("ai coverage", () => {
           { hunks: [0, 1], path: "package.json" },
           { hunks: [0], path: "scripts/check.json" },
         ],
-        message: "chore(tooling): add ESLint and unified quality check config",
+        message: commitMessage(
+          "chore(tooling): add ESLint and unified quality check config",
+        ),
       },
       {
         files: [{ path: "scripts/check.ts" }],
-        message:
+        message: commitMessage(
           "feat(scripts): add configurable bun check orchestrator script",
+        ),
       },
       {
         files: [
@@ -950,19 +993,25 @@ describe("ai coverage", () => {
           { path: "tests/git-coverage.test.ts" },
           { path: "tests/tsconfig.json" },
         ],
-        message: "test(coverage): add AI and git coverage test suites",
+        message: commitMessage(
+          "test(coverage): add AI and git coverage test suites",
+        ),
       },
       {
         files: [{ path: "knip.json" }],
-        message: "chore(knip): add unused-code analysis configuration",
+        message: commitMessage(
+          "chore(knip): add unused-code analysis configuration",
+        ),
       },
       {
         files: [{ path: ".husky/pre-commit" }],
-        message: "chore(husky): remove pre-commit API key guard hook",
+        message: commitMessage(
+          "chore(husky): remove pre-commit API key guard hook",
+        ),
       },
       {
         files: [{ path: "logo.svg" }],
-        message: "style(branding): refresh logo artwork",
+        message: commitMessage("style(branding): refresh logo artwork"),
       },
     ];
     const calls = installOpenAiMock({
@@ -994,12 +1043,15 @@ describe("ai coverage", () => {
                       { path: "knip.json" },
                       { path: ".husky/pre-commit" },
                     ],
-                    message:
+                    message: commitMessage(
                       "chore(tooling): add quality and validation workflow",
+                    ),
                   },
                   {
                     files: [{ path: "logo.svg" }],
-                    message: "style(branding): refresh logo artwork",
+                    message: commitMessage(
+                      "style(branding): refresh logo artwork",
+                    ),
                   },
                 ]),
               },
@@ -1015,7 +1067,7 @@ describe("ai coverage", () => {
     expect(calls.chat).toHaveLength(2);
     expect(result).toHaveLength(2);
     expect(result[0]?.message).toBe(
-      "chore(tooling): add quality and validation workflow",
+      commitMessage("chore(tooling): add quality and validation workflow"),
     );
     expect(result[0]?.files.map((file: { path: string }) => file.path)).toEqual(
       [
@@ -1037,7 +1089,7 @@ describe("ai coverage", () => {
     );
     expect(result[1]).toEqual({
       files: [{ path: "logo.svg" }],
-      message: "style(branding): refresh logo artwork",
+      message: commitMessage("style(branding): refresh logo artwork"),
     });
   });
 
@@ -1062,14 +1114,17 @@ describe("ai coverage", () => {
           { path: "src/app/dashboard/components/Background.tsx" },
           { path: "src/app/dashboard/components/DashboardTopHeaderBar.tsx" },
         ],
-        message: "style(dashboard): normalize prop and attribute ordering",
+        message: commitMessage(
+          "style(dashboard): normalize prop and attribute ordering",
+        ),
       },
       {
         files: [
           { path: "src/app/dashboard/components/settings/SettingsModal.tsx" },
         ],
-        message:
+        message: commitMessage(
           "style(settings): normalize prop ordering and JSX attribute layout",
+        ),
       },
       {
         files: [{ path: "src/app/dashboard/hooks/useFeedLoader.ts" }],
@@ -1078,12 +1133,16 @@ describe("ai coverage", () => {
       },
       {
         files: [{ path: "src/app/dashboard/services/dashboard-view-model.ts" }],
-        message:
+        message: commitMessage(
           "refactor(dashboard): reorganize helper layout without changing behavior",
+          "- Keep behavior unchanged while improving structure.",
+        ),
       },
       {
         files: [{ path: "src/lib/auth/session.ts" }],
-        message: "refactor(auth): extract session cache invalidation",
+        message: commitMessage(
+          "refactor(auth): extract session cache invalidation",
+        ),
       },
     ];
     const calls = installOpenAiMock({
@@ -1107,8 +1166,9 @@ describe("ai coverage", () => {
                       },
                       { path: "src/app/dashboard/hooks/useFeedLoader.ts" },
                     ],
-                    message:
+                    message: commitMessage(
                       "style(dashboard): normalize dashboard formatting and layout",
+                    ),
                   },
                   {
                     files: [
@@ -1116,13 +1176,16 @@ describe("ai coverage", () => {
                         path: "src/app/dashboard/services/dashboard-view-model.ts",
                       },
                     ],
-                    message:
+                    message: commitMessage(
                       "refactor(dashboard): reorganize helper layout without changing behavior",
+                      "- Keep behavior unchanged while improving structure.",
+                    ),
                   },
                   {
                     files: [{ path: "src/lib/auth/session.ts" }],
-                    message:
+                    message: commitMessage(
                       "refactor(auth): extract session cache invalidation",
+                    ),
                   },
                 ]),
               },
@@ -1144,16 +1207,22 @@ describe("ai coverage", () => {
           { path: "src/app/dashboard/components/settings/SettingsModal.tsx" },
           { path: "src/app/dashboard/hooks/useFeedLoader.ts" },
         ],
-        message: "style(dashboard): normalize dashboard formatting and layout",
+        message: commitMessage(
+          "style(dashboard): normalize dashboard formatting and layout",
+        ),
       },
       {
         files: [{ path: "src/app/dashboard/services/dashboard-view-model.ts" }],
-        message:
+        message: commitMessage(
           "refactor(dashboard): reorganize helper layout without changing behavior",
+          "- Keep behavior unchanged while improving structure.",
+        ),
       },
       {
         files: [{ path: "src/lib/auth/session.ts" }],
-        message: "refactor(auth): extract session cache invalidation",
+        message: commitMessage(
+          "refactor(auth): extract session cache invalidation",
+        ),
       },
     ]);
   });

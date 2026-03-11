@@ -5,12 +5,12 @@
 
 import { spawnSync } from "node:child_process";
 
+import { validateCommitMessage } from "./ai-format.js";
 import {
   DIFF_CONTEXT_LINES,
   GIT_MAX_BUFFER,
   MAX_PATH_LENGTH,
 } from "./constants.js";
-import { validateCommitMessage } from "./ai-format.js";
 import { GitCommandError, InvalidPathError } from "./errors.js";
 
 const ANSI_ESCAPE_SEQUENCE = new RegExp(

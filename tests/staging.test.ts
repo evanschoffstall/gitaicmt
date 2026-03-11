@@ -31,6 +31,11 @@ const { afterEach, beforeEach, describe, expect, test } =
 
 type PlannedCommit = import("../src/ai.js").PlannedCommit;
 
+function commitMessage(subject: string, ...bullets: string[]): string {
+  const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
+  return [subject, "", ...body].join("\n");
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 let originalXdgConfigHome: string | undefined;
@@ -396,11 +401,11 @@ describe("end-to-end commit pipeline", () => {
       const aiGroups: PlannedCommit[] = [
         {
           files: [{ hunks: [0], path: "app.ts" }],
-          message: "feat: implement hunk zero feature",
+          message: commitMessage("feat: implement hunk zero feature"),
         },
         {
           files: [{ hunks: [1], path: "app.ts" }],
-          message: "feat: implement hunk one feature",
+          message: commitMessage("feat: implement hunk one feature"),
         },
       ];
 
@@ -465,7 +470,7 @@ describe("end-to-end commit pipeline", () => {
       const aiGroups: PlannedCommit[] = [
         {
           files: [{ path: "app.ts" }], // no hunks = whole file
-          message: "refactor: overhaul app.ts",
+          message: commitMessage("refactor: overhaul app.ts"),
         },
       ];
 
@@ -515,11 +520,11 @@ describe("end-to-end commit pipeline", () => {
       const aiGroups: PlannedCommit[] = [
         {
           files: [{ hunks: [0], path: "a.ts" }, { path: "b.ts" }],
-          message: "feat: feature A (with b.ts support)",
+          message: commitMessage("feat: feature A (with b.ts support)"),
         },
         {
           files: [{ hunks: [1], path: "a.ts" }],
-          message: "refactor: cleanup a.ts line 28",
+          message: commitMessage("refactor: cleanup a.ts line 28"),
         },
       ];
 
