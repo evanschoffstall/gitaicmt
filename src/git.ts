@@ -10,6 +10,7 @@ import {
   GIT_MAX_BUFFER,
   MAX_PATH_LENGTH,
 } from "./constants.js";
+import { validateCommitMessage } from "./ai-format.js";
 import { GitCommandError, InvalidPathError } from "./errors.js";
 
 const ANSI_ESCAPE_SEQUENCE = new RegExp(
@@ -35,11 +36,22 @@ export function commitWithMessage(message: string, cwd?: string): void {
     throw new GitCommandError("Cannot commit with empty message", "git commit");
   }
 
+  let validatedMessage: string;
+  try {
+    validatedMessage = validateCommitMessage(message);
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new GitCommandError(
+      `Cannot commit with invalid message: ${reason}`,
+      "git commit -F -",
+    );
+  }
+
   const dir = cwd ?? process.cwd();
   const result = spawnSync("git", ["commit", "-F", "-"], {
     cwd: dir,
     encoding: "utf-8",
-    input: message,
+    input: validatedMessage,
     stdio: ["pipe", "inherit", "inherit"],
   });
 

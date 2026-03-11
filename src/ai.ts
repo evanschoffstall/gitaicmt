@@ -1,7 +1,11 @@
 import { batchFilesForGrouping, shouldBatchFiles } from "./ai-batching.js";
 import { getCachedMessage, setCachedMessage } from "./ai-cache.js";
 import { complete } from "./ai-client.js";
-import { formatLabeledDiff, formatScalar } from "./ai-format.js";
+import {
+  formatLabeledDiff,
+  formatScalar,
+  validateCommitMessage,
+} from "./ai-format.js";
 import { finalizePlannedGroups } from "./ai-grouping.js";
 import {
   buildGroupingSystemPrompt,
@@ -41,7 +45,7 @@ export async function generateForChunk(
 
   const sys = buildSystemPrompt();
   const usr = buildUserPrompt(chunk, stats);
-  const msg = await complete(sys, usr);
+  const msg = validateCommitMessage(await complete(sys, usr));
   setCachedMessage(chunk.content, msg);
   return msg;
 }
@@ -69,13 +73,14 @@ export async function generateForChunks(
 
   const sys = buildSystemPrompt();
   const usr = buildMergePrompt(partials, stats);
-  return complete(sys, usr);
+  return validateCommitMessage(await complete(sys, usr));
 }
 
 export async function planCommits(
   files: FileDiff[],
   formatFileDiff: (f: FileDiff) => string,
   recursionDepth = 0,
+  promptContext?: GroupingPromptContext,
 ): Promise<PlannedCommit[]> {
   const cfg = loadConfig();
   const maxRecursionDepth = 5;

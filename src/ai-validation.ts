@@ -1,4 +1,4 @@
-import { formatScalar } from "./ai-format.js";
+import { formatScalar, validateCommitMessage } from "./ai-format.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./ai-types.js";
 import { MAX_COMMIT_GROUPS, MAX_COMMIT_MESSAGE_LENGTH } from "./constants.js";
 import { ValidationError } from "./errors.js";
@@ -109,7 +109,10 @@ export function validateAndNormalizeGrouping(
       );
     }
 
-    groups.push({ files: normalizedFiles, message: group.message });
+    groups.push({
+      files: normalizedFiles,
+      message: validateCommitMessage(group.message),
+    });
   }
 
   if (groups.length === 0) {
