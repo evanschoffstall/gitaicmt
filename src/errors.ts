@@ -3,13 +3,25 @@
  */
 
 /** Base error class for all gitaicmt errors */
-export abstract class GitAICmtError extends Error {
+abstract class GitAICmtError extends Error {
   abstract code: string;
 
   constructor(message: string) {
     super(message);
     this.name = this.constructor.name;
     Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+/** Configuration validation or loading failed */
+export class ConfigError extends GitAICmtError {
+  code = "CONFIG_ERROR";
+
+  constructor(
+    message: string,
+    public field?: string,
+  ) {
+    super(message);
   }
 }
 
@@ -21,6 +33,18 @@ export class GitCommandError extends GitAICmtError {
     message: string,
     public command: string,
     public exitCode?: number,
+  ) {
+    super(message);
+  }
+}
+
+/** Invalid file path detected (potential security issue) */
+export class InvalidPathError extends GitAICmtError {
+  code = "INVALID_PATH";
+
+  constructor(
+    message: string,
+    public path: string,
   ) {
     super(message);
   }
@@ -43,31 +67,7 @@ export class OpenAITimeoutError extends OpenAIError {
   code = "OPENAI_TIMEOUT";
 
   constructor(timeout: number) {
-    super(`OpenAI API request timed out after ${timeout}ms`);
-  }
-}
-
-/** Configuration validation or loading failed */
-export class ConfigError extends GitAICmtError {
-  code = "CONFIG_ERROR";
-
-  constructor(
-    message: string,
-    public field?: string,
-  ) {
-    super(message);
-  }
-}
-
-/** Invalid file path detected (potential security issue) */
-export class InvalidPathError extends GitAICmtError {
-  code = "INVALID_PATH";
-
-  constructor(
-    message: string,
-    public path: string,
-  ) {
-    super(message);
+    super(`OpenAI API request timed out after ${String(timeout)}ms`);
   }
 }
 
@@ -80,14 +80,5 @@ export class ValidationError extends GitAICmtError {
     public details?: unknown,
   ) {
     super(message);
-  }
-}
-
-/** User cancelled operation */
-export class UserCancelledError extends GitAICmtError {
-  code = "USER_CANCELLED";
-
-  constructor() {
-    super("Operation cancelled by user");
   }
 }

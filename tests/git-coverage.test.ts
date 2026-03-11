@@ -14,9 +14,7 @@ import {
   stagePatch,
 } from "../src/git.js";
 
-declare const describe: typeof import("bun:test").describe;
-declare const expect: typeof import("bun:test").expect;
-declare const test: typeof import("bun:test").test;
+const { describe, expect, test } = await import("bun:test");
 
 function cleanupDir(dir: string) {
   rmSync(dir, { force: true, recursive: true });

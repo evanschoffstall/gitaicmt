@@ -4,19 +4,14 @@
  * Extracted from cli.ts so tests can import this module without triggering
  * cli.ts's unconditional `main()` invocation.
  */
+import { buildPatch, type FileDiff } from "./diff.js";
+import { stageFiles, stagePatch } from "./git.js";
 
-import type { PlannedCommitFile } from "./ai.js";
-import type { FileDiff } from "./diff.js";
-import { buildPatch } from "./diff.js";
-import { stagePatch } from "./git.js";
+type PlannedCommitFile = import("./ai.js").PlannedCommitFile;
 
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
-
-function log(msg: string) {
-  process.stderr.write(msg + "\n");
-}
 
 /**
  * Stage files for a commit group, handling hunk-level staging.
@@ -43,24 +38,28 @@ export function stageGroupFiles(
 
   for (const fileRef of group) {
     // SECURITY: Validate that all paths exist in the original diff
-    if (!originalFiles.has(fileRef.path)) {
+    const file = originalFiles.get(fileRef.path);
+    if (!file) {
       throw new Error(
         `AI returned invalid file path not in original diff: ${fileRef.path}`,
       );
     }
-    const file = originalFiles.get(fileRef.path)!;
 
     if (fileRef.hunks && fileRef.hunks.length > 0) {
       // SECURITY: Validate hunk indices are within bounds
       for (const hunkIndex of fileRef.hunks) {
         if (hunkIndex < 0 || hunkIndex >= file.hunks.length) {
           throw new Error(
-            `AI returned out-of-bounds hunk index ${hunkIndex} for ${fileRef.path} (max: ${file.hunks.length - 1})`,
+            `AI returned out-of-bounds hunk index ${String(hunkIndex)} for ${fileRef.path} (max: ${String(file.hunks.length - 1)})`,
           );
         }
       }
       entries.push({ file, hunkIndices: fileRef.hunks });
     } else {
+      if (file.hunks.length === 0) {
+        stageFiles([file.path], cwd);
+        continue;
+      }
       // Whole-file: use all hunks so we never accidentally pick up unstaged changes
       entries.push({ file, hunkIndices: file.hunks.map((_, i) => i) });
     }
@@ -80,9 +79,13 @@ export function stageGroupFiles(
       stagePatch(patch, cwd);
     } catch (err) {
       log(
-        `${RED}Error staging hunks [${hunkIndices.join(", ")}] for ${file.path}: ${err}${RESET}`,
+        `${RED}Error staging hunks [${hunkIndices.join(", ")}] for ${file.path}: ${String(err)}${RESET}`,
       );
       throw err;
     }
   }
+}
+
+function log(msg: string) {
+  process.stderr.write(msg + "\n");
 }
