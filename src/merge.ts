@@ -19,56 +19,6 @@ export function fileRefsOverlap(
 }
 
 /**
- * Given an already-committed file reference `existing` and an incoming one for
- * the same path, return how to resolve the conflict surgically.
- *
- * Returns:
- *  - `existingPromotion`: if non-null, replace the existing entry with this
- *    (used to promote a hunked entry to whole-file when incoming is whole-file)
- *  - `incomingRemainder`: the file entry the incoming commit should keep after
- *    removing covered content. Null = fully absorbed, drop the file entirely.
- */
-function resolveFileConflict(
-  existing: PlannedCommitFile,
-  incoming: PlannedCommitFile,
-): {
-  existingPromotion: PlannedCommitFile | null;
-  incomingRemainder: PlannedCommitFile | null;
-} {
-  const existingWhole = !existing.hunks || existing.hunks.length === 0;
-  const incomingWhole = !incoming.hunks || incoming.hunks.length === 0;
-
-  if (existingWhole) {
-    // Existing whole-file already covers everything → drop incoming entirely
-    return { existingPromotion: null, incomingRemainder: null };
-  }
-
-  if (incomingWhole) {
-    // Incoming wants the whole file but existing only has specific hunks.
-    // Promote existing to whole-file (it now owns all changes), drop incoming.
-    return {
-      existingPromotion: { path: existing.path },
-      incomingRemainder: null,
-    };
-  }
-
-  // Both have explicit hunks — remove the ones already covered by `existing`
-  const coveredSet = new Set(existing.hunks);
-  const remaining = incoming.hunks!.filter((h) => !coveredSet.has(h));
-
-  if (remaining.length === 0) {
-    // All incoming hunks are already covered → drop incoming entirely
-    return { existingPromotion: null, incomingRemainder: null };
-  }
-
-  // Some hunks remain → incoming keeps only the uncovered ones
-  return {
-    existingPromotion: null,
-    incomingRemainder: { ...incoming, hunks: remaining },
-  };
-}
-
-/**
  * Deduplicate commits that would produce staging conflicts.
  *
  * For each incoming commit, each file is checked against all already-processed
@@ -97,7 +47,7 @@ export function mergeCommitsByFile(groups: PlannedCommit[]): PlannedCommit[] {
 
     for (const f of group.files) {
       // Walk through the file resolution, potentially shrinking it
-      let resolved: PlannedCommitFile | null = { ...f };
+      let resolved: null | PlannedCommitFile = { ...f };
 
       for (let i = 0; i < merged.length && resolved !== null; i++) {
         const existing = fileRefs[i].get(f.path);
@@ -139,4 +89,55 @@ export function mergeCommitsByFile(groups: PlannedCommit[]): PlannedCommit[] {
   }
 
   return merged;
+}
+
+/**
+ * Given an already-committed file reference `existing` and an incoming one for
+ * the same path, return how to resolve the conflict surgically.
+ *
+ * Returns:
+ *  - `existingPromotion`: if non-null, replace the existing entry with this
+ *    (used to promote a hunked entry to whole-file when incoming is whole-file)
+ *  - `incomingRemainder`: the file entry the incoming commit should keep after
+ *    removing covered content. Null = fully absorbed, drop the file entirely.
+ */
+function resolveFileConflict(
+  existing: PlannedCommitFile,
+  incoming: PlannedCommitFile,
+): {
+  existingPromotion: null | PlannedCommitFile;
+  incomingRemainder: null | PlannedCommitFile;
+} {
+  const existingWhole = !existing.hunks || existing.hunks.length === 0;
+  const incomingWhole = !incoming.hunks || incoming.hunks.length === 0;
+
+  if (existingWhole) {
+    // Existing whole-file already covers everything → drop incoming entirely
+    return { existingPromotion: null, incomingRemainder: null };
+  }
+
+  if (incomingWhole) {
+    // Incoming wants the whole file but existing only has specific hunks.
+    // Promote existing to whole-file (it now owns all changes), drop incoming.
+    return {
+      existingPromotion: { path: existing.path },
+      incomingRemainder: null,
+    };
+  }
+
+  // Both have explicit hunks — remove the ones already covered by `existing`
+  const coveredSet = new Set(existing.hunks);
+  const incomingHunks = incoming.hunks ?? [];
+  const remaining = incomingHunks.filter((h) => !coveredSet.has(h));
+
+  if (remaining.length === 0) {
+    // All incoming hunks are already covered → drop incoming entirely
+    return { existingPromotion: null, incomingRemainder: null };
+  }
+
+  // Some hunks remain → incoming keeps only the uncovered ones
+  return {
+    existingPromotion: null,
+    incomingRemainder: { ...incoming, hunks: remaining },
+  };
 }
