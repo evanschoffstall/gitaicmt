@@ -360,7 +360,7 @@ describe("ai coverage", () => {
     ).rejects.toThrow("Invalid characters in OpenAI model name");
   });
 
-  test("buildGroupingSystemPrompt respects non-conventional subject-only config", async () => {
+  test("buildGroupingSystemPrompt keeps body requirement even when config disables it", async () => {
     writeLocalConfig({
       commit: {
         conventional: false,
@@ -374,7 +374,9 @@ describe("ai coverage", () => {
     const prompt = ai.buildGroupingSystemPrompt();
 
     expect(prompt).not.toContain("Use the Conventional Commits format");
-    expect(prompt).toContain("Produce only the subject line, no body.");
+    expect(prompt).toContain("body using bullet points");
+    expect(prompt).toContain("A subject-only commit message is invalid.");
+    expect(prompt).not.toContain("Produce only the subject line, no body.");
     expect(prompt).not.toContain("Include a scope in parentheses");
   });
 
