@@ -345,6 +345,14 @@ index 0000000..e69de29`;
       expect(files[0].deletions).toBe(0);
     });
 
+    test("ignores header-only file entries with no hunks or file-level change", () => {
+      const headerOnly = `diff --git a/.gitleaks.toml b/.gitleaks.toml
+index abc1234..def5678 100644
+--- a/.gitleaks.toml
++++ b/.gitleaks.toml`;
+      expect(parseDiff(headerOnly)).toHaveLength(0);
+    });
+
     test("handles hunk with single line change", () => {
       const single = `diff --git a/one.txt b/one.txt
 index abc..def 100644

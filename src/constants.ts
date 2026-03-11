@@ -7,12 +7,16 @@
 // AI Analysis Configuration
 // ============================================================================
 
-/** Maximum files to analyze in a single grouping batch */
-export const MAX_FILES_PER_BATCH = 6;
+/** Hard cap on files to analyze in a single grouping batch */
+export const MAX_FILES_PER_BATCH = 24;
+
+/** Maximum approximate prompt lines before grouping is split into batches */
+export const MAX_GROUPING_PROMPT_LINES = 1200;
 
 /**
- * Reason: Batching large changesets improves processing speed and forces
- * more granular commits. 6 files is a sweet spot between throughput and quality.
+ * Reason: Small-to-medium changesets should stay in a single planning pass so the
+ * model can keep related source, tests, scripts, and tooling together. We still
+ * retain a hard cap and a prompt-size cap to avoid oversized requests.
  */
 
 // ============================================================================

@@ -51,126 +51,15 @@ export interface FileDiff {
 // ============================================================================
 
 const FILE_HEADER = /^diff --git a\/(.+) b\/(.+)$/;
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
-const STATUS_LINE =
-  /^(new file|deleted file|similarity index|rename from|rename to|index )/;
-
-/**
- * Parse a raw git diff into structured FileDiff objects
- * Supports modified, added, deleted, and renamed files
- * @param raw - Raw git diff output (unified format)
- * @returns Array of parsed file diffs with hunks and statistics
- */
-export function parseDiff(raw: string): FileDiff[] {
-  if (!raw || typeof raw !== "string") {
-    return [];
-  }
-
-  const files: FileDiff[] = [];
-  const lines = raw.split("\n");
-  let current: FileDiff | null = null;
-  let hunk: DiffHunk | null = null;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue; // Skip empty lines
-
-    const fMatch = FILE_HEADER.exec(line);
-    if (fMatch) {
-      if (current) files.push(current);
-      const oldP = fMatch[1];
-      const newP = fMatch[2];
-      if (!oldP || !newP) continue; // Skip malformed headers
-      current = {
-        path: newP,
-        oldPath: oldP !== newP ? oldP : null,
-        status: "modified",
-        hunks: [],
-        additions: 0,
-        deletions: 0,
-      };
-      hunk = null;
-      continue;
-    }
-
-    if (!current) continue;
-
-    // Detect status from metadata lines
-    if (line.startsWith("new file")) current.status = "added";
-    else if (line.startsWith("deleted file")) current.status = "deleted";
-    else if (line.startsWith("rename from")) {
-      current.status = "renamed";
-      const oldName = line.slice("rename from ".length).trim();
-      if (oldName) current.oldPath = oldName;
-    }
-    if (STATUS_LINE.test(line)) continue;
-
-    const hMatch = HUNK_HEADER.exec(line);
-    if (hMatch) {
-      const startOld = parseInt(hMatch[1], 10);
-      const countOld = parseInt(hMatch[2] ?? "1", 10);
-      const startNew = parseInt(hMatch[3], 10);
-      const countNew = parseInt(hMatch[4] ?? "1", 10);
-
-      // Validate hunk header numbers
-      if (
-        isNaN(startOld) ||
-        isNaN(countOld) ||
-        isNaN(startNew) ||
-        isNaN(countNew)
-      ) {
-        continue; // Skip malformed hunk headers
-      }
-
-      hunk = {
-        header: line,
-        startOld,
-        countOld,
-        startNew,
-        countNew,
-        lines: [],
-      };
-      current.hunks.push(hunk);
-      continue;
-    }
-    // Skip binary file markers
-    if (line.startsWith("Binary files")) {
-      continue;
-    }
-    if (
-      hunk &&
-      (line.startsWith("+") ||
-        line.startsWith("-") ||
-        line.startsWith(" ") ||
-        line.startsWith("\\"))
-    ) {
-      hunk.lines.push(line);
-      if (line.startsWith("+")) current.additions++;
-      else if (line.startsWith("-")) current.deletions++;
-    }
-  }
-  if (current) files.push(current);
-  return files;
-}
-
-// ============================================================================
-// Formatting
-// ============================================================================
-
-/**
- * Format a FileDiff into displayable unified diff text
- * Includes --- and +++ headers, hunk headers, and diff lines
- * @param f - The file diff to format
- * @returns Formatted diff text ready for display
- */
-export function formatFileDiff(f: FileDiff): string {
-  const parts: string[] = [`--- ${f.oldPath ?? f.path}`, `+++ ${f.path}`];
-  for (const h of f.hunks) {
-    parts.push(h.header);
-    parts.push(...h.lines);
-  }
-  return parts.join("\n");
-}
+const HUNK_HEADER = /^@@ -([0-9,]+) \+([0-9,]+) @@/;
+const STATUS_PREFIXES = [
+  "new file",
+  "deleted file",
+  "similarity index",
+  "rename from",
+  "rename to",
+  "index ",
+] as const;
 
 /**
  * Build a full patch string from a FileDiff (for selective hunk staging)
@@ -320,9 +209,129 @@ export function formatFileDiff(f: FileDiff): string {
  */
 export function getStats(files: FileDiff[], chunks: DiffChunk[]): DiffStats {
   return {
-    filesChanged: files.length,
     additions: files.reduce((s, f) => s + f.additions, 0),
-    deletions: files.reduce((s, f) => s + f.deletions, 0),
     chunks: chunks.length,
+    deletions: files.reduce((s, f) => s + f.deletions, 0),
+    filesChanged: files.length,
   };
 }
+
+/**
+ * Parse a raw git diff into structured FileDiff objects
+ * Supports modified, added, deleted, and renamed files
+ * @param raw - Raw git diff output (unified format)
+ * @returns Array of parsed file diffs with hunks and statistics
+ */
+export function parseDiff(raw: string): FileDiff[] {
+  if (!raw || typeof raw !== "string") {
+    return [];
+  }
+
+  const files: FileDiff[] = [];
+  const lines = raw.split("\n");
+  let current: FileDiff | null = null;
+  let hunk: DiffHunk | null = null;
+  let sawFileLevelChange = false;
+
+  const flushCurrent = () => {
+    if (!current) return;
+    if (
+      current.hunks.length > 0 ||
+      current.status !== "modified" ||
+      sawFileLevelChange
+    ) {
+      files.push(current);
+    }
+  };
+
+  for (const line of lines) {
+    if (!line) continue; // Skip empty lines
+
+    const fMatch = FILE_HEADER.exec(line);
+    if (fMatch) {
+      flushCurrent();
+      const oldP = fMatch[1];
+      const newP = fMatch[2];
+      if (!oldP || !newP) continue;
+      current = {
+        additions: 0,
+        deletions: 0,
+        hunks: [],
+        oldPath: oldP !== newP ? oldP : null,
+        path: newP,
+        status: "modified",
+      };
+      hunk = null;
+      sawFileLevelChange = false;
+      continue;
+    }
+
+    if (!current) continue;
+
+    // Detect status from metadata lines
+    if (line.startsWith("new file")) {
+      current.status = "added";
+      sawFileLevelChange = true;
+    } else if (line.startsWith("deleted file")) {
+      current.status = "deleted";
+      sawFileLevelChange = true;
+    } else if (line.startsWith("rename from")) {
+      current.status = "renamed";
+      const oldName = line.slice("rename from ".length).trim();
+      if (oldName) current.oldPath = oldName;
+      sawFileLevelChange = true;
+    } else if (
+      line.startsWith("rename to") ||
+      line.startsWith("old mode ") ||
+      line.startsWith("new mode ")
+    ) {
+      sawFileLevelChange = true;
+    }
+    if (STATUS_PREFIXES.some((prefix) => line.startsWith(prefix))) continue;
+
+    const hMatch = HUNK_HEADER.exec(line);
+    if (hMatch) {
+      const parseRange = (range: string) => {
+        const parts = range.split(",", 2);
+        return {
+          count: Number(parts.length === 2 ? parts[1] : "1"),
+          start: Number(parts[0]),
+        };
+      };
+      const oldRange = parseRange(hMatch[1]);
+      const newRange = parseRange(hMatch[2]);
+      hunk = {
+        countNew: newRange.count,
+        countOld: oldRange.count,
+        header: line,
+        lines: [],
+        startNew: newRange.start,
+        startOld: oldRange.start,
+      };
+      current.hunks.push(hunk);
+      continue;
+    }
+    // Skip binary file markers
+    if (line.startsWith("Binary files")) {
+      sawFileLevelChange = true;
+      continue;
+    }
+    if (
+      hunk &&
+      (line.startsWith("+") ||
+        line.startsWith("-") ||
+        line.startsWith(" ") ||
+        line.startsWith("\\"))
+    ) {
+      hunk.lines.push(line);
+      if (line.startsWith("+")) current.additions++;
+      else if (line.startsWith("-")) current.deletions++;
+    }
+  }
+  flushCurrent();
+  return files;
+}
+
+// ============================================================================
+// Chunking
+// ============================================================================
