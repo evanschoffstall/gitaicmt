@@ -1,10 +1,19 @@
-import { describe, expect, test } from "bun:test";
-import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execSync, spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PlannedCommit } from "../src/ai.js";
+
 import { fileRefsOverlap, mergeCommitsByFile } from "../src/merge.js";
+
+const { describe, expect, test } = await import("bun:test");
+
+type PlannedCommit = import("../src/ai.js").PlannedCommit;
 
 // ═══════════════════════════════════════════════════════════════
 // CLI integration tests — spawns the actual CLI binary
@@ -16,13 +25,12 @@ function run(
   args: string,
   opts?: { cwd?: string; env?: Record<string, string> },
 ): {
-  stdout: string;
-  stderr: string;
   exitCode: number;
+  stderr: string;
+  stdout: string;
 } {
   try {
     // Use spawnSync to capture both stdout and stderr on success
-    const { spawnSync } = require("node:child_process");
     const result = spawnSync(
       "node",
       [CLI, ...args.split(/\s+/).filter(Boolean)],
@@ -34,16 +42,16 @@ function run(
       },
     );
     return {
-      stdout: (result.stdout ?? "") as string,
-      stderr: (result.stderr ?? "") as string,
       exitCode: (result.status ?? 1) as number,
+      stderr: (result.stderr ?? "") as string,
+      stdout: (result.stdout ?? "") as string,
     };
   } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string; status?: number };
+    const e = err as { status?: number; stderr?: string; stdout?: string };
     return {
-      stdout: e.stdout ?? "",
-      stderr: e.stderr ?? "",
       exitCode: e.status ?? 1,
+      stderr: e.stderr ?? "",
+      stdout: e.stdout ?? "",
     };
   }
 }
@@ -96,7 +104,6 @@ describe("CLI", () => {
       const { stderr } = run("init", { cwd: dir });
       expect(stderr).toContain("Created config:");
 
-      const { existsSync, readFileSync } = require("node:fs");
       const configPath = join(dir, "gitaicmt.config.json");
       expect(existsSync(configPath)).toBe(true);
 
@@ -115,7 +122,6 @@ describe("CLI", () => {
 
       run("init", { cwd: dir });
 
-      const { readFileSync } = require("node:fs");
       const cfg = JSON.parse(
         readFileSync(join(dir, "gitaicmt.config.json"), "utf-8"),
       );
@@ -129,7 +135,7 @@ describe("CLI", () => {
 
   describe("unknown command", () => {
     test("exits with error for unknown commands", () => {
-      const { stderr, exitCode } = run("foobar");
+      const { exitCode, stderr } = run("foobar");
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("Unknown command: foobar");
     });
@@ -146,7 +152,7 @@ describe("CLI", () => {
         stdio: "pipe",
       });
 
-      const { stderr, exitCode } = run("gen", { cwd: dir });
+      const { exitCode, stderr } = run("gen", { cwd: dir });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("No changes to commit");
 
@@ -160,7 +166,7 @@ describe("CLI", () => {
         stdio: "pipe",
       });
 
-      const { stderr, exitCode } = run("plan", { cwd: dir });
+      const { exitCode, stderr } = run("plan", { cwd: dir });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("No changes to commit");
 
@@ -174,7 +180,7 @@ describe("CLI", () => {
         stdio: "pipe",
       });
 
-      const { stderr, exitCode } = run("", { cwd: dir });
+      const { exitCode, stderr } = run("", { cwd: dir });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("No changes to commit");
 
@@ -188,7 +194,7 @@ describe("CLI", () => {
         stdio: "pipe",
       });
 
-      const { stderr, exitCode } = run("single", { cwd: dir });
+      const { exitCode, stderr } = run("single", { cwd: dir });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("No changes to commit");
 
@@ -206,7 +212,7 @@ describe("CLI", () => {
         stdio: "pipe",
       });
 
-      const { stderr, exitCode } = run("c", { cwd: dir });
+      const { stderr } = run("c", { cwd: dir });
       // Should fail with "No changes" not "Unknown command"
       expect(stderr).toContain("No changes to commit");
 
@@ -266,12 +272,12 @@ describe("CLI", () => {
       execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
 
       // Remove API key from env
-      const { stderr, exitCode } = run("gen", {
+      const { exitCode, stderr } = run("gen", {
         cwd: dir,
         env: {
           OPENAI_API_KEY: "",
-          XDG_CONFIG_HOME: dir,
           PATH: process.env["PATH"] ?? "",
+          XDG_CONFIG_HOME: dir,
         },
       });
       expect(exitCode).not.toBe(0);
@@ -294,12 +300,12 @@ describe("CLI", () => {
       writeFileSync(join(dir, "unstaged.txt"), "hello");
 
       // Run gen — should auto-stage then fail at API key
-      const { stderr, exitCode } = run("gen", {
+      const { exitCode, stderr } = run("gen", {
         cwd: dir,
         env: {
           OPENAI_API_KEY: "",
-          XDG_CONFIG_HOME: dir,
           PATH: process.env["PATH"] ?? "",
+          XDG_CONFIG_HOME: dir,
         },
       });
       expect(exitCode).not.toBe(0);
@@ -317,12 +323,12 @@ describe("CLI", () => {
       });
       writeFileSync(join(dir, "file.txt"), "data");
 
-      const { stderr, exitCode } = run("", {
+      const { exitCode, stderr } = run("", {
         cwd: dir,
         env: {
           OPENAI_API_KEY: "",
-          XDG_CONFIG_HOME: dir,
           PATH: process.env["PATH"] ?? "",
+          XDG_CONFIG_HOME: dir,
         },
       });
       expect(exitCode).not.toBe(0);
@@ -344,21 +350,21 @@ describe("fileRefsOverlap", () => {
 
   test("whole-file vs hunked → overlaps", () => {
     expect(
-      fileRefsOverlap({ path: "a.ts" }, { path: "a.ts", hunks: [0] }),
+      fileRefsOverlap({ path: "a.ts" }, { hunks: [0], path: "a.ts" }),
     ).toBe(true);
   });
 
   test("hunked vs whole-file → overlaps", () => {
     expect(
-      fileRefsOverlap({ path: "a.ts", hunks: [1] }, { path: "a.ts" }),
+      fileRefsOverlap({ hunks: [1], path: "a.ts" }, { path: "a.ts" }),
     ).toBe(true);
   });
 
   test("same hunk → overlaps", () => {
     expect(
       fileRefsOverlap(
-        { path: "a.ts", hunks: [0, 1] },
-        { path: "a.ts", hunks: [1] },
+        { hunks: [0, 1], path: "a.ts" },
+        { hunks: [1], path: "a.ts" },
       ),
     ).toBe(true);
   });
@@ -366,8 +372,8 @@ describe("fileRefsOverlap", () => {
   test("disjoint hunks → no overlap", () => {
     expect(
       fileRefsOverlap(
-        { path: "a.ts", hunks: [0] },
-        { path: "a.ts", hunks: [1] },
+        { hunks: [0], path: "a.ts" },
+        { hunks: [1], path: "a.ts" },
       ),
     ).toBe(false);
   });
@@ -375,8 +381,8 @@ describe("fileRefsOverlap", () => {
   test("disjoint multi-hunk → no overlap", () => {
     expect(
       fileRefsOverlap(
-        { path: "a.ts", hunks: [0, 2] },
-        { path: "a.ts", hunks: [1, 3] },
+        { hunks: [0, 2], path: "a.ts" },
+        { hunks: [1, 3], path: "a.ts" },
       ),
     ).toBe(false);
   });
@@ -387,7 +393,7 @@ describe("mergeCommitsByFile", () => {
     msg: string,
     ...files: PlannedCommit["files"]
   ): PlannedCommit {
-    return { message: msg, files };
+    return { files, message: msg };
   }
 
   test("independent files — no merge", () => {
@@ -414,8 +420,8 @@ describe("mergeCommitsByFile", () => {
 
   test("same hunk in two commits → second dropped", () => {
     const groups = [
-      commit("feat: A", { path: "a.ts", hunks: [0] }),
-      commit("feat: B", { path: "a.ts", hunks: [0] }),
+      commit("feat: A", { hunks: [0], path: "a.ts" }),
+      commit("feat: B", { hunks: [0], path: "a.ts" }),
     ];
     const result = mergeCommitsByFile(groups);
     expect(result).toHaveLength(1);
@@ -424,8 +430,8 @@ describe("mergeCommitsByFile", () => {
 
   test("disjoint hunks on same file → NOT merged", () => {
     const groups = [
-      commit("feat: hunk0", { path: "a.ts", hunks: [0] }),
-      commit("feat: hunk1", { path: "a.ts", hunks: [1] }),
+      commit("feat: hunk0", { hunks: [0], path: "a.ts" }),
+      commit("feat: hunk1", { hunks: [1], path: "a.ts" }),
     ];
     const result = mergeCommitsByFile(groups);
     // Different hunks — they can be staged independently, keep separate
@@ -438,9 +444,9 @@ describe("mergeCommitsByFile", () => {
   test("cross-file hunk wiring preserved — two commits sharing a file at different hunks stay separate", () => {
     const groups = [
       // Commit 1: file A hunk 0 + file B whole (feature wiring)
-      commit("feat: feature", { path: "a.ts", hunks: [0] }, { path: "b.ts" }),
+      commit("feat: feature", { hunks: [0], path: "a.ts" }, { path: "b.ts" }),
       // Commit 2: file A hunk 1 (unrelated fix)
-      commit("fix: cleanup", { path: "a.ts", hunks: [1] }),
+      commit("fix: cleanup", { hunks: [1], path: "a.ts" }),
     ];
     const result = mergeCommitsByFile(groups);
     expect(result).toHaveLength(2);
@@ -456,7 +462,7 @@ describe("mergeCommitsByFile", () => {
   test("whole-file in first commit absorbs later hunked entry", () => {
     const groups = [
       commit("feat: all", { path: "a.ts" }), // whole file
-      commit("fix: hunk", { path: "a.ts", hunks: [2] }), // specific hunk - fully covered
+      commit("fix: hunk", { hunks: [2], path: "a.ts" }), // specific hunk - fully covered
     ];
     const result = mergeCommitsByFile(groups);
     // Second commit dropped — its file is already covered by first
@@ -468,7 +474,7 @@ describe("mergeCommitsByFile", () => {
 
   test("hunked first then whole-file second: existing promoted, second dropped", () => {
     const groups = [
-      commit("feat: hunk", { path: "a.ts", hunks: [0] }), // specific hunk
+      commit("feat: hunk", { hunks: [0], path: "a.ts" }), // specific hunk
       commit("refactor: all", { path: "a.ts" }), // whole file — more than first covers
     ];
     const result = mergeCommitsByFile(groups);
@@ -515,25 +521,29 @@ describe("mergeCommitsByFile", () => {
 
   test("three-way: first and third conflict but second is clean", () => {
     const groups = [
-      commit("feat: A", { path: "a.ts", hunks: [0] }),
+      commit("feat: A", { hunks: [0], path: "a.ts" }),
       commit("feat: B", { path: "b.ts" }),
-      commit("fix: A2", { path: "a.ts", hunks: [0] }), // duplicate of first — dropped
+      commit("fix: A2", { hunks: [0], path: "a.ts" }), // duplicate of first — dropped
     ];
     const result = mergeCommitsByFile(groups);
     expect(result).toHaveLength(2);
     // a.ts commit is unchanged (fix: A2 was dropped, not merged)
-    const aGroup = result.find((g) => g.files.some((f) => f.path === "a.ts"))!;
+    const aGroup = result.find((g) => g.files.some((f) => f.path === "a.ts"));
+    expect(aGroup).toBeDefined();
+    if (!aGroup) throw new Error("Expected merged result for a.ts");
     expect(aGroup.message).toBe("feat: A");
     // b.ts commit untouched
-    const bGroup = result.find((g) => g.files.some((f) => f.path === "b.ts"))!;
+    const bGroup = result.find((g) => g.files.some((f) => f.path === "b.ts"));
+    expect(bGroup).toBeDefined();
+    if (!bGroup) throw new Error("Expected merged result for b.ts");
     expect(bGroup.message).toBe("feat: B");
   });
 
   test("partial hunk overlap: incoming keeps uncovered hunks", () => {
     // First commit has hunk[0], second has hunk[0,1] — hunk 0 is duplicate, hunk 1 survives
     const groups = [
-      commit("feat: A", { path: "a.ts", hunks: [0] }),
-      commit("feat: B", { path: "a.ts", hunks: [0, 1] }),
+      commit("feat: A", { hunks: [0], path: "a.ts" }),
+      commit("feat: B", { hunks: [0, 1], path: "a.ts" }),
     ];
     const result = mergeCommitsByFile(groups);
     // Second commit keeps only hunk 1
