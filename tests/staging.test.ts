@@ -10,13 +10,11 @@
  * ~/.config/gitaicmt/config.json from leaking into test assertions.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { PlannedCommit } from "../src/ai.js";
 import { resetConfigCache } from "../src/config.js";
 import { parseDiff } from "../src/diff.js";
 import {
@@ -27,6 +25,11 @@ import {
 } from "../src/git.js";
 import { mergeCommitsByFile } from "../src/merge.js";
 import { stageGroupFiles } from "../src/staging.js";
+
+const { afterEach, beforeEach, describe, expect, test } =
+  await import("bun:test");
+
+type PlannedCommit = import("../src/ai.js").PlannedCommit;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -48,6 +51,17 @@ afterEach(() => {
   }
 });
 
+function cleanupDir(dir: string) {
+  rmSync(dir, { recursive: true });
+}
+
+function getDiff(dir: string, filename: string): string {
+  return execSync(`git diff "${filename}"`, {
+    cwd: dir,
+    encoding: "utf-8",
+  }) as string;
+}
+
 function makeGitDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "gitaicmt-stage-"));
   execSync(
@@ -56,10 +70,6 @@ function makeGitDir(): string {
   );
   execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
   return dir;
-}
-
-function cleanupDir(dir: string) {
-  rmSync(dir, { recursive: true });
 }
 
 /**
@@ -92,13 +102,6 @@ function setupFileWithTwoHunks(
   return { hunk0Marker, hunk1Marker };
 }
 
-function getDiff(dir: string, filename: string): string {
-  return execSync(`git diff "${filename}"`, {
-    cwd: dir,
-    encoding: "utf-8",
-  }) as string;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // stageGroupFiles — validation (no real git needed)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -129,7 +132,7 @@ describe("stageGroupFiles — validation errors", () => {
 
       // Files[0] has 2 hunks (indices 0 and 1); index 99 is out of bounds
       expect(() =>
-        stageGroupFiles([{ path: "app.ts", hunks: [99] }], fileMap),
+        stageGroupFiles([{ hunks: [99], path: "app.ts" }], fileMap),
       ).toThrow("out-of-bounds hunk index 99");
 
       // Suppress unused variable warning
@@ -148,7 +151,7 @@ describe("stageGroupFiles — validation errors", () => {
       const fileMap = new Map([[files[0].path, files[0]]]);
 
       expect(() =>
-        stageGroupFiles([{ path: "app.ts", hunks: [-1] }], fileMap),
+        stageGroupFiles([{ hunks: [-1], path: "app.ts" }], fileMap),
       ).toThrow("out-of-bounds hunk index -1");
     } finally {
       cleanupDir(dir);
@@ -179,7 +182,7 @@ describe("stageGroupFiles — hunk-level staging", () => {
       const fileMap = new Map([[files[0].path, files[0]]]);
 
       // Stage only hunk 0
-      stageGroupFiles([{ path: "app.ts", hunks: [0] }], fileMap, dir);
+      stageGroupFiles([{ hunks: [0], path: "app.ts" }], fileMap, dir);
 
       expect(hasStagedChanges(dir)).toBe(true);
       const staged = getStagedDiff(dir);
@@ -198,7 +201,7 @@ describe("stageGroupFiles — hunk-level staging", () => {
       const files = parseDiff(rawDiff);
       const fileMap = new Map([[files[0].path, files[0]]]);
 
-      stageGroupFiles([{ path: "app.ts", hunks: [1] }], fileMap, dir);
+      stageGroupFiles([{ hunks: [1], path: "app.ts" }], fileMap, dir);
 
       const staged = getStagedDiff(dir);
       expect(staged).not.toContain(hunk0Marker);
@@ -273,6 +276,40 @@ describe("stageGroupFiles — hunk-level staging", () => {
     }
   });
 
+  test("whole-file staging re-stages zero-hunk mode changes", () => {
+    const dir = makeGitDir();
+    try {
+      writeFileSync(join(dir, "script.sh"), "#!/bin/sh\necho ok\n");
+      execSync("git add script.sh && git commit -m 'add script'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      execSync("chmod +x script.sh && git add script.sh", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      const stagedDiff = getStagedDiff(dir);
+      const files = parseDiff(stagedDiff);
+      expect(files).toHaveLength(1);
+      expect(files[0].path).toBe("script.sh");
+      expect(files[0].hunks).toHaveLength(0);
+
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      resetStaging(dir);
+      stageGroupFiles([{ path: "script.sh" }], fileMap, dir);
+
+      expect(hasStagedChanges(dir)).toBe(true);
+      const restagedDiff = getStagedDiff(dir);
+      expect(restagedDiff).toContain("old mode 100644");
+      expect(restagedDiff).toContain("new mode 100755");
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   test("staging hunks:[0,1] stages both hunks", () => {
     const dir = makeGitDir();
     try {
@@ -282,7 +319,7 @@ describe("stageGroupFiles — hunk-level staging", () => {
       expect(files[0].hunks.length).toBeGreaterThanOrEqual(2);
       const fileMap = new Map([[files[0].path, files[0]]]);
 
-      stageGroupFiles([{ path: "app.ts", hunks: [0, 1] }], fileMap, dir);
+      stageGroupFiles([{ hunks: [0, 1], path: "app.ts" }], fileMap, dir);
 
       const staged = getStagedDiff(dir);
       expect(staged).toContain(hunk0Marker);
@@ -321,7 +358,7 @@ describe("stageGroupFiles — hunk-level staging", () => {
 
       stageGroupFiles(
         [
-          { path: "a.ts", hunks: [0] }, // only hunk 0 from a.ts
+          { hunks: [0], path: "a.ts" }, // only hunk 0 from a.ts
           { path: "b.ts" }, // all of b.ts
         ],
         fileMap,
@@ -358,12 +395,12 @@ describe("end-to-end commit pipeline", () => {
       // Simulate the AI returning two separate commits for the two hunks
       const aiGroups: PlannedCommit[] = [
         {
+          files: [{ hunks: [0], path: "app.ts" }],
           message: "feat: implement hunk zero feature",
-          files: [{ path: "app.ts", hunks: [0] }],
         },
         {
+          files: [{ hunks: [1], path: "app.ts" }],
           message: "feat: implement hunk one feature",
-          files: [{ path: "app.ts", hunks: [1] }],
         },
       ];
 
@@ -427,8 +464,8 @@ describe("end-to-end commit pipeline", () => {
 
       const aiGroups: PlannedCommit[] = [
         {
-          message: "refactor: overhaul app.ts",
           files: [{ path: "app.ts" }], // no hunks = whole file
+          message: "refactor: overhaul app.ts",
         },
       ];
 
@@ -477,12 +514,12 @@ describe("end-to-end commit pipeline", () => {
       //             hunk 1 of a.ts is a separate commit
       const aiGroups: PlannedCommit[] = [
         {
+          files: [{ hunks: [0], path: "a.ts" }, { path: "b.ts" }],
           message: "feat: feature A (with b.ts support)",
-          files: [{ path: "a.ts", hunks: [0] }, { path: "b.ts" }],
         },
         {
+          files: [{ hunks: [1], path: "a.ts" }],
           message: "refactor: cleanup a.ts line 28",
-          files: [{ path: "a.ts", hunks: [1] }],
         },
       ];
 
