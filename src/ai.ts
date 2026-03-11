@@ -99,12 +99,18 @@ export async function planCommits(
 
   if (files.length > 1 && shouldBatchFiles(files)) {
     const batches = batchFilesForGrouping(files);
-    const batchResults = await Promise.all(
-      batches.map((batch) =>
-        planCommits(batch, formatFileDiff, recursionDepth + 1),
-      ),
-    );
-    return await finalizePlannedGroups(files, batchResults.flat());
+    const madeBatchingProgress =
+      batches.length > 1 ||
+      batches.some((batch) => batch.length < files.length);
+
+    if (madeBatchingProgress) {
+      const batchResults = await Promise.all(
+        batches.map((batch) =>
+          planCommits(batch, formatFileDiff, recursionDepth + 1),
+        ),
+      );
+      return await finalizePlannedGroups(files, batchResults.flat());
+    }
   }
 
   const sys = buildGroupingSystemPrompt();

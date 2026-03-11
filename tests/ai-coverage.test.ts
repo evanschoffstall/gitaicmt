@@ -428,6 +428,49 @@ describe("ai coverage", () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
+  test("planCommits does not recurse when batching fails to reduce a file set", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("stalled-batch"), model: "gpt-4o-mini" },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: Array.from({ length: 9 }, (_, index) => ({
+                      path: `src/module-${String(index).padStart(2, "0")}.ts`,
+                    })),
+                    message: "refactor(modules): regroup large batch",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const ai = await importFreshAi("stalled-batch");
+    const files = [
+      ...Array.from({ length: 8 }, (_, index) =>
+        makeFile(`src/module-${String(index).padStart(2, "0")}.ts`, 43),
+      ),
+      makeFile("src/module-08.ts", 35),
+    ];
+
+    const result = await ai.planCommits(files, formatFileDiff);
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toEqual([
+      {
+        files: files.map((file) => ({ path: file.path })),
+        message: "refactor(modules): regroup large batch",
+      },
+    ]);
+  });
+
   test("planCommits appends a commit for missed hunks", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("missed-hunks"), model: "gpt-4o-mini" },
