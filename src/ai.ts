@@ -946,7 +946,7 @@ export async function planCommits(
   }
 
   // Only batch when the prompt would be genuinely too large.
-  if (shouldBatchFiles(files)) {
+  if (files.length > 1 && shouldBatchFiles(files)) {
     const batches = batchFilesForGrouping(files);
 
     const batchResults = await Promise.all(

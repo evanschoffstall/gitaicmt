@@ -378,6 +378,45 @@ describe("ai coverage", () => {
     expect(calls.chat).toHaveLength(1);
   });
 
+  test("planCommits does not recurse forever on an oversized single file", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("single-file-batch"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [{ path: "src/huge.ts" }],
+                    message: "refactor(huge): regroup oversized file",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const ai = await importFreshAi("single-file-batch");
+    const oversizedFile = makeFile("src/huge.ts", 1300);
+
+    const result = await ai.planCommits([oversizedFile], formatFileDiff);
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toEqual([
+      {
+        files: [{ path: "src/huge.ts" }],
+        message: "refactor(huge): regroup oversized file",
+      },
+    ]);
+  });
+
   test("planCommits rejects excessive recursion depth", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("recursion"), model: "gpt-4o-mini" },
