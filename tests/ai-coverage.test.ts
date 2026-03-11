@@ -475,9 +475,9 @@ describe("ai coverage", () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
-  test("planCommits does not recurse when batching fails to reduce a file set", async () => {
+  test("planCommits appends a commit for missed hunks", async () => {
     writeLocalConfig({
-      openai: { apiKey: validApiKey("stalled-batch"), model: "gpt-4o-mini" },
+      openai: { apiKey: validApiKey("missed-hunks"), model: "gpt-4o-mini" },
     });
     const calls = installOpenAiMock({
       chatQueue: [
@@ -487,43 +487,21 @@ describe("ai coverage", () => {
               message: {
                 content: JSON.stringify([
                   {
-                    files: Array.from({ length: 9 }, (_, index) => ({
-                      path: `src/module-${String(index).padStart(2, "0")}.ts`,
-                    })),
-                    message: "refactor(modules): regroup large batch",
+                    files: [{ hunks: [0], path: "src/app.ts" }],
+                    message: commitMessage("feat(app): update first hunk"),
                   },
                 ]),
               },
             },
           ],
         },
-      ],
-    });
-    const ai = await importFreshAi("stalled-batch");
-    const files = [
-      ...Array.from({ length: 8 }, (_, index) =>
-        makeFile(`src/module-${String(index).padStart(2, "0")}.ts`, 43),
-      ),
-      makeFile("src/module-08.ts", 35),
-    ];
-
-    const result = await ai.planCommits(files, formatFileDiff);
-
-    expect(calls.chat).toHaveLength(1);
-    expect(result).toEqual([
-      {
-        files: files.map((file) => ({ path: file.path })),
-        message: "refactor(modules): regroup large batch",
-      },
-    ]);
-  });
-
-  test("planCommits appends a commit for missed hunks", async () => {
-    writeLocalConfig({
-      openai: { apiKey: validApiKey("missed-hunks"), model: "gpt-4o-mini" },
-    });
-    installOpenAiMock({
-      chatQueue: [
+        {
+          choices: [
+            {
+              message: { content: commitMessage("fix(app): cover second hunk") },
+            },
+          ],
+        },
         {
           choices: [
             {
@@ -531,14 +509,17 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [{ hunks: [0], path: "src/app.ts" }],
-                    message: "feat(app): update first hunk",
+                    message: commitMessage("feat(app): update first hunk"),
+                  },
+                  {
+                    files: [{ hunks: [1], path: "src/app.ts" }],
+                    message: commitMessage("fix(app): cover second hunk"),
                   },
                 ]),
               },
             },
           ],
         },
-        { choices: [{ message: { content: "fix(app): cover second hunk" } }] },
       ],
     });
     const ai = await importFreshAi("missed-hunks");
@@ -548,14 +529,15 @@ describe("ai coverage", () => {
       formatFileDiff,
     );
 
+    expect(calls.chat).toHaveLength(3);
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({
       files: [{ hunks: [0], path: "src/app.ts" }],
-      message: "feat(app): update first hunk",
+      message: commitMessage("feat(app): update first hunk"),
     });
     expect(result[1]).toEqual({
       files: [{ hunks: [1], path: "src/app.ts" }],
-      message: "fix(app): cover second hunk",
+      message: commitMessage("fix(app): cover second hunk"),
     });
   });
 
