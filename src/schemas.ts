@@ -5,18 +5,18 @@ import { z } from "zod";
  * Ensures type safety and validates bounds for all config fields
  */
 
-export const OpenAISettingsSchema = z.object({
+const OpenAISettingsSchema = z.object({
   apiKey: z.string().describe("OpenAI API key (use env var OPENAI_API_KEY)"),
-  model: z
-    .string()
-    .min(1, "Model name cannot be empty")
-    .describe("OpenAI model to use (e.g., gpt-4o-mini)"),
   maxTokens: z
     .number()
     .int()
     .min(1, "maxTokens must be at least 1")
     .max(100000, "maxTokens cannot exceed 100000")
     .describe("Maximum tokens for AI responses"),
+  model: z
+    .string()
+    .min(1, "Model name cannot be empty")
+    .describe("OpenAI model to use (e.g., gpt-4o-mini)"),
   temperature: z
     .number()
     .min(0, "temperature must be at least 0")
@@ -24,13 +24,7 @@ export const OpenAISettingsSchema = z.object({
     .describe("AI creativity (0 = deterministic, 2 = very creative)"),
 });
 
-export const AnalysisSettingsSchema = z.object({
-  maxDiffLines: z
-    .number()
-    .int()
-    .min(100, "maxDiffLines must be at least 100")
-    .max(1000000, "maxDiffLines cannot exceed 1000000")
-    .describe("Maximum diff lines to process"),
+const AnalysisSettingsSchema = z.object({
   chunkSize: z
     .number()
     .int()
@@ -39,33 +33,38 @@ export const AnalysisSettingsSchema = z.object({
     .describe("Lines per chunk for processing"),
   groupByFile: z.boolean().describe("Group changes by file when chunking"),
   groupByHunk: z.boolean().describe("Split large files by hunk when needed"),
-});
-
-export const CommitSettingsSchema = z.object({
-  conventional: z.boolean().describe("Use Conventional Commits format"),
-  maxSubjectLength: z
+  maxDiffLines: z
     .number()
     .int()
-    .min(20, "maxSubjectLength must be at least 20")
-    .max(200, "maxSubjectLength cannot exceed 200")
-    .describe("Maximum characters for commit subject line"),
+    .min(100, "maxDiffLines must be at least 100")
+    .max(1000000, "maxDiffLines cannot exceed 1000000")
+    .describe("Maximum diff lines to process"),
+});
+
+const CommitSettingsSchema = z.object({
+  conventional: z.boolean().describe("Use Conventional Commits format"),
+  includeBody: z.boolean().describe("Generate commit message body"),
+  includeScope: z.boolean().describe("Include scope in conventional commits"),
+  language: z
+    .string()
+    .length(2, "language must be 2-letter ISO code")
+    .regex(/^[a-z]{2}$/, "language must be lowercase 2-letter code")
+    .describe("Language for commit messages (e.g., en, es, fr)"),
   maxBodyLineLength: z
     .number()
     .int()
     .min(40, "maxBodyLineLength must be at least 40")
     .max(200, "maxBodyLineLength cannot exceed 200")
     .describe("Maximum characters per line in commit body"),
-  includeScope: z.boolean().describe("Include scope in conventional commits"),
-  includeBody: z.boolean().describe("Generate commit message body"),
-  language: z
-    .string()
-    .length(2, "language must be 2-letter ISO code")
-    .regex(/^[a-z]{2}$/, "language must be lowercase 2-letter code")
-    .describe("Language for commit messages (e.g., en, es, fr)"),
+  maxSubjectLength: z
+    .number()
+    .int()
+    .min(20, "maxSubjectLength must be at least 20")
+    .max(200, "maxSubjectLength cannot exceed 200")
+    .describe("Maximum characters for commit subject line"),
 });
 
-export const PerformanceSettingsSchema = z.object({
-  parallel: z.boolean().describe("Process chunks in parallel"),
+const PerformanceSettingsSchema = z.object({
   cacheEnabled: z.boolean().describe("Cache AI responses to reduce API calls"),
   cacheTTLSeconds: z
     .number()
@@ -73,6 +72,7 @@ export const PerformanceSettingsSchema = z.object({
     .min(0, "cacheTTLSeconds must be non-negative")
     .max(86400, "cacheTTLSeconds cannot exceed 24 hours")
     .describe("Cache time-to-live in seconds"),
+  parallel: z.boolean().describe("Process chunks in parallel"),
   timeoutMs: z
     .number()
     .int()
@@ -82,14 +82,10 @@ export const PerformanceSettingsSchema = z.object({
 });
 
 export const ConfigSchema = z.object({
-  openai: OpenAISettingsSchema,
   analysis: AnalysisSettingsSchema,
   commit: CommitSettingsSchema,
+  openai: OpenAISettingsSchema,
   performance: PerformanceSettingsSchema,
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
-export type OpenAISettings = z.infer<typeof OpenAISettingsSchema>;
-export type AnalysisSettings = z.infer<typeof AnalysisSettingsSchema>;
-export type CommitSettings = z.infer<typeof CommitSettingsSchema>;
-export type PerformanceSettings = z.infer<typeof PerformanceSettingsSchema>;
