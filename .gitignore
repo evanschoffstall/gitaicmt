@@ -4,3 +4,5 @@ dist
 gitaicmt.config.json
 .env
 .env.*
+.cache
+coverage
