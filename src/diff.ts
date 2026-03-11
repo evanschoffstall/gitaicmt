@@ -10,40 +10,40 @@ import { loadConfig } from "./config.js";
 // Type Definitions
 // ============================================================================
 
-/** A single hunk within a file diff */
-export interface DiffHunk {
-  header: string; // @@ line
-  startOld: number;
-  countOld: number;
-  startNew: number;
-  countNew: number;
-  lines: string[]; // raw diff lines (+/-/space)
-}
-
-/** One file's diff data */
-export interface FileDiff {
-  path: string;
-  oldPath: string | null; // for renames
-  status: "added" | "modified" | "deleted" | "renamed";
-  hunks: DiffHunk[];
-  additions: number;
-  deletions: number;
-}
-
 /** A logical chunk of related changes ready for AI analysis */
 export interface DiffChunk {
-  id: number;
-  files: string[];
   content: string; // formatted diff text for the prompt
+  files: string[];
+  id: number;
   lineCount: number;
+}
+
+/** A single hunk within a file diff */
+export interface DiffHunk {
+  countNew: number;
+  countOld: number;
+  header: string; // @@ line
+  lines: string[]; // raw diff lines (+/-/space)
+  startNew: number;
+  startOld: number;
 }
 
 /** Quick summary stats */
 export interface DiffStats {
+  additions: number;
+  chunks: number;
+  deletions: number;
   filesChanged: number;
+}
+
+/** One file's diff data */
+export interface FileDiff {
   additions: number;
   deletions: number;
-  chunks: number;
+  hunks: DiffHunk[];
+  oldPath: null | string; // for renames
+  path: string;
+  status: "added" | "deleted" | "modified" | "renamed";
 }
 
 // ============================================================================
@@ -212,10 +212,6 @@ export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
   return lines.join("\n");
 }
 
-// ============================================================================
-// Chunking
-// ============================================================================
-
 /**
  * Split diff files into chunks for AI analysis
  * Respects config settings for grouping by file/hunk and chunk size limits
@@ -235,9 +231,9 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
       const lc = text.split("\n").length;
       if (lc <= maxLines) {
         chunks.push({
-          id: id++,
-          files: [file.path],
           content: text,
+          files: [file.path],
+          id: id++,
           lineCount: lc,
         });
       } else if (cfg.analysis.groupByHunk) {
@@ -246,17 +242,17 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
           const hText = [hunk.header, ...hunk.lines].join("\n");
           const hLc = hunk.lines.length + 1;
           chunks.push({
-            id: id++,
-            files: [file.path],
             content: hText,
+            files: [file.path],
+            id: id++,
             lineCount: hLc,
           });
         }
       } else {
         chunks.push({
-          id: id++,
-          files: [file.path],
           content: text,
+          files: [file.path],
+          id: id++,
           lineCount: lc,
         });
       }
@@ -271,9 +267,9 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
       const lc = text.split("\n").length;
       if (bufLines + lc > maxLines && buf.length > 0) {
         chunks.push({
-          id: id++,
-          files: [...bufFiles],
           content: buf.join("\n"),
+          files: [...bufFiles],
+          id: id++,
           lineCount: bufLines,
         });
         buf = [];
@@ -286,9 +282,9 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
     }
     if (buf.length > 0) {
       chunks.push({
-        id: id++,
-        files: [...bufFiles],
         content: buf.join("\n"),
+        files: [...bufFiles],
+        id,
         lineCount: bufLines,
       });
     }
@@ -297,8 +293,23 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
   return chunks;
 }
 
+/**
+ * Format a FileDiff into displayable unified diff text
+ * Includes --- and +++ headers, hunk headers, and diff lines
+ * @param f - The file diff to format
+ * @returns Formatted diff text ready for display
+ */
+export function formatFileDiff(f: FileDiff): string {
+  const parts: string[] = [`--- ${f.oldPath ?? f.path}`, `+++ ${f.path}`];
+  for (const h of f.hunks) {
+    parts.push(h.header);
+    parts.push(...h.lines);
+  }
+  return parts.join("\n");
+}
+
 // ============================================================================
-// Stats
+// Formatting
 // ============================================================================
 
 /**

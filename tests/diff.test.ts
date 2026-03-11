@@ -1,13 +1,29 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { execSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { resetConfigCache } from "../src/config.js";
-import type { FileDiff } from "../src/diff.js";
 import {
   buildPatch,
   chunkDiffs,
+  type FileDiff,
   formatFileDiff,
   getStats,
   parseDiff,
 } from "../src/diff.js";
+import {
+  commitWithMessage,
+  getStagedDiff,
+  getStagedFiles,
+  hasStagedChanges,
+  resetStaging,
+  stageAll,
+  stageFiles,
+  stagePatch,
+} from "../src/git.js";
+
+const { beforeEach, describe, expect, test } = await import("bun:test");
 
 // ═══════════════════════════════════════════════════════════════
 // Test fixtures — realistic git diff outputs
@@ -264,15 +280,21 @@ describe("parseDiff", () => {
 
     test("counts additions/deletions per file independently", () => {
       const files = parseDiff(MULTI_FILE_DIFF);
-      const pkg = files.find((f) => f.path === "package.json")!;
+      const pkg = files.find((f) => f.path === "package.json");
+      expect(pkg).toBeDefined();
+      if (!pkg) throw new Error("Expected package.json diff");
       expect(pkg.additions).toBe(1);
       expect(pkg.deletions).toBe(0);
 
-      const server = files.find((f) => f.path === "src/server.ts")!;
+      const server = files.find((f) => f.path === "src/server.ts");
+      expect(server).toBeDefined();
+      if (!server) throw new Error("Expected src/server.ts diff");
       expect(server.additions).toBe(2);
       expect(server.deletions).toBe(0);
 
-      const readme = files.find((f) => f.path === "README.md")!;
+      const readme = files.find((f) => f.path === "README.md");
+      expect(readme).toBeDefined();
+      if (!readme) throw new Error("Expected README.md diff");
       expect(readme.additions).toBe(3);
       expect(readme.deletions).toBe(1);
     });
@@ -381,21 +403,21 @@ describe("chunkDiffs", () => {
       lines.push(`+line ${i}`);
     }
     return {
-      path,
-      oldPath: null,
-      status: "modified",
-      hunks: [
-        {
-          header: `@@ -1,${lineCount} +1,${lineCount} @@`,
-          startOld: 1,
-          countOld: lineCount,
-          startNew: 1,
-          countNew: lineCount,
-          lines,
-        },
-      ],
       additions: lineCount,
       deletions: 0,
+      hunks: [
+        {
+          countNew: lineCount,
+          countOld: lineCount,
+          header: `@@ -1,${lineCount} +1,${lineCount} @@`,
+          lines,
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+      oldPath: null,
+      path,
+      status: "modified",
     };
   }
 
@@ -626,10 +648,6 @@ describe("git staging helpers", () => {
   // These tests require a real git repo
 
   function makeGitDir(): string {
-    const { mkdtempSync } = require("node:fs");
-    const { tmpdir } = require("node:os");
-    const { join } = require("node:path");
-    const { execSync } = require("node:child_process");
     const dir = mkdtempSync(join(tmpdir(), "gitaicmt-diff-"));
     execSync(
       'git init && git config user.email "test@test.com" && git config user.name "Test"',
@@ -646,14 +664,10 @@ describe("git staging helpers", () => {
   }
 
   function cleanupDir(dir: string) {
-    const { rmSync } = require("node:fs");
     rmSync(dir, { recursive: true });
   }
 
   test("stageAll stages untracked files", () => {
-    const { writeFileSync } = require("node:fs");
-    const { join } = require("node:path");
-    const { stageAll, getStagedFiles } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "new.txt"), "hello");
     stageAll(dir);
@@ -663,10 +677,6 @@ describe("git staging helpers", () => {
   });
 
   test("resetStaging unstages files", () => {
-    const { writeFileSync } = require("node:fs");
-    const { join } = require("node:path");
-    const { execSync } = require("node:child_process");
-    const { resetStaging, hasStagedChanges } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "file.txt"), "hi");
     execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
@@ -677,10 +687,6 @@ describe("git staging helpers", () => {
   });
 
   test("commitWithMessage creates a commit", () => {
-    const { writeFileSync } = require("node:fs");
-    const { join } = require("node:path");
-    const { execSync } = require("node:child_process");
-    const { commitWithMessage } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "file.txt"), "data");
     execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
@@ -694,10 +700,6 @@ describe("git staging helpers", () => {
   });
 
   test("getStagedFiles returns staged file paths", () => {
-    const { writeFileSync } = require("node:fs");
-    const { join } = require("node:path");
-    const { execSync } = require("node:child_process");
-    const { getStagedFiles } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "a.txt"), "a");
     writeFileSync(join(dir, "b.txt"), "b");
@@ -709,9 +711,6 @@ describe("git staging helpers", () => {
   });
 
   test("stageFiles stages specific files only", () => {
-    const { writeFileSync } = require("node:fs");
-    const { join } = require("node:path");
-    const { stageFiles, getStagedFiles } = require("../src/git.js");
     const dir = makeGitDir();
     writeFileSync(join(dir, "a.txt"), "a");
     writeFileSync(join(dir, "b.txt"), "b");
@@ -728,12 +727,6 @@ describe("git staging helpers", () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe("hunk-level staging (buildPatch + stagePatch)", () => {
-  const { execSync } = require("node:child_process");
-  const { writeFileSync } = require("node:fs");
-  const { join } = require("node:path");
-  const { mkdtempSync, rmSync } = require("node:fs");
-  const { tmpdir } = require("node:os");
-
   function makeGitDir(): string {
     const dir = mkdtempSync(join(tmpdir(), "gitaicmt-hunk-"));
     execSync(
@@ -748,11 +741,6 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
   }
 
   test("stagePatch stages only the patched lines, not the whole file", () => {
-    const {
-      stagePatch,
-      getStagedDiff,
-      hasStagedChanges,
-    } = require("../src/git.js");
     const dir = makeGitDir();
 
     // Commit base file with 30 lines across two regions
@@ -774,8 +762,7 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
       cwd: dir,
       encoding: "utf-8",
     }) as string;
-    const { parseDiff: pd } = require("../src/diff.js");
-    const files = pd(rawDiff);
+    const files = parseDiff(rawDiff);
     expect(files).toHaveLength(1);
     const fileDiff = files[0];
     expect(fileDiff.hunks.length).toBeGreaterThanOrEqual(2);
@@ -797,7 +784,6 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
   });
 
   test("staging hunk 1 only includes that region", () => {
-    const { stagePatch, getStagedDiff } = require("../src/git.js");
     const dir = makeGitDir();
 
     const baseLines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
@@ -816,8 +802,7 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
       cwd: dir,
       encoding: "utf-8",
     }) as string;
-    const { parseDiff: pd } = require("../src/diff.js");
-    const files = pd(rawDiff);
+    const files = parseDiff(rawDiff);
     const fileDiff = files[0];
     expect(fileDiff.hunks.length).toBeGreaterThanOrEqual(2);
 
@@ -833,13 +818,6 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
   });
 
   test("staging both hunks separately then committing produces two commits with correct content", () => {
-    const {
-      stagePatch,
-      getStagedDiff,
-      hasStagedChanges,
-      resetStaging,
-      commitWithMessage,
-    } = require("../src/git.js");
     const dir = makeGitDir();
 
     // Commit an initial file
@@ -861,8 +839,7 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
       cwd: dir,
       encoding: "utf-8",
     }) as string;
-    const { parseDiff: pd } = require("../src/diff.js");
-    const files = pd(rawDiff);
+    const files = parseDiff(rawDiff);
     const fileDiff = files[0];
     expect(fileDiff.hunks.length).toBeGreaterThanOrEqual(2);
 
@@ -895,12 +872,6 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
   });
 
   test("cross-file hunk wiring: stage hunk 0 from file A + whole file B together", () => {
-    const {
-      stagePatch,
-      stageFiles,
-      getStagedDiff,
-      getStagedFiles,
-    } = require("../src/git.js");
     const dir = makeGitDir();
 
     execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
@@ -928,8 +899,7 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
       cwd: dir,
       encoding: "utf-8",
     }) as string;
-    const { parseDiff: pd } = require("../src/diff.js");
-    const filesA = pd(rawDiffA);
+    const filesA = parseDiff(rawDiffA);
     const fileDiffA = filesA[0];
     expect(fileDiffA.hunks.length).toBeGreaterThanOrEqual(2);
 

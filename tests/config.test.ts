@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -9,8 +8,9 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Config } from "../src/config.js";
+
 import {
+  type Config,
   DEFAULTS,
   globalConfigPath,
   initConfig,
@@ -18,6 +18,9 @@ import {
   resetConfigCache,
   userConfigPath,
 } from "../src/config.js";
+
+const { afterEach, beforeEach, describe, expect, test } =
+  await import("bun:test");
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "gitaicmt-test-"));
@@ -42,7 +45,7 @@ describe("config", () => {
     } else {
       delete process.env["XDG_CONFIG_HOME"];
     }
-    rmSync(_testXdgDir, { recursive: true, force: true });
+    rmSync(_testXdgDir, { force: true, recursive: true });
   });
 
   // ───── Defaults ─────
@@ -84,8 +87,8 @@ describe("config", () => {
     test("loads gitaicmt.config.json", () => {
       const dir = makeTmpDir();
       const partial = {
-        openai: { model: "gpt-4o", apiKey: "sk-test123" },
         commit: { language: "ja" },
+        openai: { apiKey: "sk-test123", model: "gpt-4o" },
       };
       writeFileSync(join(dir, "gitaicmt.config.json"), JSON.stringify(partial));
       const cfg = loadConfig(dir);
@@ -141,8 +144,8 @@ describe("config", () => {
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({
-          openai: { temperature: 0.7 },
           analysis: { chunkSize: 500 },
+          openai: { temperature: 0.7 },
         }),
       );
       const cfg = loadConfig(dir);
@@ -412,8 +415,8 @@ describe("config", () => {
       writeFileSync(
         join(userDir, "config.json"),
         JSON.stringify({
-          openai: { model: "user-model", temperature: 0.9 },
           commit: { conventional: false },
+          openai: { model: "user-model", temperature: 0.9 },
         }),
       );
       process.env["XDG_CONFIG_HOME"] = xdgDir;
@@ -535,8 +538,8 @@ describe("config", () => {
       writeFileSync(
         join(userDir, "config.json"),
         JSON.stringify({
-          openai: { model: "user-m", temperature: 0.8 },
           commit: { language: "fr" },
+          openai: { model: "user-m", temperature: 0.8 },
           performance: { parallel: false },
         }),
       );
@@ -547,8 +550,8 @@ describe("config", () => {
       writeFileSync(
         join(localDir, "gitaicmt.config.json"),
         JSON.stringify({
-          openai: { model: "local-m" },
           analysis: { chunkSize: 1200 },
+          openai: { model: "local-m" },
         }),
       );
 

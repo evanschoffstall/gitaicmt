@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+
 import { ConfigError } from "./errors.js";
-import type { Config } from "./schemas.js";
-import { ConfigSchema } from "./schemas.js";
+import { type Config, ConfigSchema } from "./schemas.js";
 
 // Re-export Config type for external use
 export type { Config };
@@ -31,30 +31,30 @@ export type { Config };
  * omitted here because they are not suitable for commit-message text generation.
  */
 export const DEFAULTS: Config = {
-  openai: {
-    apiKey: "",
-    model: "gpt-4o-mini",
-    maxTokens: 512,
-    temperature: 0.3,
-  },
   analysis: {
-    maxDiffLines: 2000,
     chunkSize: 800,
     groupByFile: true,
     groupByHunk: true,
+    maxDiffLines: 2000,
   },
   commit: {
     conventional: true,
-    maxSubjectLength: 72,
-    maxBodyLineLength: 80,
-    includeScope: true,
     includeBody: true,
+    includeScope: true,
     language: "en",
+    maxBodyLineLength: 80,
+    maxSubjectLength: 72,
+  },
+  openai: {
+    apiKey: "",
+    maxTokens: 512,
+    model: "gpt-4o-mini",
+    temperature: 0.3,
   },
   performance: {
-    parallel: true,
     cacheEnabled: true,
     cacheTTLSeconds: 300,
+    parallel: true,
     timeoutMs: 15000,
   },
 };
@@ -70,30 +70,9 @@ export function globalConfigPath(): string {
 
 /** Per-user config (XDG_CONFIG_HOME or ~/.config) */
 export function userConfigPath(): string {
-  const xdg = process.env["XDG_CONFIG_HOME"];
-  const base = xdg || join(homedir(), ".config");
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".config");
   return join(base, "gitaicmt", "config.json");
-}
-
-/** Find a local (project-level) config in `cwd` */
-function findLocalConfig(cwd: string): string | null {
-  for (const name of LOCAL_CONFIG_NAMES) {
-    const p = resolve(cwd, name);
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
-/* ── Deep merge ───────────────────────────────────────────────── */
-
-/** Check if value is a plain object (not array, null, or built-in) */
-function isPlainObject(val: unknown): val is Record<string, unknown> {
-  return (
-    val !== null &&
-    typeof val === "object" &&
-    !Array.isArray(val) &&
-    Object.getPrototypeOf(val) === Object.prototype
-  );
 }
 
 function deepMerge<T extends Record<string, unknown>>(
@@ -114,13 +93,13 @@ function deepMerge<T extends Record<string, unknown>>(
         const overrideType = typeof ov;
         const baseIsArray = Array.isArray(bv);
         const overrideIsArray = Array.isArray(ov);
-        
+
         // Check for type mismatches
         if (baseIsArray !== overrideIsArray) {
           // Skip: array/non-array mismatch
           continue;
         }
-        
+
         if (!baseIsArray && baseType !== overrideType) {
           // Skip: primitive type mismatch (number/string, string/boolean, etc.)
           continue;
@@ -132,9 +111,30 @@ function deepMerge<T extends Record<string, unknown>>(
   return out as T;
 }
 
+/* ── Deep merge ───────────────────────────────────────────────── */
+
+/** Find a local (project-level) config in `cwd` */
+function findLocalConfig(cwd: string): null | string {
+  for (const name of LOCAL_CONFIG_NAMES) {
+    const p = resolve(cwd, name);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** Check if value is a plain object (not array, null, or built-in) */
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return (
+    val !== null &&
+    typeof val === "object" &&
+    !Array.isArray(val) &&
+    Object.getPrototypeOf(val) === Object.prototype
+  );
+}
+
 /* ── Read a JSON config file (returns null on missing / bad JSON) */
 
-function readJsonConfig(path: string): Record<string, unknown> | null {
+function readJsonConfig(path: string): null | Record<string, unknown> {
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
@@ -164,13 +164,13 @@ export function loadConfig(cwd?: string): Config {
   // 1. Global config
   const globalRaw = readJsonConfig(globalConfigPath());
   if (globalRaw) {
-    merged = deepMerge(merged, globalRaw) as Record<string, unknown>;
+    merged = deepMerge(merged, globalRaw);
   }
 
   // 2. User config
   const userRaw = readJsonConfig(userConfigPath());
   if (userRaw) {
-    merged = deepMerge(merged, userRaw) as Record<string, unknown>;
+    merged = deepMerge(merged, userRaw);
   }
 
   // 3. Local config (project-level)
@@ -178,14 +178,14 @@ export function loadConfig(cwd?: string): Config {
   if (localFile) {
     const localRaw = readJsonConfig(localFile);
     if (localRaw) {
-      merged = deepMerge(merged, localRaw) as Record<string, unknown>;
+      merged = deepMerge(merged, localRaw);
     }
   }
 
   // 4. Env override for API key (HIGHEST priority - overrides all configs)
-  if (process.env["OPENAI_API_KEY"]) {
+  if (process.env.OPENAI_API_KEY) {
     (merged.openai as Record<string, unknown>).apiKey =
-      process.env["OPENAI_API_KEY"];
+      process.env.OPENAI_API_KEY;
   }
 
   // 5. Validate with Zod schema
@@ -194,7 +194,7 @@ export function loadConfig(cwd?: string): Config {
   } catch (err: unknown) {
     if (err && typeof err === "object" && "errors" in err) {
       const zodErr = err as {
-        errors: Array<{ path: string[]; message: string }>;
+        errors: { message: string; path: string[] }[];
       };
       const errors = zodErr.errors
         .map((e) => `  - ${e.path.join(".")}: ${e.message}`)
@@ -209,12 +209,4 @@ export function loadConfig(cwd?: string): Config {
 
 export function resetConfigCache(): void {
   _cached = null;
-}
-
-export function initConfig(cwd?: string): string {
-  const dir = cwd ?? process.cwd();
-  const target = resolve(dir, "gitaicmt.config.json");
-  if (existsSync(target)) return target;
-  writeFileSync(target, JSON.stringify(DEFAULTS, null, 2) + "\n", "utf-8");
-  return target;
 }
