@@ -255,16 +255,70 @@ function commitFormatInstructions(): string[] {
     `Subject line MUST be <= ${formatScalar(cfg.commit.maxSubjectLength)} characters.`,
     `Language: ${cfg.commit.language}.`,
   );
-  if (cfg.commit.includeBody) {
-    parts.push(
-      "After the subject, add a blank line then a concise body (2-4 bullet points) summarizing key changes.",
-      `Wrap body lines at ${formatScalar(cfg.commit.maxBodyLineLength)} characters.`,
-    );
-  } else {
-    parts.push("Produce only the subject line, no body.");
-  }
+  parts.push(
+    "After the subject, add a blank line then a concise body using bullet points to summarize key changes.",
+    `Wrap body lines at ${formatScalar(cfg.commit.maxBodyLineLength)} characters.`,
+    "A subject-only commit message is invalid.",
+  );
   parts.push(
     "Do NOT include markdown formatting, code fences, or quotation marks around the message.",
   );
   return parts;
+}
+
+function getAreaKey(path: string): string {
+  const segments = path.split("/").filter(Boolean);
+  if (segments.length <= 1) {
+    return "(root)";
+  }
+  if (segments.length === 2) {
+    return segments[0];
+  }
+  return segments.slice(0, 2).join("/");
+}
+
+function samplePaths(paths: string[]): string[] {
+  if (paths.length <= 3) {
+    return [...paths];
+  }
+
+  return [paths[0], paths[1], paths.at(-1) ?? paths[paths.length - 1]];
+}
+
+function summarizeFileAreas(files: FileDiff[]): string[] {
+  const pathsByArea = new Map<string, string[]>();
+
+  for (const file of files) {
+    const area = getAreaKey(file.path);
+    const paths = pathsByArea.get(area);
+    if (paths) {
+      paths.push(file.path);
+    } else {
+      pathsByArea.set(area, [file.path]);
+    }
+  }
+
+  const entries = [...pathsByArea.entries()].sort((left, right) => {
+    if (left[1].length === right[1].length) {
+      return left[0].localeCompare(right[0]);
+    }
+    return right[1].length - left[1].length;
+  });
+
+  const summaryLimit = 12;
+  const lines = entries.slice(0, summaryLimit).map(([area, paths]) => {
+    const samples = samplePaths(paths).join(", ");
+    const moreCount = paths.length - Math.min(paths.length, 3);
+    const moreSuffix =
+      moreCount > 0 ? `, +${formatScalar(moreCount)} more` : "";
+    return `  - ${area}: ${formatScalar(paths.length)} file(s) (${samples}${moreSuffix})`;
+  });
+
+  if (entries.length > summaryLimit) {
+    lines.push(
+      `  - +${formatScalar(entries.length - summaryLimit)} more area(s)`,
+    );
+  }
+
+  return lines;
 }
