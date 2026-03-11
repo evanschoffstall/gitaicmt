@@ -6,3 +6,4 @@ gitaicmt.config.json
 .env.*
 .cache
 coverage
+dist
