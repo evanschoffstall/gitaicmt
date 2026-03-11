@@ -1,10 +1,76 @@
 import { formatLabeledDiff, formatScalar } from "./ai-format.js";
-import { categorizeFile } from "./ai-paths.js";
 import { loadConfig } from "./config.js";
 
+export interface GroupingPromptContext {
+  allFiles?: FileDiff[];
+  batchCount?: number;
+  batchIndex?: number;
+}
 type DiffChunk = import("./diff.js").DiffChunk;
 type DiffStats = import("./diff.js").DiffStats;
+
 type FileDiff = import("./diff.js").FileDiff;
+
+export function buildConsolidationSystemPrompt(): string {
+  return [
+    "You are reviewing an AI-generated commit plan and deciding whether adjacent commits should be merged.",
+    "Your job is to merge ONLY adjacent commits that are clearly part of the same overarching change.",
+    "",
+    "Rules:",
+    "- You MAY merge adjacent commits.",
+    "- You MUST NOT split commits.",
+    "- You MUST NOT drop, duplicate, or invent files/hunks.",
+    "- Preserve commit order except where adjacent commits are merged into one slot.",
+    "- Keep independent features, fixes, and isolated refactors separate.",
+    "- Consolidate fragmented tooling/workflow/config sweeps when they are one cohesive rollout.",
+    "- Consolidate repeated cosmetic/style/refactor cleanup commits only when they form one obvious sweep in the same area.",
+    "- When no merge is warranted, return the plan unchanged.",
+    "",
+    "Output raw JSON only.",
+    'Return an array of commit objects: [{"files":[{"path":"file.ts","hunks":[0]}],"message":"..."}]',
+  ].join("\n");
+}
+
+export function buildConsolidationUserPrompt(
+  allFiles: FileDiff[],
+  groups: import("./ai-types.js").PlannedCommit[],
+): string {
+  const parts = [
+    `Review ${formatScalar(groups.length)} planned commit(s) covering ${formatScalar(allFiles.length)} changed file(s).`,
+    "Merge adjacent commits only when they clearly belong to the same overarching change.",
+    "",
+    "Changed files:",
+    ...allFiles.map((file) => {
+      const hunkDescriptor =
+        file.hunks.length === 0
+          ? "file-level change"
+          : `${formatScalar(file.hunks.length)} hunk(s)`;
+      return `- ${file.path} (${hunkDescriptor})`;
+    }),
+    "",
+    "Proposed commits:",
+  ];
+
+  for (let index = 0; index < groups.length; index++) {
+    const group = groups[index];
+    parts.push(`Commit ${formatScalar(index + 1)}:`);
+    parts.push(`Message: ${group.message}`);
+    parts.push("Files:");
+    for (const file of group.files) {
+      if (file.hunks && file.hunks.length > 0) {
+        parts.push(`- ${file.path} [hunks ${file.hunks.join(", ")}]`);
+      } else {
+        parts.push(`- ${file.path} [all hunks]`);
+      }
+    }
+    parts.push("");
+  }
+
+  parts.push(
+    "Return the final commit plan as JSON using the same file/hunk coverage with merged adjacent commits where warranted.",
+  );
+  return parts.join("\n");
+}
 
 export function buildGroupingSystemPrompt(): string {
   const parts = [

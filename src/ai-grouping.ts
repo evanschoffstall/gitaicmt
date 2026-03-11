@@ -1,7 +1,10 @@
 import { complete } from "./ai-client.js";
-import { categorizeFile, getPlanningAffinityKey } from "./ai-paths.js";
-import { buildMergePrompt, buildSystemPrompt } from "./ai-prompt-builders.js";
-import { type PlannedCommit, type PlannedCommitFile } from "./ai-types.js";
+import {
+  buildConsolidationSystemPrompt,
+  buildConsolidationUserPrompt,
+} from "./ai-prompt-builders.js";
+import { type PlannedCommit } from "./ai-types.js";
+import { validateAndNormalizeGrouping } from "./ai-validation.js";
 import { ValidationError } from "./errors.js";
 
 type FileDiff = import("./diff.js").FileDiff;
@@ -10,202 +13,83 @@ export async function finalizePlannedGroups(
   allFiles: FileDiff[],
   groups: PlannedCommit[],
 ): Promise<PlannedCommit[]> {
-  const affinityMergedGroups = await mergeAdjacentAffinitySupportGroups(groups);
-  return await collapseFragmentedSupportGroups(allFiles, affinityMergedGroups);
-}
-
-function clonePlannedFile(file: PlannedCommitFile): PlannedCommitFile {
-  return file.hunks
-    ? { hunks: [...file.hunks], path: file.path }
-    : { path: file.path };
-}
-
-async function collapseFragmentedSupportGroups(
-  allFiles: FileDiff[],
-  groups: PlannedCommit[],
-): Promise<PlannedCommit[]> {
-  const distinctAllPaths = new Set(allFiles.map((file) => file.path));
-  const supportOnlyGroups = groups.filter((group) => isSupportOnlyGroup(group));
-
-  if (supportOnlyGroups.length < 4) {
+  if (groups.length < 2) {
     return groups;
   }
 
-  const supportPathCount = new Set(
-    supportOnlyGroups.flatMap((group) => group.files.map((file) => file.path)),
-  ).size;
-  const supportCoverageRatio = supportPathCount / distinctAllPaths.size;
-  const nonSupportFileCount = allFiles.filter((file) => {
-    const category = categorizeFile(file.path);
-    return (
-      category !== "config/build" &&
-      category !== "script" &&
-      category !== "test"
-    );
-  }).length;
+  try {
+    const fileByPath = new Map(allFiles.map((file) => [file.path, file]));
+    const sys = buildConsolidationSystemPrompt();
+    const usr = buildConsolidationUserPrompt(allFiles, groups);
+    const raw = await complete(sys, usr);
+    const cleaned = raw
+      .replace(/^```(?:json)?\s*/m, "")
+      .replace(/\s*```$/m, "");
+    const parsed = JSON.parse(cleaned) as unknown;
+    const consolidated = validateAndNormalizeGrouping(parsed, fileByPath);
 
-  if (
-    supportPathCount < 6 ||
-    supportCoverageRatio < 0.5 ||
-    nonSupportFileCount > 4
-  ) {
+    return hasMatchingCoverage(groups, consolidated, fileByPath)
+      ? consolidated
+      : groups;
+  } catch {
     return groups;
   }
-
-  const mergedSupportFiles = mergePlannedFiles(
-    supportOnlyGroups.flatMap((group) => group.files),
-  );
-  const mergedMessage = await mergePlannedCommitMessages(
-    supportOnlyGroups.map((group) => group.message),
-  );
-  const supportGroupSet = new Set(supportOnlyGroups);
-  const collapsed: PlannedCommit[] = [];
-  let insertedSupportRollup = false;
-
-  for (const group of groups) {
-    if (!supportGroupSet.has(group)) {
-      collapsed.push(group);
-      continue;
-    }
-
-    if (!insertedSupportRollup) {
-      collapsed.push({
-        files: mergedSupportFiles,
-        message: mergedMessage,
-      });
-      insertedSupportRollup = true;
-    }
-  }
-
-  return insertedSupportRollup ? collapsed : groups;
 }
 
-function isSupportOnlyGroup(group: PlannedCommit): boolean {
-  return (
-    group.files.length > 0 &&
-    group.files.every((file) => {
-      const category = categorizeFile(file.path);
-      return (
-        category === "config/build" ||
-        category === "script" ||
-        category === "test"
-      );
-    })
-  );
-}
-
-async function mergeAdjacentAffinitySupportGroups(
+function getCoverageKeys(
   groups: PlannedCommit[],
-): Promise<PlannedCommit[]> {
-  const merged: PlannedCommit[] = [];
-  let pendingCluster: PlannedCommit[] = [];
-
-  const flushPendingCluster = async (): Promise<void> => {
-    if (pendingCluster.length === 0) {
-      return;
-    }
-    if (pendingCluster.length === 1) {
-      merged.push(pendingCluster[0]);
-      pendingCluster = [];
-      return;
-    }
-
-    merged.push({
-      files: mergePlannedFiles(pendingCluster.flatMap((group) => group.files)),
-      message: await mergePlannedCommitMessages(
-        pendingCluster.map((group) => group.message),
-      ),
-    });
-    pendingCluster = [];
-  };
+  fileByPath: Map<string, FileDiff>,
+): string[] {
+  const keys: string[] = [];
 
   for (const group of groups) {
-    if (pendingCluster.length === 0) {
-      pendingCluster = [group];
-      continue;
-    }
+    for (const fileRef of group.files) {
+      const file = fileByPath.get(fileRef.path);
+      if (!file) {
+        throw new ValidationError(
+          `Missing file for coverage check: ${fileRef.path}`,
+        );
+      }
 
-    if (shouldMergeAdjacentSupportGroups(pendingCluster, group)) {
-      pendingCluster.push(group);
-      continue;
-    }
+      if (fileRef.hunks && fileRef.hunks.length > 0) {
+        keys.push(
+          ...fileRef.hunks.map((hunk) => `${fileRef.path}#${String(hunk)}`),
+        );
+        continue;
+      }
 
-    await flushPendingCluster();
-    pendingCluster = [group];
+      if (file.hunks.length === 0) {
+        keys.push(`${fileRef.path}#file`);
+        continue;
+      }
+
+      for (let index = 0; index < file.hunks.length; index++) {
+        keys.push(`${fileRef.path}#${String(index)}`);
+      }
+    }
   }
 
-  await flushPendingCluster();
-  return merged;
+  keys.sort();
+  return keys;
 }
 
-async function mergePlannedCommitMessages(messages: string[]): Promise<string> {
-  if (messages.length === 1) {
-    return messages[0];
-  }
-
-  const sys = buildSystemPrompt();
-  const usr = buildMergePrompt(messages, {
-    additions: 0,
-    chunks: messages.length,
-    deletions: 0,
-    filesChanged: messages.length,
-  });
-  return complete(sys, usr);
-}
-
-function mergePlannedFiles(files: PlannedCommitFile[]): PlannedCommitFile[] {
-  const mergedByPath = new Map<string, PlannedCommitFile>();
-  const order: string[] = [];
-
-  for (const file of files) {
-    const existing = mergedByPath.get(file.path);
-    if (!existing) {
-      mergedByPath.set(file.path, clonePlannedFile(file));
-      order.push(file.path);
-      continue;
-    }
-
-    if (!existing.hunks || existing.hunks.length === 0) {
-      continue;
-    }
-    if (!file.hunks || file.hunks.length === 0) {
-      mergedByPath.set(file.path, { path: file.path });
-      continue;
-    }
-
-    const mergedHunks = Array.from(
-      new Set([...existing.hunks, ...file.hunks]),
-    ).sort((left, right) => left - right);
-    mergedByPath.set(file.path, { hunks: mergedHunks, path: file.path });
-  }
-
-  return order.map((path) => {
-    const file = mergedByPath.get(path);
-    if (!file) {
-      throw new ValidationError(`Missing merged planned file entry: ${path}`);
-    }
-    return file;
-  });
-}
-
-function shouldMergeAdjacentSupportGroups(
-  cluster: PlannedCommit[],
-  right: PlannedCommit,
+function hasMatchingCoverage(
+  before: PlannedCommit[],
+  after: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
 ): boolean {
-  if (
-    cluster.length === 0 ||
-    cluster.some((group) => !isSupportOnlyGroup(group)) ||
-    !isSupportOnlyGroup(right)
-  ) {
+  const beforeKeys = getCoverageKeys(before, fileByPath);
+  const afterKeys = getCoverageKeys(after, fileByPath);
+
+  if (beforeKeys.length !== afterKeys.length) {
     return false;
   }
 
-  const clusterAffinityKeys = new Set(
-    cluster.flatMap((group) =>
-      group.files.map((file) => getPlanningAffinityKey(file.path)),
-    ),
-  );
-  return right.files.some((file) =>
-    clusterAffinityKeys.has(getPlanningAffinityKey(file.path)),
-  );
+  for (let index = 0; index < beforeKeys.length; index++) {
+    if (beforeKeys[index] !== afterKeys[index]) {
+      return false;
+    }
+  }
+
+  return new Set(afterKeys).size === afterKeys.length;
 }
