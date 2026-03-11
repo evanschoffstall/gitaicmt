@@ -1,6 +1,11 @@
-import { beforeEach, describe, expect, test } from "bun:test";
 import { resetConfigCache } from "../src/config.js";
-import type { DiffChunk, DiffHunk, DiffStats, FileDiff } from "../src/diff.js";
+
+const { beforeEach, describe, expect, test } = await import("bun:test");
+
+type DiffChunk = import("../src/diff.js").DiffChunk;
+type DiffHunk = import("../src/diff.js").DiffHunk;
+type DiffStats = import("../src/diff.js").DiffStats;
+type FileDiff = import("../src/diff.js").FileDiff;
 
 // ═══════════════════════════════════════════════════════════════
 // Mock OpenAI — we don't call the real API in tests
@@ -17,16 +22,7 @@ beforeEach(() => {
 
 // Helper fixtures
 function makeChunk(id: number, files: string[], content: string): DiffChunk {
-  return { id, files, content, lineCount: content.split("\n").length };
-}
-
-function makeStats(
-  filesChanged: number,
-  additions: number,
-  deletions: number,
-  chunks: number,
-): DiffStats {
-  return { filesChanged, additions, deletions, chunks };
+  return { content, files, id, lineCount: content.split("\n").length };
 }
 
 function makeFileDiff(
@@ -38,22 +34,31 @@ function makeFileDiff(
   for (let i = 0; i < additions; i++) lines.push(`+added line ${i}`);
   for (let i = 0; i < deletions; i++) lines.push(`-removed line ${i}`);
   return {
-    path,
-    oldPath: null,
-    status: "modified",
-    hunks: [
-      {
-        header: `@@ -1,${deletions} +1,${additions} @@`,
-        startOld: 1,
-        countOld: deletions,
-        startNew: 1,
-        countNew: additions,
-        lines,
-      },
-    ],
     additions,
     deletions,
+    hunks: [
+      {
+        countNew: additions,
+        countOld: deletions,
+        header: `@@ -1,${deletions} +1,${additions} @@`,
+        lines,
+        startNew: 1,
+        startOld: 1,
+      },
+    ],
+    oldPath: null,
+    path,
+    status: "modified",
   };
+}
+
+function makeStats(
+  filesChanged: number,
+  additions: number,
+  deletions: number,
+  chunks: number,
+): DiffStats {
+  return { additions, chunks, deletions, filesChanged };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -206,25 +211,25 @@ describe("ai module - helper validation", () => {
 
 function makeMultiHunkFileDiff(
   path: string,
-  hunks: Array<{ header: string; lines: string[] }>,
+  hunks: { header: string; lines: string[] }[],
 ): FileDiff {
   const hunkObjs: DiffHunk[] = hunks.map((h) => ({
-    header: h.header,
-    startOld: 1,
-    countOld: h.lines.filter((l) => l.startsWith("-")).length,
-    startNew: 1,
     countNew: h.lines.filter((l) => l.startsWith("+")).length,
+    countOld: h.lines.filter((l) => l.startsWith("-")).length,
+    header: h.header,
     lines: h.lines,
+    startNew: 1,
+    startOld: 1,
   }));
   const additions = hunkObjs.reduce((s, h) => s + h.countNew, 0);
   const deletions = hunkObjs.reduce((s, h) => s + h.countOld, 0);
   return {
-    path,
-    oldPath: null,
-    status: "modified",
-    hunks: hunkObjs,
     additions,
     deletions,
+    hunks: hunkObjs,
+    oldPath: null,
+    path,
+    status: "modified",
   };
 }
 
@@ -426,13 +431,13 @@ describe("planCommits - cross-file hunk validation", () => {
     const mockAIResponse = JSON.stringify([
       {
         files: [
-          { path: "src/errors.ts", hunks: [0] },
-          { path: "src/parser.ts", hunks: [0, 1] },
+          { hunks: [0], path: "src/errors.ts" },
+          { hunks: [0, 1], path: "src/parser.ts" },
         ],
         message: "feat(parser): add ParseError and integrate into parser",
       },
       {
-        files: [{ path: "src/errors.ts", hunks: [1] }],
+        files: [{ hunks: [1], path: "src/errors.ts" }],
         message: "style(errors): clean up whitespace",
       },
     ]);
@@ -458,10 +463,10 @@ describe("planCommits - cross-file hunk validation", () => {
     }
 
     // Additionally, validate that the mock response JSON matches PlannedCommit schema
-    const parsed = JSON.parse(mockAIResponse) as Array<{
-      files: Array<{ path: string; hunks?: number[] }>;
+    const parsed = JSON.parse(mockAIResponse) as {
+      files: { hunks?: number[]; path: string }[];
       message: string;
-    }>;
+    }[];
     expect(parsed).toHaveLength(2);
     // Commit 1: cross-file hunk wiring
     expect(parsed[0].files).toHaveLength(2);
