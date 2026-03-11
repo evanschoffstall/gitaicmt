@@ -616,7 +616,7 @@ describe("ai coverage", () => {
     expect(userPrompt).toContain("package.json");
   });
 
-  test("planCommits merges adjacent support groups that share a planning stem", async () => {
+  test("planCommits consolidates adjacent related groups", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("adjacent-support"), model: "gpt-4o-mini" },
     });
@@ -683,7 +683,7 @@ describe("ai coverage", () => {
     ]);
   });
 
-  test("planCommits finalizes support regrouping after batching", async () => {
+  test("planCommits finalizes regrouping after batching", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("batched-support"), model: "gpt-4o-mini" },
     });
@@ -747,7 +747,50 @@ describe("ai coverage", () => {
           choices: [
             {
               message: {
-                content: "chore(tooling): add quality workflow foundation",
+                content: JSON.stringify([
+                  {
+                    files: firstBatchFiles.map((file) => ({ path: file.path })),
+                    message: "chore(tooling): add batch-one quality configs",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: secondBatchFiles.map((file) => ({
+                      path: file.path,
+                    })),
+                    message: "chore(tooling): add batch-two reporting configs",
+                  },
+                  {
+                    files: [{ path: "logo.svg" }],
+                    message: "style(branding): refresh logo artwork",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: configFiles.map((file) => ({ path: file.path })),
+                    message: "chore(tooling): add quality workflow foundation",
+                  },
+                  {
+                    files: [{ path: "logo.svg" }],
+                    message: "style(branding): refresh logo artwork",
+                  },
+                ]),
               },
             },
           ],
@@ -758,7 +801,7 @@ describe("ai coverage", () => {
 
     const result = await ai.planCommits(files, formatFileDiff);
 
-    expect(calls.chat).toHaveLength(3);
+    expect(calls.chat).toHaveLength(5);
     expect(result).toHaveLength(2);
     expect(result[0]?.message).toBe(
       "chore(tooling): add quality workflow foundation",
@@ -768,9 +811,19 @@ describe("ai coverage", () => {
       files: [{ path: "logo.svg" }],
       message: "style(branding): refresh logo artwork",
     });
+
+    const firstBatchPayload = calls.chat[0]?.payload as {
+      messages?: { content?: string; role?: string }[];
+    };
+    const firstBatchPrompt = firstBatchPayload.messages?.find(
+      (message) => message.role === "user",
+    )?.content;
+    expect(firstBatchPrompt).toContain("Overall changeset context:");
+    expect(firstBatchPrompt).toContain("overall 29-file changeset");
+    expect(firstBatchPrompt).toContain("logo.svg");
   });
 
-  test("planCommits dynamically collapses fragmented support-only groups", async () => {
+  test("planCommits lets AI consolidate fragmented related groups", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("workflow-rollup"), model: "gpt-4o-mini" },
     });

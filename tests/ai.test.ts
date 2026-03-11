@@ -385,7 +385,7 @@ describe("grouping user prompt", () => {
     expect(diffSection).toContain("[Hunk 1]");
   });
 
-  test("includes file categories for context", async () => {
+  test("lists files in the prompt without heuristic categories", async () => {
     const { buildGroupingUserPrompt } = await import("../src/ai.js");
     const srcFile = makeMultiHunkFileDiff("src/app.ts", [
       { header: "@@ -1,1 +1,2 @@", lines: ["+const x = 1;"] },
@@ -394,8 +394,31 @@ describe("grouping user prompt", () => {
       { header: "@@ -1,1 +1,3 @@", lines: ["+it('works', () => {})"] },
     ]);
     const prompt = buildGroupingUserPrompt([srcFile, testFile], formatFn);
-    expect(prompt).toContain("source");
-    expect(prompt).toContain("test");
+    expect(prompt).toContain("Files in this prompt:");
+    expect(prompt).toContain("src/app.ts");
+    expect(prompt).toContain("tests/app.test.ts");
+    expect(prompt).not.toContain("File categories (for context):");
+  });
+
+  test("includes overall changeset context for batched prompts", async () => {
+    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const batchFile = makeFileDiff("src/app.ts", 1, 0);
+    const siblingFile = makeFileDiff("tests/app.test.ts", 1, 0);
+    const rootFile = makeFileDiff("package.json", 1, 0);
+    const formatFn = (file: FileDiff) =>
+      `--- ${file.path}\n+++ ${file.path}\n${file.hunks[0].lines.join("\n")}`;
+
+    const prompt = buildGroupingUserPrompt([batchFile], formatFn, {
+      allFiles: [batchFile, siblingFile, rootFile],
+      batchCount: 2,
+      batchIndex: 1,
+    });
+
+    expect(prompt).toContain("Overall changeset context:");
+    expect(prompt).toContain("batch 2 of 2");
+    expect(prompt).toContain("overall 3-file changeset");
+    expect(prompt).toContain("tests/app.test.ts");
+    expect(prompt).toContain("package.json");
   });
 });
 
