@@ -29,6 +29,11 @@ function cloneDefaults() {
   return JSON.parse(JSON.stringify(DEFAULTS)) as typeof DEFAULTS;
 }
 
+function commitMessage(subject: string, ...bullets: string[]): string {
+  const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
+  return [subject, "", ...body].join("\n");
+}
+
 function deepMerge(
   base: Record<string, unknown>,
   override: Record<string, unknown>,
@@ -142,11 +147,6 @@ function makeStats(): DiffStats {
 
 function validApiKey(tag: string): string {
   return `sk-${tag}-key-for-testing-1234567890`;
-}
-
-function commitMessage(subject: string, ...bullets: string[]): string {
-  const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
-  return [subject, "", ...body].join("\n");
 }
 
 function writeLocalConfig(override: Record<string, unknown> = {}) {
@@ -327,6 +327,22 @@ describe("ai coverage", () => {
     await expect(
       ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+empty")),
     ).rejects.toBeInstanceOf(OpenAIError);
+  });
+
+  test("generateForChunk rejects subject-only commit messages", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("subject-only"), model: "gpt-4o-mini" },
+    });
+    installOpenAiMock({
+      chatQueue: [
+        { choices: [{ message: { content: "feat(ai): missing body" } }] },
+      ],
+    });
+    const ai = await importFreshAi("subject-only");
+
+    await expect(
+      ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+body required")),
+    ).rejects.toBeInstanceOf(ValidationError);
   });
 
   test("client validation rejects missing API keys", async () => {

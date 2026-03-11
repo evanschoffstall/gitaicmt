@@ -20,6 +20,11 @@ function cleanupDir(dir: string) {
   rmSync(dir, { force: true, recursive: true });
 }
 
+function commitMessage(subject: string, ...bullets: string[]): string {
+  const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
+  return [subject, "", ...body].join("\n");
+}
+
 function makeGitDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "gitaicmt-git-"));
   execSync(
@@ -84,8 +89,20 @@ describe("git coverage", () => {
 
     try {
       expect(() =>
-        commitWithMessage("feat(core): nothing staged", dir),
+        commitWithMessage(commitMessage("feat(core): nothing staged"), dir),
       ).toThrow(GitCommandError);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("commitWithMessage rejects subject-only messages", () => {
+    const dir = makeGitDir();
+
+    try {
+      expect(() => commitWithMessage("feat(core): missing body", dir)).toThrow(
+        GitCommandError,
+      );
     } finally {
       cleanupDir(dir);
     }

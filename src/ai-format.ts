@@ -70,9 +70,7 @@ export function validateCommitMessage(message: string): string {
       continue;
     }
 
-    throw new ValidationError(
-      "Commit message body must use bullet points",
-    );
+    throw new ValidationError("Commit message body must use bullet points");
   }
 
   if (bulletCount === 0) {
