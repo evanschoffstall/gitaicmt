@@ -20,6 +20,11 @@ beforeEach(() => {
   process.env["OPENAI_API_KEY"] = "sk-test-key-for-testing";
 });
 
+function commitMessage(subject: string, ...bullets: string[]): string {
+  const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
+  return [subject, "", ...body].join("\n");
+}
+
 // Helper fixtures
 function makeChunk(id: number, files: string[], content: string): DiffChunk {
   return { content, files, id, lineCount: content.split("\n").length };
@@ -91,7 +96,12 @@ describe("ai module", () => {
       const { generateForChunks } = await import("../src/ai.js");
       const stats = makeStats(0, 0, 0, 0);
       const result = await generateForChunks([], stats);
-      expect(result).toBe("chore: empty commit");
+      expect(result).toBe(
+        commitMessage(
+          "chore: empty commit",
+          "- No staged changes were provided to summarize.",
+        ),
+      );
     });
   });
 

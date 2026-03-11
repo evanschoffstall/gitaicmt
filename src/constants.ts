@@ -113,6 +113,6 @@ export const DIFF_CONTEXT_LINES = 3;
 
 /** Default commit message for empty diffs */
 export const DEFAULT_EMPTY_COMMIT_MESSAGE =
-	"chore: empty commit\n\n- No staged changes were provided to summarize.";
+  "chore: empty commit\n\n- No staged changes were provided to summarize.";
 
 /** Reason: Conventional Commits format for edge case handling */
