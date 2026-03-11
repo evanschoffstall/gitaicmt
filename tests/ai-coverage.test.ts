@@ -693,7 +693,21 @@ describe("ai coverage", () => {
           choices: [
             {
               message: {
-                content: "chore(tooling): add bun check workflow",
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { hunks: [0], path: "eslint.config.js" },
+                      { hunks: [0, 1], path: "package.json" },
+                      { hunks: [0], path: "scripts/check.json" },
+                      { path: "scripts/check.ts" },
+                    ],
+                    message: "chore(tooling): add bun check workflow",
+                  },
+                  {
+                    files: [{ path: "logo.svg" }],
+                    message: "style(branding): refresh logo artwork",
+                  },
+                ]),
               },
             },
           ],
@@ -935,7 +949,7 @@ describe("ai coverage", () => {
         message: "style(branding): refresh logo artwork",
       },
     ];
-    installOpenAiMock({
+    const calls = installOpenAiMock({
       chatQueue: [
         {
           choices: [
@@ -946,17 +960,32 @@ describe("ai coverage", () => {
           choices: [
             {
               message: {
-                content:
-                  "chore(tooling): add workflow foundation for quality checks",
-              },
-            },
-          ],
-        },
-        {
-          choices: [
-            {
-              message: {
-                content: "chore(tooling): add quality and validation workflow",
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: ".gitleaks.toml" },
+                      { path: ".secretlintrc" },
+                      { hunks: [0], path: ".gitignore" },
+                      { hunks: [0], path: ".jscpd.json" },
+                      { path: "bun.lock" },
+                      { hunks: [0], path: "eslint.config.js" },
+                      { hunks: [0, 1], path: "package.json" },
+                      { hunks: [0], path: "scripts/check.json" },
+                      { path: "scripts/check.ts" },
+                      { path: "tests/ai-coverage.test.ts" },
+                      { path: "tests/git-coverage.test.ts" },
+                      { path: "tests/tsconfig.json" },
+                      { path: "knip.json" },
+                      { path: ".husky/pre-commit" },
+                    ],
+                    message:
+                      "chore(tooling): add quality and validation workflow",
+                  },
+                  {
+                    files: [{ path: "logo.svg" }],
+                    message: "style(branding): refresh logo artwork",
+                  },
+                ]),
               },
             },
           ],
@@ -967,6 +996,7 @@ describe("ai coverage", () => {
 
     const result = await ai.planCommits(files, formatFileDiff);
 
+    expect(calls.chat).toHaveLength(2);
     expect(result).toHaveLength(2);
     expect(result[0]?.message).toBe(
       "chore(tooling): add quality and validation workflow",
@@ -993,5 +1023,122 @@ describe("ai coverage", () => {
       files: [{ path: "logo.svg" }],
       message: "style(branding): refresh logo artwork",
     });
+  });
+
+  test("planCommits merges adjacent cosmetic groups in the same structural area", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("cosmetic-area-merge"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const files = [
+      makeFile("src/app/dashboard/components/Background.tsx"),
+      makeFile("src/app/dashboard/components/DashboardTopHeaderBar.tsx"),
+      makeFile("src/app/dashboard/components/settings/SettingsModal.tsx"),
+      makeFile("src/app/dashboard/hooks/useFeedLoader.ts"),
+      makeFile("src/app/dashboard/services/dashboard-view-model.ts"),
+      makeFile("src/lib/auth/session.ts"),
+    ];
+    const grouping = [
+      {
+        files: [
+          { path: "src/app/dashboard/components/Background.tsx" },
+          { path: "src/app/dashboard/components/DashboardTopHeaderBar.tsx" },
+        ],
+        message: "style(dashboard): normalize prop and attribute ordering",
+      },
+      {
+        files: [
+          { path: "src/app/dashboard/components/settings/SettingsModal.tsx" },
+        ],
+        message:
+          "style(settings): normalize prop ordering and JSX attribute layout",
+      },
+      {
+        files: [{ path: "src/app/dashboard/hooks/useFeedLoader.ts" }],
+        message:
+          "style(dashboard-hooks): normalize hook type and object formatting\n\n- Keep behavior unchanged while improving readability.",
+      },
+      {
+        files: [{ path: "src/app/dashboard/services/dashboard-view-model.ts" }],
+        message:
+          "refactor(dashboard): reorganize helper layout without changing behavior",
+      },
+      {
+        files: [{ path: "src/lib/auth/session.ts" }],
+        message: "refactor(auth): extract session cache invalidation",
+      },
+    ];
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [{ message: { content: JSON.stringify(grouping) } }],
+        },
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/app/dashboard/components/Background.tsx" },
+                      {
+                        path: "src/app/dashboard/components/DashboardTopHeaderBar.tsx",
+                      },
+                      {
+                        path: "src/app/dashboard/components/settings/SettingsModal.tsx",
+                      },
+                      { path: "src/app/dashboard/hooks/useFeedLoader.ts" },
+                    ],
+                    message:
+                      "style(dashboard): normalize dashboard formatting and layout",
+                  },
+                  {
+                    files: [
+                      {
+                        path: "src/app/dashboard/services/dashboard-view-model.ts",
+                      },
+                    ],
+                    message:
+                      "refactor(dashboard): reorganize helper layout without changing behavior",
+                  },
+                  {
+                    files: [{ path: "src/lib/auth/session.ts" }],
+                    message:
+                      "refactor(auth): extract session cache invalidation",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const ai = await importFreshAi("cosmetic-area-merge");
+
+    const result = await ai.planCommits(files, formatFileDiff);
+
+    expect(calls.chat).toHaveLength(2);
+    expect(result).toEqual([
+      {
+        files: [
+          { path: "src/app/dashboard/components/Background.tsx" },
+          { path: "src/app/dashboard/components/DashboardTopHeaderBar.tsx" },
+          { path: "src/app/dashboard/components/settings/SettingsModal.tsx" },
+          { path: "src/app/dashboard/hooks/useFeedLoader.ts" },
+        ],
+        message: "style(dashboard): normalize dashboard formatting and layout",
+      },
+      {
+        files: [{ path: "src/app/dashboard/services/dashboard-view-model.ts" }],
+        message:
+          "refactor(dashboard): reorganize helper layout without changing behavior",
+      },
+      {
+        files: [{ path: "src/lib/auth/session.ts" }],
+        message: "refactor(auth): extract session cache invalidation",
+      },
+    ]);
   });
 });
