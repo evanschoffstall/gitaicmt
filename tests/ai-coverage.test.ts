@@ -144,6 +144,11 @@ function validApiKey(tag: string): string {
   return `sk-${tag}-key-for-testing-1234567890`;
 }
 
+function commitMessage(subject: string, ...bullets: string[]): string {
+  const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
+  return [subject, "", ...body].join("\n");
+}
+
 function writeLocalConfig(override: Record<string, unknown> = {}) {
   const config = deepMerge(
     cloneDefaults() as unknown as Record<string, unknown>,
@@ -198,19 +203,35 @@ describe("ai coverage", () => {
     });
     const calls = installOpenAiMock({
       chatQueue: [
-        { choices: [{ message: { content: "feat(core): add cache" } }] },
-        { choices: [{ message: { content: "feat(core): refresh cache" } }] },
+        {
+          choices: [
+            { message: { content: commitMessage("feat(core): add cache") } },
+          ],
+        },
+        {
+          choices: [
+            {
+              message: { content: commitMessage("feat(core): refresh cache") },
+            },
+          ],
+        },
       ],
     });
     const ai = await importFreshAi("cache");
     const chunk = makeChunk(1, ["src/cache.ts"], "+cache hit");
 
     setSystemTime(0);
-    expect(await ai.generateForChunk(chunk)).toBe("feat(core): add cache");
-    expect(await ai.generateForChunk(chunk)).toBe("feat(core): add cache");
+    expect(await ai.generateForChunk(chunk)).toBe(
+      commitMessage("feat(core): add cache"),
+    );
+    expect(await ai.generateForChunk(chunk)).toBe(
+      commitMessage("feat(core): add cache"),
+    );
 
     setSystemTime(2_000);
-    expect(await ai.generateForChunk(chunk)).toBe("feat(core): refresh cache");
+    expect(await ai.generateForChunk(chunk)).toBe(
+      commitMessage("feat(core): refresh cache"),
+    );
     expect(calls.chat).toHaveLength(2);
   });
 
@@ -221,9 +242,21 @@ describe("ai coverage", () => {
     });
     const calls = installOpenAiMock({
       chatQueue: [
-        { choices: [{ message: { content: "feat(core): part one" } }] },
-        { choices: [{ message: { content: "feat(core): part two" } }] },
-        { choices: [{ message: { content: "feat(core): merged" } }] },
+        {
+          choices: [
+            { message: { content: commitMessage("feat(core): part one") } },
+          ],
+        },
+        {
+          choices: [
+            { message: { content: commitMessage("feat(core): part two") } },
+          ],
+        },
+        {
+          choices: [
+            { message: { content: commitMessage("feat(core): merged") } },
+          ],
+        },
       ],
     });
     const ai = await importFreshAi("sequential");
@@ -233,7 +266,7 @@ describe("ai coverage", () => {
       makeStats(),
     );
 
-    expect(result).toBe("feat(core): merged");
+    expect(result).toBe(commitMessage("feat(core): merged"));
     expect(calls.chat).toHaveLength(3);
   });
 
@@ -245,7 +278,9 @@ describe("ai coverage", () => {
       chatQueue: [
         new Error("Model is not supported in the v1/chat/completions API"),
       ],
-      responseQueue: [{ output_text: "fix(ai): use responses fallback" }],
+      responseQueue: [
+        { output_text: commitMessage("fix(ai): use responses fallback") },
+      ],
     });
     const ai = await importFreshAi("responses-fallback");
 
@@ -253,7 +288,7 @@ describe("ai coverage", () => {
       makeChunk(1, ["src/ai.ts"], "+fallback"),
     );
 
-    expect(result).toBe("fix(ai): use responses fallback");
+    expect(result).toBe(commitMessage("fix(ai): use responses fallback"));
     expect(calls.chat).toHaveLength(1);
     expect(calls.responses).toHaveLength(1);
     const chatPayload = calls.chat[0]?.payload as Record<string, unknown>;
@@ -364,7 +399,11 @@ describe("ai coverage", () => {
     });
     const calls = installOpenAiMock({
       chatQueue: [
-        { choices: [{ message: { content: "feat(app): update app" } }] },
+        {
+          choices: [
+            { message: { content: commitMessage("feat(app): update app") } },
+          ],
+        },
       ],
     });
     const ai = await importFreshAi("single-file");
@@ -374,6 +413,10 @@ describe("ai coverage", () => {
 
     expect(result).toEqual([
       { files: [{ path: "src/app.ts" }], message: "feat(app): update app" },
+      {
+        files: [{ path: "src/app.ts" }],
+        message: commitMessage("feat(app): update app"),
+      },
     ]);
     expect(calls.chat).toHaveLength(1);
   });
@@ -394,7 +437,9 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [{ path: "src/huge.ts" }],
-                    message: "refactor(huge): regroup oversized file",
+                    message: commitMessage(
+                      "refactor(huge): regroup oversized file",
+                    ),
                   },
                 ]),
               },
@@ -412,7 +457,7 @@ describe("ai coverage", () => {
     expect(result).toEqual([
       {
         files: [{ path: "src/huge.ts" }],
-        message: "refactor(huge): regroup oversized file",
+        message: commitMessage("refactor(huge): regroup oversized file"),
       },
     ]);
   });
@@ -520,7 +565,11 @@ describe("ai coverage", () => {
       chatQueue: [
         { choices: [{ message: { content: "```json\nnot valid json\n```" } }] },
         {
-          choices: [{ message: { content: "chore(core): fallback grouping" } }],
+          choices: [
+            {
+              message: { content: commitMessage("chore(core): fallback grouping") },
+            },
+          ],
         },
       ],
     });
@@ -532,7 +581,7 @@ describe("ai coverage", () => {
     expect(result).toEqual([
       {
         files: [{ path: "src/a.ts" }, { path: "src/b.ts" }],
-        message: "chore(core): fallback grouping",
+        message: commitMessage("chore(core): fallback grouping"),
       },
     ]);
   });
@@ -548,7 +597,13 @@ describe("ai coverage", () => {
     installOpenAiMock({
       chatQueue: [
         { choices: [{ message: { content: JSON.stringify(tooManyGroups) } }] },
-        { choices: [{ message: { content: "chore(core): collapse groups" } }] },
+        {
+          choices: [
+            {
+              message: { content: commitMessage("chore(core): collapse groups") },
+            },
+          ],
+        },
       ],
     });
     const ai = await importFreshAi("too-many-groups");
@@ -561,7 +616,7 @@ describe("ai coverage", () => {
     expect(result).toEqual([
       {
         files: [{ path: "src/a.ts" }],
-        message: "chore(core): collapse groups",
+        message: commitMessage("chore(core): collapse groups"),
       },
     ]);
   });
