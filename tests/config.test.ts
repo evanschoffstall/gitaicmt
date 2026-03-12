@@ -64,7 +64,8 @@ describe("config", () => {
       expect(cfg.analysis.chunkSize).toBe(800);
       expect(cfg.analysis.groupByFile).toBe(true);
       expect(cfg.analysis.groupByHunk).toBe(true);
-      expect(cfg.analysis.tokenWarningThreshold).toBe(4000);
+      expect(cfg.analysis.promptOnTokenWarning).toBe(true);
+      expect(cfg.analysis.tokenWarningThreshold).toBe(10000);
 
       expect(cfg.commit.conventional).toBe(true);
       expect(cfg.commit.maxSubjectLength).toBe(72);
@@ -97,7 +98,8 @@ describe("config", () => {
       expect(cfg.openai.model).toBe("gpt-4o");
       expect(cfg.openai.apiKey).toBe("sk-test123");
       expect(cfg.commit.language).toBe("ja");
-      expect(cfg.analysis.tokenWarningThreshold).toBe(4000);
+      expect(cfg.analysis.promptOnTokenWarning).toBe(true);
+      expect(cfg.analysis.tokenWarningThreshold).toBe(10000);
       // Non-overridden values should remain default
       expect(cfg.openai.maxTokens).toBe(512);
       expect(cfg.commit.conventional).toBe(true);
@@ -159,6 +161,20 @@ describe("config", () => {
       expect(cfg.openai.model).toBe("gpt-4o-mini");
       expect(cfg.openai.maxTokens).toBe(512);
       expect(cfg.analysis.groupByFile).toBe(true);
+
+      rmSync(dir, { recursive: true });
+    });
+
+    test("loads promptOnTokenWarning override", () => {
+      const dir = makeTmpDir();
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ analysis: { promptOnTokenWarning: false } }),
+      );
+      const cfg = loadConfig(dir);
+
+      expect(cfg.analysis.promptOnTokenWarning).toBe(false);
+      expect(cfg.analysis.tokenWarningThreshold).toBe(10000);
 
       rmSync(dir, { recursive: true });
     });

@@ -109,6 +109,7 @@ describe("CLI", () => {
 
       const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
       expect(cfg.openai.model).toBe("gpt-4o-mini");
+      expect(cfg.analysis.promptOnTokenWarning).toBe(true);
 
       rmSync(dir, { recursive: true });
     });

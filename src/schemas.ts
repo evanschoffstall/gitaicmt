@@ -39,6 +39,11 @@ const AnalysisSettingsSchema = z.object({
     .min(100, "maxDiffLines must be at least 100")
     .max(1000000, "maxDiffLines cannot exceed 1000000")
     .describe("Maximum diff lines to process"),
+  promptOnTokenWarning: z
+    .boolean()
+    .describe(
+      "Prompt for confirmation before AI calls when estimated token usage reaches the warning threshold",
+    ),
   tokenWarningThreshold: z
     .number()
     .int()
