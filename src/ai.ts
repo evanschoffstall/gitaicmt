@@ -33,13 +33,13 @@ type DiffChunk = import("./diff.js").DiffChunk;
 type DiffStats = import("./diff.js").DiffStats;
 type FileDiff = import("./diff.js").FileDiff;
 
-export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
+export type { TokenEstimateSummary } from "./ai-tokens.js";
 export {
   estimateGenerateOperationTokens,
   estimatePlanOperationTokens,
 } from "./ai-tokens.js";
+export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
 export type { PlannedCommit, PlannedCommitFile };
-export type { TokenEstimateSummary } from "./ai-tokens.js";
 
 export async function generateForChunk(
   chunk: DiffChunk,
