@@ -67,7 +67,7 @@ Or add it to `gitaicmt.config.json`:
 gitaicmt init
 ```
 
-Token usage is estimated before AI calls. The warning threshold is controlled by `analysis.tokenWarningThreshold`, defaults to `4000`, and can be set to `0` to disable the warning.
+Token usage is estimated before AI calls. When the estimate crosses `analysis.tokenWarningThreshold` (default `10000`), gitaicmt warns and asks for confirmation by default. Set `analysis.promptOnTokenWarning` to `false` to disable the prompt, set `analysis.tokenWarningThreshold` to `0` to disable the warning entirely, or pass `--no-token-check` to bypass the prompt for one run.
 
 ### 3 · Commit
 
@@ -84,12 +84,18 @@ That's it. Changes are auto-detected, analyzed, split into logical groups, and c
 | Command           | Alias | Description                                        |
 | ----------------- | ----- | -------------------------------------------------- |
 | `gitaicmt`        | `c`   | Auto-detect, split & commit (shows plan, asks y/n) |
-| `gitaicmt -y`     |       | Same as above, skip confirmation                   |
 | `gitaicmt plan`   | `p`   | Preview planned commit groups without committing   |
 | `gitaicmt single` | `s`   | One commit message for all changes                 |
 | `gitaicmt gen`    | `g`   | Generate message to stdout (for piping)            |
 | `gitaicmt init`   |       | Create default `gitaicmt.config.json`              |
 | `gitaicmt help`   | `-h`  | Show help                                          |
+
+## Flags
+
+| Flag               | Description                                         |
+| ------------------ | --------------------------------------------------- |
+| `-y`, `--yes`      | Skip confirmation prompts                           |
+| `--no-token-check` | Skip the high-token confirmation prompt for one run |
 
 > Changes are auto-staged if nothing is manually staged.
 

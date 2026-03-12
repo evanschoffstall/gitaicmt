@@ -2,6 +2,7 @@
 
 import { createInterface } from "node:readline";
 
+import { getTokenUsageSummary, resetTokenUsageSummary } from "./ai-client.js";
 import {
   estimateGenerateOperationTokens,
   estimatePlanOperationTokens,
@@ -44,7 +45,11 @@ const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
 
-async function analyzeCommitPlan() {
+interface TokenCheckOptions {
+  skipPrompt: boolean;
+}
+
+async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
   const t0 = performance.now();
   ensureStaged();
 
@@ -54,10 +59,22 @@ async function analyzeCommitPlan() {
   const files = parseDiff(raw);
   const cfg = loadConfig();
   const tokenEstimate = estimatePlanOperationTokens(files, formatFileDiff, cfg);
+  const shouldPromptForTokenUsage = shouldPromptForHighTokenUsage(
+    tokenEstimate,
+    cfg,
+    tokenCheckOptions,
+  );
   log(
     `${DIM}Analyzing ${formatCount(files.length)} file(s) with ${cfg.openai.model}...${RESET}`,
   );
-  logTokenEstimate(tokenEstimate, cfg.analysis.tokenWarningThreshold);
+  logTokenEstimate(
+    tokenEstimate,
+    cfg.analysis.tokenWarningThreshold,
+    shouldPromptForTokenUsage,
+  );
+  if (!(await confirmTokenUsage(tokenEstimate, cfg, tokenCheckOptions))) {
+    return null;
+  }
 
   const groups = await planCommits(files, formatFileDiff);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
@@ -65,9 +82,18 @@ async function analyzeCommitPlan() {
 }
 
 /** Analyze, split, and execute multiple commits */
-async function cmdCommit(autoConfirm: boolean) {
+async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
   const startedAtMs = performance.now();
-  const { elapsed, files, groups } = await analyzeCommitPlan();
+  resetTokenUsageSummary();
+  const analysis = await analyzeCommitPlan({
+    skipPrompt: autoConfirm || skipTokenCheck,
+  });
+  if (!analysis) {
+    log(`${YELLOW}Aborted.${RESET}`);
+    return;
+  }
+
+  const { elapsed, files, groups } = analysis;
 
   logPlannedCommits(groups, elapsed);
 
@@ -88,6 +114,7 @@ async function cmdCommit(autoConfirm: boolean) {
 
   // Confirm before committing
   if (!autoConfirm) {
+    logActualTokenUsage(getTokenUsageSummary());
     const confirmed = await promptYesNo(
       `${BOLD}Commit ${formatCount(mergedGroups.length)} planned commit(s)?${RESET}`,
     );
@@ -181,7 +208,7 @@ async function cmdCommit(autoConfirm: boolean) {
 }
 
 /** Single commit mode — one message for everything (fully automated) */
-async function cmdCommitSingle() {
+async function cmdCommitSingle(skipTokenCheck: boolean) {
   const t0 = performance.now();
   ensureStaged();
 
@@ -194,12 +221,28 @@ async function cmdCommitSingle() {
 
   const cfg = loadConfig();
   const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
+  const shouldPromptForTokenUsage = shouldPromptForHighTokenUsage(
+    tokenEstimate,
+    cfg,
+    {
+      skipPrompt: skipTokenCheck,
+    },
+  );
   logGenerationContext(
     cfg.openai.model,
     stats,
     tokenEstimate,
     cfg.analysis.tokenWarningThreshold,
+    shouldPromptForTokenUsage,
   );
+  if (
+    !(await confirmTokenUsage(tokenEstimate, cfg, {
+      skipPrompt: skipTokenCheck,
+    }))
+  ) {
+    log(`${YELLOW}Aborted.${RESET}`);
+    return;
+  }
 
   const message = await generateForChunks(chunks, stats);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
@@ -213,7 +256,7 @@ async function cmdCommitSingle() {
 }
 
 /** Generate a single commit message (legacy / simple mode) */
-async function cmdGenerate() {
+async function cmdGenerate(skipTokenCheck: boolean) {
   const t0 = performance.now();
   ensureStaged();
 
@@ -239,13 +282,29 @@ async function cmdGenerate() {
   const chunks = chunkDiffs(files);
   const stats = getStats(files, chunks);
   const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
+  const shouldPromptForTokenUsage = shouldPromptForHighTokenUsage(
+    tokenEstimate,
+    cfg,
+    {
+      skipPrompt: skipTokenCheck,
+    },
+  );
 
   logGenerationContext(
     cfg.openai.model,
     stats,
     tokenEstimate,
     cfg.analysis.tokenWarningThreshold,
+    shouldPromptForTokenUsage,
   );
+  if (
+    !(await confirmTokenUsage(tokenEstimate, cfg, {
+      skipPrompt: skipTokenCheck,
+    }))
+  ) {
+    log(`${YELLOW}Aborted.${RESET}`);
+    return;
+  }
 
   verbose("Calling OpenAI API");
   const message = await generateForChunks(chunks, stats);
@@ -275,6 +334,7 @@ function cmdHelp() {
   log("  gitaicmt help         Show this help\n");
   log(`${CYAN}Flags:${RESET}`);
   log("  -y, --yes             Auto-confirm (skip prompts)");
+  log("  --no-token-check      Skip high-token confirmation prompts");
   log("  -v, --verbose         Show detailed operation logs");
   log("  --version             Show version information");
   log("  -h, --help            Show this help\n");
@@ -299,8 +359,14 @@ function cmdInit() {
 }
 
 /** Analyze diffs and plan multiple commits (print plan without committing) */
-async function cmdPlan() {
-  const { elapsed, files, groups } = await analyzeCommitPlan();
+async function cmdPlan(skipTokenCheck: boolean) {
+  const analysis = await analyzeCommitPlan({ skipPrompt: skipTokenCheck });
+  if (!analysis) {
+    log(`${YELLOW}Aborted.${RESET}`);
+    return;
+  }
+
+  const { elapsed, files, groups } = analysis;
 
   logPlannedCommits(groups, elapsed);
 
@@ -311,6 +377,20 @@ async function cmdPlan() {
 /** Show version information */
 function cmdVersion() {
   log(`gitaicmt v${VERSION}`);
+}
+
+async function confirmTokenUsage(
+  estimate: TokenEstimateSummary,
+  cfg: ReturnType<typeof loadConfig>,
+  options: TokenCheckOptions,
+): Promise<boolean> {
+  if (!shouldPromptForHighTokenUsage(estimate, cfg, options)) {
+    return true;
+  }
+
+  return promptYesNo(
+    `${YELLOW}${formatTokenWarning(cfg.analysis.tokenWarningThreshold)} ${BOLD}Continue?${RESET}`,
+  );
 }
 
 function die(msg: string): never {
@@ -378,6 +458,8 @@ function ensureStaged(): void {
   }
 }
 
+// -------- Commands --------
+
 /** Format a PlannedCommitFile for display */
 function formatCommitFile(
   f: PlannedCommitFile,
@@ -394,14 +476,38 @@ function formatCommitFile(
   return `${f.path} ${suffix}`;
 }
 
-// -------- Commands --------
-
 function formatCount(value: number): string {
   return String(value);
 }
 
+function formatTokenWarning(tokenWarningThreshold: number): string {
+  return `Estimated token usage exceeds threshold (${formatCount(tokenWarningThreshold)}).`;
+}
+
+function isHighTokenEstimate(
+  estimate: TokenEstimateSummary,
+  tokenWarningThreshold: number,
+): boolean {
+  return (
+    tokenWarningThreshold > 0 &&
+    (estimate.totalTokens >= tokenWarningThreshold ||
+      estimate.peakRequestTokens >= tokenWarningThreshold)
+  );
+}
+
 function log(msg: string) {
   process.stderr.write(msg + "\n");
+}
+
+function logActualTokenUsage(usage: {
+  inputTokens: number;
+  outputTokens: number;
+  requestCount: number;
+  totalTokens: number;
+}): void {
+  log(
+    `${DIM}tokens used: ${formatCount(usage.totalTokens)} total across ${formatCount(usage.requestCount)} request(s)${RESET}`,
+  );
 }
 
 function logGenerationContext(
@@ -414,13 +520,18 @@ function logGenerationContext(
   },
   tokenEstimate?: TokenEstimateSummary,
   tokenWarningThreshold?: number,
+  suppressWarning = false,
 ) {
   log(
     `${DIM}${formatCount(stats.filesChanged)} file(s), +${formatCount(stats.additions)}/-${formatCount(stats.deletions)}, ${formatCount(stats.chunks)} chunk(s)${RESET}`,
   );
   log(`${DIM}model: ${model}${RESET}`);
   if (tokenEstimate) {
-    logTokenEstimate(tokenEstimate, tokenWarningThreshold ?? 0);
+    logTokenEstimate(
+      tokenEstimate,
+      tokenWarningThreshold ?? 0,
+      suppressWarning,
+    );
   }
 }
 
@@ -438,6 +549,7 @@ function logPlannedCommits(
 function logTokenEstimate(
   estimate: TokenEstimateSummary,
   tokenWarningThreshold: number,
+  suppressWarning = false,
 ): void {
   if (estimate.requestCount === 0) {
     return;
@@ -448,19 +560,29 @@ function logTokenEstimate(
   );
 
   if (
-    tokenWarningThreshold > 0 &&
-    (estimate.totalTokens >= tokenWarningThreshold ||
-      estimate.peakRequestTokens >= tokenWarningThreshold)
+    !suppressWarning &&
+    isHighTokenEstimate(estimate, tokenWarningThreshold)
   ) {
-    log(
-      `${YELLOW}Warning: estimated token usage is high (threshold: ${formatCount(tokenWarningThreshold)}). Large diffs may hit model or account rate limits.${RESET}`,
-    );
+    log(`${YELLOW}${formatTokenWarning(tokenWarningThreshold)}${RESET}`);
   }
+}
+
+function shouldPromptForHighTokenUsage(
+  estimate: TokenEstimateSummary,
+  cfg: ReturnType<typeof loadConfig>,
+  options: TokenCheckOptions,
+): boolean {
+  return (
+    !options.skipPrompt &&
+    cfg.analysis.promptOnTokenWarning &&
+    isHighTokenEstimate(estimate, cfg.analysis.tokenWarningThreshold)
+  );
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const hasYFlag = args.includes("-y") || args.includes("--yes");
+  const hasNoTokenCheckFlag = args.includes("--no-token-check");
   const hasVerboseFlag = args.includes("-v") || args.includes("--verbose");
   const hasVersionFlag = args.includes("--version");
   // Help flags are special — treat them as commands
@@ -483,7 +605,7 @@ async function main() {
     case "":
     case "c":
     case "commit":
-      await cmdCommit(hasYFlag);
+      await cmdCommit(hasYFlag, hasNoTokenCheckFlag);
       break;
     case "--help":
     case "-h":
@@ -497,18 +619,18 @@ async function main() {
     case "g":
     case "gen":
     case "generate":
-      await cmdGenerate();
+      await cmdGenerate(hasYFlag || hasNoTokenCheckFlag);
       break;
     case "init":
       cmdInit();
       break;
     case "p":
     case "plan":
-      await cmdPlan();
+      await cmdPlan(hasYFlag || hasNoTokenCheckFlag);
       break;
     case "s":
     case "single":
-      await cmdCommitSingle();
+      await cmdCommitSingle(hasYFlag || hasNoTokenCheckFlag);
       break;
     default:
       die(`Unknown command: ${cmd}. Run 'gitaicmt help' for usage.`);
