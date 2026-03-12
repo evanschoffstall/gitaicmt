@@ -74,6 +74,12 @@ async function importFreshAi(tag: string) {
   );
 }
 
+async function importFreshAiClient(tag: string) {
+  return import(
+    new URL(`../src/ai-client.js?${tag}-${Math.random()}`, import.meta.url).href
+  );
+}
+
 function installOpenAiMock(options: {
   chatQueue?: MockResult[];
   responseQueue?: MockResult[];
@@ -196,6 +202,69 @@ afterEach(() => {
 });
 
 describe("ai coverage", () => {
+  test("complete tracks token usage from chat completions", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("usage-chat"), model: "gpt-4o-mini" },
+    });
+    installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            { message: { content: commitMessage("feat(core): track usage") } },
+          ],
+          usage: {
+            completion_tokens: 7,
+            prompt_tokens: 13,
+            total_tokens: 20,
+          },
+        },
+      ],
+    });
+
+    const aiClient = await importFreshAiClient("usage-chat");
+    aiClient.resetTokenUsageSummary();
+
+    await aiClient.complete("system", "user");
+
+    expect(aiClient.getTokenUsageSummary()).toEqual({
+      inputTokens: 13,
+      outputTokens: 7,
+      requestCount: 1,
+      totalTokens: 20,
+    });
+  });
+
+  test("complete tracks token usage from responses fallback", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("usage-responses"), model: "gpt-5" },
+    });
+    installOpenAiMock({
+      chatQueue: [new Error("This is not a chat model")],
+      responseQueue: [
+        {
+          output_text: commitMessage("feat(core): responses usage"),
+          usage: {
+            input_tokens: 21,
+            output_tokens: 9,
+            total_tokens: 30,
+          },
+        },
+      ],
+    });
+
+    const aiClient = await importFreshAiClient("usage-responses");
+    aiClient.resetTokenUsageSummary();
+
+    await aiClient.complete("system", "user");
+
+    expect(aiClient.getTokenUsageSummary()).toEqual({
+      inputTokens: 21,
+      outputTokens: 9,
+      requestCount: 1,
+      totalTokens: 30,
+    });
+  });
+
   test("generateForChunk reuses cached responses until TTL expires", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("cache"), model: "gpt-4o-mini" },

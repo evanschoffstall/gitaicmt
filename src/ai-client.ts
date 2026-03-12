@@ -6,6 +6,15 @@ import { ConfigError, OpenAIError, OpenAITimeoutError } from "./errors.js";
 let cachedClient: null | OpenAI = null;
 let lastApiKey: null | string = null;
 
+export interface TokenUsageSummary {
+  inputTokens: number;
+  outputTokens: number;
+  requestCount: number;
+  totalTokens: number;
+}
+
+let currentTokenUsage: TokenUsageSummary = emptyTokenUsageSummary();
+
 export interface CompleteOptions {
   maxTokens?: number;
   temperature?: number;
@@ -35,6 +44,7 @@ export async function complete(
 
   try {
     const res = await client().chat.completions.create(chatPayload, { signal });
+    recordTokenUsage(res);
     const content = res.choices[0]?.message?.content;
     if (typeof content === "string" && content.trim()) {
       return content.trim();
@@ -66,6 +76,8 @@ export async function complete(
         { signal },
       );
 
+      recordTokenUsage(res);
+
       const content = extractResponseText(res);
       if (!content) {
         throw new OpenAIError(
@@ -89,6 +101,14 @@ export async function complete(
       throw new OpenAIError(`OpenAI API call failed: ${String(fallbackErr)}`);
     }
   }
+}
+
+export function getTokenUsageSummary(): TokenUsageSummary {
+  return { ...currentTokenUsage };
+}
+
+export function resetTokenUsageSummary(): void {
+  currentTokenUsage = emptyTokenUsageSummary();
 }
 
 function client(): OpenAI {
@@ -138,6 +158,15 @@ function client(): OpenAI {
   return cachedClient;
 }
 
+function emptyTokenUsageSummary(): TokenUsageSummary {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    requestCount: 0,
+    totalTokens: 0,
+  };
+}
+
 function extractResponseText(raw: unknown): string {
   const asObj = raw as {
     output?: {
@@ -164,6 +193,42 @@ function extractResponseText(raw: unknown): string {
   return parts.join("\n").trim();
 }
 
+function extractTokenUsage(
+  raw: unknown,
+): null | Omit<TokenUsageSummary, "requestCount"> {
+  const withUsage = raw as {
+    usage?: {
+      completion_tokens?: unknown;
+      input_tokens?: unknown;
+      output_tokens?: unknown;
+      prompt_tokens?: unknown;
+      total_tokens?: unknown;
+    };
+  };
+
+  const usage = withUsage.usage;
+  if (!usage || typeof usage !== "object") {
+    return null;
+  }
+
+  const inputTokens =
+    readUsageNumber(usage.input_tokens ?? usage.prompt_tokens) ?? 0;
+  const outputTokens =
+    readUsageNumber(usage.output_tokens ?? usage.completion_tokens) ?? 0;
+  const totalTokens =
+    readUsageNumber(usage.total_tokens) ?? inputTokens + outputTokens;
+
+  if (inputTokens === 0 && outputTokens === 0 && totalTokens === 0) {
+    return null;
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+  };
+}
+
 function isNonChatModelError(err: unknown): boolean {
   const message =
     typeof err === "object" && err !== null && "message" in err
@@ -174,6 +239,24 @@ function isNonChatModelError(err: unknown): boolean {
     msg.includes("not a chat model") ||
     msg.includes("not supported in the v1/chat/completions")
   );
+}
+
+function readUsageNumber(value: unknown): null | number {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function recordTokenUsage(raw: unknown): void {
+  const usage = extractTokenUsage(raw);
+  if (!usage) {
+    return;
+  }
+
+  currentTokenUsage = {
+    inputTokens: currentTokenUsage.inputTokens + usage.inputTokens,
+    outputTokens: currentTokenUsage.outputTokens + usage.outputTokens,
+    requestCount: currentTokenUsage.requestCount + 1,
+    totalTokens: currentTokenUsage.totalTokens + usage.totalTokens,
+  };
 }
 
 function supportsTemperature(model: string): boolean {
