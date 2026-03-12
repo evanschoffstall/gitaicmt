@@ -39,6 +39,14 @@ const AnalysisSettingsSchema = z.object({
     .min(100, "maxDiffLines must be at least 100")
     .max(1000000, "maxDiffLines cannot exceed 1000000")
     .describe("Maximum diff lines to process"),
+  tokenWarningThreshold: z
+    .number()
+    .int()
+    .min(0, "tokenWarningThreshold must be non-negative")
+    .max(1000000, "tokenWarningThreshold cannot exceed 1000000")
+    .describe(
+      "Warn when estimated token usage reaches this threshold; set to 0 to disable warnings",
+    ),
 });
 
 const CommitSettingsSchema = z.object({

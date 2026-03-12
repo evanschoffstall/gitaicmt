@@ -64,6 +64,7 @@ describe("config", () => {
       expect(cfg.analysis.chunkSize).toBe(800);
       expect(cfg.analysis.groupByFile).toBe(true);
       expect(cfg.analysis.groupByHunk).toBe(true);
+      expect(cfg.analysis.tokenWarningThreshold).toBe(4000);
 
       expect(cfg.commit.conventional).toBe(true);
       expect(cfg.commit.maxSubjectLength).toBe(72);
@@ -96,6 +97,7 @@ describe("config", () => {
       expect(cfg.openai.model).toBe("gpt-4o");
       expect(cfg.openai.apiKey).toBe("sk-test123");
       expect(cfg.commit.language).toBe("ja");
+      expect(cfg.analysis.tokenWarningThreshold).toBe(4000);
       // Non-overridden values should remain default
       expect(cfg.openai.maxTokens).toBe(512);
       expect(cfg.commit.conventional).toBe(true);
@@ -333,6 +335,20 @@ describe("config", () => {
       const cfg = loadConfig(dir);
       expect(cfg.openai.model).toBe("gpt-4o");
       // Should not throw
+      rmSync(dir, { recursive: true });
+    });
+
+    test("loads token warning threshold override", () => {
+      const dir = makeTmpDir();
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ analysis: { tokenWarningThreshold: 12345 } }),
+      );
+      resetConfigCache();
+      const cfg = loadConfig(dir);
+
+      expect(cfg.analysis.tokenWarningThreshold).toBe(12345);
+
       rmSync(dir, { recursive: true });
     });
   });

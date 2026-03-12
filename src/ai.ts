@@ -1,4 +1,8 @@
-import { batchFilesForGrouping, shouldBatchFiles } from "./ai-batching.js";
+import {
+  batchFilesForGrouping,
+  batchingMakesProgress,
+  shouldBatchFiles,
+} from "./ai-batching.js";
 import { getCachedMessage, setCachedMessage } from "./ai-cache.js";
 import { complete } from "./ai-client.js";
 import {
@@ -15,16 +19,13 @@ import {
   buildUserPrompt,
   type GroupingPromptContext,
 } from "./ai-prompt-builders.js";
+import { getGroupingResponseTokenBudget } from "./ai-tokens.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./ai-types.js";
 import { validateAndNormalizeGrouping } from "./ai-validation.js";
 import { loadConfig } from "./config.js";
 import {
   DEFAULT_EMPTY_COMMIT_MESSAGE,
-  GROUPING_BASE_TOKENS,
   GROUPING_TIMEOUT_MS,
-  MIN_COMMIT_MESSAGE_TOKENS,
-  MIN_GROUPING_TOKENS,
-  TOKENS_PER_FILE,
 } from "./constants.js";
 import { ValidationError } from "./errors.js";
 
@@ -33,7 +34,12 @@ type DiffStats = import("./diff.js").DiffStats;
 type FileDiff = import("./diff.js").FileDiff;
 
 export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
+export {
+  estimateGenerateOperationTokens,
+  estimatePlanOperationTokens,
+} from "./ai-tokens.js";
 export type { PlannedCommit, PlannedCommitFile };
+export type { TokenEstimateSummary } from "./ai-tokens.js";
 
 export async function generateForChunk(
   chunk: DiffChunk,
@@ -105,11 +111,7 @@ export async function planCommits(
 
   if (files.length > 1 && shouldBatchFiles(files)) {
     const batches = batchFilesForGrouping(files);
-    const madeBatchingProgress =
-      batches.length > 1 ||
-      batches.some((batch) => batch.length < files.length);
-
-    if (madeBatchingProgress) {
+    if (batchingMakesProgress(files, batches)) {
       const batchResults = await Promise.all(
         batches.map((batch, batchIndex) =>
           planCommits(batch, formatFileDiff, recursionDepth + 1, {
@@ -125,11 +127,9 @@ export async function planCommits(
 
   const sys = buildGroupingSystemPrompt();
   const usr = buildGroupingUserPrompt(files, formatFileDiff, promptContext);
-  const groupingTokens = Math.max(
+  const groupingTokens = getGroupingResponseTokenBudget(
     cfg.openai.maxTokens,
-    Math.max(MIN_COMMIT_MESSAGE_TOKENS, GROUPING_BASE_TOKENS) +
-      files.length * TOKENS_PER_FILE,
-    MIN_GROUPING_TOKENS,
+    files.length,
   );
   const groupingTimeout = Math.max(
     cfg.performance.timeoutMs,

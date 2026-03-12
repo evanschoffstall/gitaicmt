@@ -285,6 +285,35 @@ describe("CLI", () => {
 
       rmSync(dir, { recursive: true });
     });
+
+    test("'gen' prints token estimate warnings before the API key failure", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-tokenwarn-"));
+      execSync("git init && git commit --allow-empty -m 'init'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
+      );
+      writeFileSync(join(dir, "test.txt"), "hello\nworld\nmore\ntext\n");
+      execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
+
+      const { exitCode, stderr } = run("gen", {
+        cwd: dir,
+        env: {
+          OPENAI_API_KEY: "",
+          PATH: process.env["PATH"] ?? "",
+          XDG_CONFIG_HOME: dir,
+        },
+      });
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("estimated tokens:");
+      expect(stderr).toContain("Warning: estimated token usage is high");
+      expect(stderr).toContain("No OpenAI API key");
+
+      rmSync(dir, { recursive: true });
+    });
   });
 
   // ───── Auto-staging ─────

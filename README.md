@@ -15,7 +15,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="MIT License" /></a>
 </p>
 
-<p>High quality AI-powered git commit messages that actually make sense.<br/>Analyzes your diffs, splits logical changes, and writes Conventional Commits — all hands-free.<br/>Auto-stages if nothing is staged. Shows the plan, asks once, done.</p>
+<p>High quality AI-powered git commit messages that actually make sense.<br/>Analyzes your diffs, splits logical changes between both hunks and files, and writes Conventional Commits — all hands-free.<br/>Auto-stages if nothing is staged. Shows the plan, asks once, done.</p>
 
 <br/>
 
@@ -66,6 +66,8 @@ Or add it to `gitaicmt.config.json`:
 ```bash
 gitaicmt init
 ```
+
+Token usage is estimated before AI calls. The warning threshold is controlled by `analysis.tokenWarningThreshold`, defaults to `4000`, and can be set to `0` to disable the warning.
 
 ### 3 · Commit
 

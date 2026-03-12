@@ -3,9 +3,12 @@
 import { createInterface } from "node:readline";
 
 import {
+  estimateGenerateOperationTokens,
+  estimatePlanOperationTokens,
   generateForChunks,
   planCommits,
   type PlannedCommitFile,
+  type TokenEstimateSummary,
 } from "./ai.js";
 import { initConfig, loadConfig } from "./config.js";
 import {
@@ -50,9 +53,11 @@ async function analyzeCommitPlan() {
 
   const files = parseDiff(raw);
   const cfg = loadConfig();
+  const tokenEstimate = estimatePlanOperationTokens(files, formatFileDiff, cfg);
   log(
     `${DIM}Analyzing ${formatCount(files.length)} file(s) with ${cfg.openai.model}...${RESET}`,
   );
+  logTokenEstimate(tokenEstimate, cfg.analysis.tokenWarningThreshold);
 
   const groups = await planCommits(files, formatFileDiff);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
@@ -188,7 +193,13 @@ async function cmdCommitSingle() {
   const stats = getStats(files, chunks);
 
   const cfg = loadConfig();
-  logGenerationContext(cfg.openai.model, stats);
+  const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
+  logGenerationContext(
+    cfg.openai.model,
+    stats,
+    tokenEstimate,
+    cfg.analysis.tokenWarningThreshold,
+  );
 
   const message = await generateForChunks(chunks, stats);
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
@@ -227,8 +238,14 @@ async function cmdGenerate() {
   verbose("Chunking diffs");
   const chunks = chunkDiffs(files);
   const stats = getStats(files, chunks);
+  const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
 
-  logGenerationContext(cfg.openai.model, stats);
+  logGenerationContext(
+    cfg.openai.model,
+    stats,
+    tokenEstimate,
+    cfg.analysis.tokenWarningThreshold,
+  );
 
   verbose("Calling OpenAI API");
   const message = await generateForChunks(chunks, stats);
@@ -395,11 +412,16 @@ function logGenerationContext(
     deletions: number;
     filesChanged: number;
   },
+  tokenEstimate?: TokenEstimateSummary,
+  tokenWarningThreshold?: number,
 ) {
   log(
     `${DIM}${formatCount(stats.filesChanged)} file(s), +${formatCount(stats.additions)}/-${formatCount(stats.deletions)}, ${formatCount(stats.chunks)} chunk(s)${RESET}`,
   );
   log(`${DIM}model: ${model}${RESET}`);
+  if (tokenEstimate) {
+    logTokenEstimate(tokenEstimate, tokenWarningThreshold ?? 0);
+  }
 }
 
 function logPlannedCommits(
@@ -411,6 +433,29 @@ function logPlannedCommits(
     `${BOLD}${CYAN}Planned ${formatCount(groups.length)} commit(s):${RESET} ${DIM}(${elapsed}s)${RESET}`,
   );
   log("");
+}
+
+function logTokenEstimate(
+  estimate: TokenEstimateSummary,
+  tokenWarningThreshold: number,
+): void {
+  if (estimate.requestCount === 0) {
+    return;
+  }
+
+  log(
+    `${DIM}estimated tokens: ~${formatCount(estimate.totalTokens)} total across ${formatCount(estimate.requestCount)} request(s), peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`,
+  );
+
+  if (
+    tokenWarningThreshold > 0 &&
+    (estimate.totalTokens >= tokenWarningThreshold ||
+      estimate.peakRequestTokens >= tokenWarningThreshold)
+  ) {
+    log(
+      `${YELLOW}Warning: estimated token usage is high (threshold: ${formatCount(tokenWarningThreshold)}). Large diffs may hit model or account rate limits.${RESET}`,
+    );
+  }
 }
 
 async function main() {

@@ -36,6 +36,7 @@ export const DEFAULTS: Config = {
     groupByFile: true,
     groupByHunk: true,
     maxDiffLines: 2000,
+    tokenWarningThreshold: 4000,
   },
   commit: {
     conventional: true,

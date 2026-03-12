@@ -31,6 +31,15 @@ export function batchFilesForGrouping(files: FileDiff[]): FileDiff[][] {
   return batches;
 }
 
+export function batchingMakesProgress(
+  files: FileDiff[],
+  batches: FileDiff[][],
+): boolean {
+  return (
+    batches.length > 1 || batches.some((batch) => batch.length < files.length)
+  );
+}
+
 export function shouldBatchFiles(files: FileDiff[]): boolean {
   return (
     files.length > MAX_FILES_PER_BATCH ||
