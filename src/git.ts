@@ -96,6 +96,21 @@ export function getStagedFiles(cwd?: string): string[] {
   return out.trim().split("\n").filter(Boolean);
 }
 
+/**
+ * Get an exact staged patch including binary payloads for recovery.
+ * @param cwd - Optional working directory (defaults to process.cwd())
+ * @returns The staged patch output from git diff --cached --binary
+ * @throws {GitCommandError} If git command fails
+ */
+export function getStagedPatch(cwd?: string): string {
+  return execGit(
+    ["diff", "--cached", "--binary", `--unified=${String(DIFF_CONTEXT_LINES)}`],
+    {
+      cwd,
+    },
+  );
+}
+
 // ============================================================================
 // Safe Git Execution
 // ============================================================================
@@ -164,6 +179,30 @@ export function resetStaging(cwd?: string): void {
 }
 
 /**
+ * Restore an exact staged patch via git apply --cached.
+ * Supports multi-file and binary patches captured from git diff --cached --binary.
+ * @param patchContent - The exact staged patch content
+ * @param cwd - Optional working directory (defaults to process.cwd())
+ * @throws {GitCommandError} If patch is empty or git apply fails
+ */
+export function restoreStagedPatch(patchContent: string, cwd?: string): void {
+  if (!patchContent || patchContent.trim().length === 0) {
+    throw new GitCommandError(
+      "Cannot restore empty staged patch",
+      "git apply --cached",
+    );
+  }
+  execGit(["apply", "--cached", "-"], {
+    cwd,
+    input: patchContent,
+  });
+}
+
+// ============================================================================
+// Staging Operations
+// ============================================================================
+
+/**
  * Stage all changes (tracked and untracked, respecting .gitignore)
  * Equivalent to `git add -A`
  * @param cwd - Optional working directory (defaults to process.cwd())
@@ -172,10 +211,6 @@ export function resetStaging(cwd?: string): void {
 export function stageAll(cwd?: string): void {
   execGit(["add", "-A"], { cwd });
 }
-
-// ============================================================================
-// Staging Operations
-// ============================================================================
 
 /**
  * Stage specific files by path

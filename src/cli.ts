@@ -22,12 +22,12 @@ import {
 import {
   commitWithMessage,
   getStagedDiff,
-  getStagedFiles,
+  getStagedPatch,
   hasStagedChanges,
   isGitRepository,
   resetStaging,
+  restoreStagedPatch,
   stageAll,
-  stageFiles,
 } from "./git.js";
 import { mergeCommitsByFile } from "./merge.js";
 import { stageGroupFiles } from "./staging.js";
@@ -128,13 +128,11 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
     log("");
   }
 
-  // Execute each commit group
   let committed = 0;
-  let initialStagedFiles: string[] = [];
+  let initialStagedPatch = "";
 
-  // Save initial staging state for recovery
   try {
-    initialStagedFiles = getStagedFiles();
+    initialStagedPatch = getStagedPatch();
   } catch {
     log(
       `${YELLOW}Warning: Could not save initial staging state for recovery${RESET}`,
@@ -184,14 +182,15 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
     );
 
     // Attempt to restore staging state
-    if (committed < mergedGroups.length && initialStagedFiles.length > 0) {
+    if (
+      committed < mergedGroups.length &&
+      initialStagedPatch.trim().length > 0
+    ) {
       log(`${YELLOW}Attempting to restore initial staging state...${RESET}`);
       try {
         resetStaging();
-        if (initialStagedFiles.length > 0) {
-          stageFiles(initialStagedFiles);
-          log(`${GREEN}Initial staging state restored successfully.${RESET}`);
-        }
+        restoreStagedPatch(initialStagedPatch);
+        log(`${GREEN}Initial staging state restored successfully.${RESET}`);
       } catch {
         log(`${RED}Failed to restore staging state.${RESET}`);
         log(

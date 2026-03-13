@@ -20,8 +20,10 @@ import { parseDiff } from "../src/diff.js";
 import {
   commitWithMessage,
   getStagedDiff,
+  getStagedPatch,
   hasStagedChanges,
   resetStaging,
+  restoreStagedPatch,
 } from "../src/git.js";
 import { mergeCommitsByFile } from "../src/merge.js";
 import { stageGroupFiles } from "../src/staging.js";
@@ -618,6 +620,27 @@ describe("end-to-end commit pipeline", () => {
       }) as string;
       expect(log).toContain("feature A");
       expect(log).toContain("cleanup a.ts");
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("restoring a saved staged patch preserves partial staging exactly", () => {
+    const dir = makeGitDir();
+    try {
+      const { hunk0Marker, hunk1Marker } = setupFileWithTwoHunks(dir, "app.ts");
+      const files = parseDiff(getDiff(dir, "app.ts"));
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      stageGroupFiles([{ hunks: [0], path: "app.ts" }], fileMap, dir);
+      const partialPatch = getStagedPatch(dir);
+
+      resetStaging(dir);
+      restoreStagedPatch(partialPatch, dir);
+
+      const restoredDiff = getStagedDiff(dir);
+      expect(restoredDiff).toContain(hunk0Marker);
+      expect(restoredDiff).not.toContain(hunk1Marker);
     } finally {
       cleanupDir(dir);
     }
