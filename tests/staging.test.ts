@@ -315,6 +315,69 @@ describe("stageGroupFiles — hunk-level staging", () => {
     }
   });
 
+  test("whole-file staging preserves mode changes alongside hunks", () => {
+    const dir = makeGitDir();
+    try {
+      writeFileSync(join(dir, "app.sh"), "#!/bin/sh\necho base\n");
+      execSync("git add app.sh && git commit -m 'add script'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      execSync("chmod +x app.sh", { cwd: dir, stdio: "pipe" });
+      writeFileSync(join(dir, "app.sh"), "#!/bin/sh\necho changed\n");
+      execSync("git add app.sh", { cwd: dir, stdio: "pipe" });
+
+      const stagedDiff = getStagedDiff(dir);
+      const files = parseDiff(stagedDiff);
+      expect(files).toHaveLength(1);
+      expect(files[0].hunks).toHaveLength(1);
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      resetStaging(dir);
+      stageGroupFiles([{ path: "app.sh" }], fileMap, dir);
+
+      const restagedDiff = getStagedDiff(dir);
+      expect(restagedDiff).toContain("old mode 100644");
+      expect(restagedDiff).toContain("new mode 100755");
+      expect(restagedDiff).toContain("-echo base");
+      expect(restagedDiff).toContain("+echo changed");
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("whole-file staging preserves rename-only changes without staging file contents", () => {
+    const dir = makeGitDir();
+    try {
+      writeFileSync(join(dir, "old.txt"), "one\n");
+      execSync("git add old.txt && git commit -m 'add old'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      execSync("git mv old.txt new.txt", { cwd: dir, stdio: "pipe" });
+
+      const stagedDiff = getStagedDiff(dir);
+      const files = parseDiff(stagedDiff);
+      expect(files).toHaveLength(1);
+      expect(files[0].status).toBe("renamed");
+      expect(files[0].hunks).toHaveLength(0);
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      resetStaging(dir);
+      stageGroupFiles([{ path: "new.txt" }], fileMap, dir);
+
+      const restagedDiff = getStagedDiff(dir);
+      expect(restagedDiff).toContain("similarity index 100%");
+      expect(restagedDiff).toContain("rename from old.txt");
+      expect(restagedDiff).toContain("rename to new.txt");
+      expect(restagedDiff).not.toContain("@@");
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   test("staging hunks:[0,1] stages both hunks", () => {
     const dir = makeGitDir();
     try {

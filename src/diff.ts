@@ -41,6 +41,8 @@ export interface FileDiff {
   additions: number;
   deletions: number;
   hunks: DiffHunk[];
+  isBinary?: boolean;
+  metadataLines?: string[];
   oldPath: null | string; // for renames
   path: string;
   status: "added" | "deleted" | "modified" | "renamed";
@@ -70,27 +72,31 @@ const STATUS_PREFIXES = [
  */
 export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
   const selectedHunks = hunks ?? file.hunks;
-  if (selectedHunks.length === 0) {
+  const metadataLines = file.metadataLines ?? [];
+  if (file.isBinary) {
+    return "";
+  }
+  if (selectedHunks.length === 0 && metadataLines.length === 0) {
     return ""; // No hunks to apply
   }
 
   const lines: string[] = [];
   const oldPath = file.oldPath ?? file.path;
 
-  if (file.status === "added") {
-    lines.push(`diff --git a/${file.path} b/${file.path}`);
-    lines.push("new file mode 100644");
-    lines.push("--- /dev/null");
-    lines.push(`+++ b/${file.path}`);
-  } else if (file.status === "deleted") {
-    lines.push(`diff --git a/${oldPath} b/${oldPath}`);
-    lines.push("deleted file mode 100644");
-    lines.push(`--- a/${oldPath}`);
-    lines.push("+++ /dev/null");
-  } else {
-    lines.push(`diff --git a/${oldPath} b/${file.path}`);
-    lines.push(`--- a/${oldPath}`);
-    lines.push(`+++ b/${file.path}`);
+  lines.push(`diff --git a/${oldPath} b/${file.path}`);
+  lines.push(...metadataLines);
+
+  if (selectedHunks.length > 0) {
+    if (file.status === "added") {
+      lines.push("--- /dev/null");
+      lines.push(`+++ b/${file.path}`);
+    } else if (file.status === "deleted") {
+      lines.push(`--- a/${oldPath}`);
+      lines.push("+++ /dev/null");
+    } else {
+      lines.push(`--- a/${oldPath}`);
+      lines.push(`+++ b/${file.path}`);
+    }
   }
 
   for (const h of selectedHunks) {
@@ -257,6 +263,7 @@ export function parseDiff(raw: string): FileDiff[] {
         additions: 0,
         deletions: 0,
         hunks: [],
+        metadataLines: [],
         oldPath: oldP !== newP ? oldP : null,
         path: newP,
         status: "modified",
@@ -271,21 +278,30 @@ export function parseDiff(raw: string): FileDiff[] {
     // Detect status from metadata lines
     if (line.startsWith("new file")) {
       current.status = "added";
+      current.metadataLines?.push(line);
       sawFileLevelChange = true;
     } else if (line.startsWith("deleted file")) {
       current.status = "deleted";
+      current.metadataLines?.push(line);
       sawFileLevelChange = true;
     } else if (line.startsWith("rename from")) {
       current.status = "renamed";
       const oldName = line.slice("rename from ".length).trim();
       if (oldName) current.oldPath = oldName;
+      current.metadataLines?.push(line);
+      sawFileLevelChange = true;
+    } else if (line.startsWith("similarity index")) {
+      current.metadataLines?.push(line);
       sawFileLevelChange = true;
     } else if (
       line.startsWith("rename to") ||
       line.startsWith("old mode ") ||
       line.startsWith("new mode ")
     ) {
+      current.metadataLines?.push(line);
       sawFileLevelChange = true;
+    } else if (line.startsWith("index ")) {
+      current.metadataLines?.push(line);
     }
     if (STATUS_PREFIXES.some((prefix) => line.startsWith(prefix))) continue;
 
@@ -313,6 +329,7 @@ export function parseDiff(raw: string): FileDiff[] {
     }
     // Skip binary file markers
     if (line.startsWith("Binary files")) {
+      current.isBinary = true;
       sawFileLevelChange = true;
       continue;
     }

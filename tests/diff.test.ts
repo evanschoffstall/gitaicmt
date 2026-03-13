@@ -163,6 +163,22 @@ index abc1234..def5678 100644
 +<last line without newline updated>
 \\ No newline at end of file`;
 
+const MODE_AND_CONTENT_DIFF = `diff --git a/app.sh b/app.sh
+old mode 100644
+new mode 100755
+index abd1b84..5608007
+--- a/app.sh
++++ b/app.sh
+@@ -1,2 +1,2 @@
+ #!/bin/sh
+-echo base
++echo changed`;
+
+const RENAME_ONLY_DIFF = `diff --git a/old.txt b/new.txt
+similarity index 100%
+rename from old.txt
+rename to new.txt`;
+
 // ═══════════════════════════════════════════════════════════════
 
 beforeEach(() => {
@@ -404,6 +420,28 @@ Binary files /dev/null and b/logo.png differ`;
       expect(files[1].path).toBe("logo.png");
       expect(files[1].hunks).toHaveLength(0);
     });
+
+    test("captures file-level metadata lines for mixed mode and content changes", () => {
+      const files = parseDiff(MODE_AND_CONTENT_DIFF);
+      expect(files).toHaveLength(1);
+      expect(files[0].metadataLines).toEqual([
+        "old mode 100644",
+        "new mode 100755",
+        "index abd1b84..5608007",
+      ]);
+    });
+
+    test("captures rename-only metadata without creating fake hunks", () => {
+      const files = parseDiff(RENAME_ONLY_DIFF);
+      expect(files).toHaveLength(1);
+      expect(files[0].status).toBe("renamed");
+      expect(files[0].hunks).toHaveLength(0);
+      expect(files[0].metadataLines).toEqual([
+        "similarity index 100%",
+        "rename from old.txt",
+        "rename to new.txt",
+      ]);
+    });
   });
 });
 
@@ -617,6 +655,31 @@ describe("buildPatch", () => {
     const markerCount = (patch.match(/\\ No newline at end of file/g) ?? [])
       .length;
     expect(markerCount).toBe(2); // one for old side, one for new side
+  });
+
+  test("preserves file metadata lines alongside hunks", () => {
+    const files = parseDiff(MODE_AND_CONTENT_DIFF);
+    const patch = buildPatch(files[0]);
+
+    expect(patch).toContain("old mode 100644");
+    expect(patch).toContain("new mode 100755");
+    expect(patch).toContain("index abd1b84..5608007");
+    expect(patch).toContain("--- a/app.sh");
+    expect(patch).toContain("+++ b/app.sh");
+    expect(patch).toContain("+echo changed");
+  });
+
+  test("builds metadata-only patches for rename-only changes", () => {
+    const files = parseDiff(RENAME_ONLY_DIFF);
+    const patch = buildPatch(files[0]);
+
+    expect(patch).toContain("diff --git a/old.txt b/new.txt");
+    expect(patch).toContain("similarity index 100%");
+    expect(patch).toContain("rename from old.txt");
+    expect(patch).toContain("rename to new.txt");
+    expect(patch).not.toContain("@@");
+    expect(patch).not.toContain("--- ");
+    expect(patch).not.toContain("+++ ");
   });
 });
 

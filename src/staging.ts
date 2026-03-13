@@ -56,10 +56,6 @@ export function stageGroupFiles(
       }
       entries.push({ file, hunkIndices: fileRef.hunks });
     } else {
-      if (file.hunks.length === 0) {
-        stageFiles([file.path], cwd);
-        continue;
-      }
       // Whole-file: use all hunks so we never accidentally pick up unstaged changes
       entries.push({ file, hunkIndices: file.hunks.map((_, i) => i) });
     }
@@ -70,6 +66,10 @@ export function stageGroupFiles(
     const selectedHunks = hunkIndices.map((i) => file.hunks[i]);
     const patch = buildPatch(file, selectedHunks);
     if (!patch.trim()) {
+      if (file.hunks.length === 0) {
+        stageFiles([file.path], cwd);
+        continue;
+      }
       log(
         `${YELLOW}Warning: empty patch for ${file.path} hunks [${hunkIndices.join(", ")}], skipping${RESET}`,
       );
