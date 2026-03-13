@@ -1,11 +1,11 @@
 import { withThinkingIndicator } from "../src/terminal-ui.js";
 
-type StopSignal = "SIGINT" | "SIGTERM";
-
 interface SignalSource {
   off(event: StopSignal, listener: (signal: StopSignal) => void): void;
   once(event: StopSignal, listener: (signal: StopSignal) => void): void;
 }
+
+type StopSignal = "SIGINT" | "SIGTERM";
 
 export async function runThinkingPreview(): Promise<void> {
   process.stderr.write(
