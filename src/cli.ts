@@ -103,7 +103,6 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
 
   logPlannedCommits(groups, elapsed);
 
-  // Deduplicate commits that would produce staging conflicts
   const mergedGroups = mergeCommitsByFile(groups);
   if (mergedGroups.length < groups.length) {
     const dropped = groups.length - mergedGroups.length;
@@ -113,12 +112,10 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
     log("");
   }
 
-  // Build file lookup for hunk-level staging
   const fileMap = new Map(files.map((f) => [f.path, f]));
 
   displayPlan(mergedGroups, fileMap);
 
-  // Confirm before committing
   if (!autoConfirm) {
     logActualTokenUsage(getTokenUsageSummary());
     const confirmed = await promptYesNo(
@@ -151,14 +148,12 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
         `${BOLD}${GREEN}[${formatCount(i + 1)}/${formatCount(mergedGroups.length)}]${RESET} ${subject}`,
       );
       log(
-        `  ${DIM}${g.files.map((f) => formatCommitFile(f, fileMap)).join(", ")}${RESET}`,
+        `  ${DIM}${g.files.map((f) => formatCommitFile(f, fileMap)).join(", ")} ${RESET}`,
       );
 
-      // Unstage everything, then stage only this group's files/hunks
       resetStaging();
       stageGroupFiles(g.files, fileMap);
 
-      // Skip if nothing ended up staged (files already committed, gitignored, etc.)
       if (!hasStagedChanges()) {
         log(
           `${YELLOW}  (skipped — no stageable changes remain for this group)${RESET}`,
@@ -167,7 +162,6 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
         continue;
       }
 
-      // Commit
       commitWithMessage(g.message);
       committed++;
       log("");
@@ -651,8 +645,6 @@ async function main() {
   }
 }
 
-// -------- Entry --------
-
 /** Prompt the user for y/n. Re-prompts until a valid answer is given. */
 async function promptYesNo(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -703,6 +695,20 @@ async function promptYesNo(question: string): Promise<boolean> {
     clearTimeout(timeoutId);
     rl.close();
   }
+}
+
+// -------- Entry --------
+
+function shouldPromptForHighTokenUsage(
+  estimate: TokenEstimateSummary,
+  cfg: ReturnType<typeof loadConfig>,
+  options: TokenCheckOptions,
+): boolean {
+  return (
+    !options.skipPrompt &&
+    cfg.analysis.promptOnTokenWarning &&
+    isHighTokenEstimate(estimate, cfg.analysis.tokenWarningThreshold)
+  );
 }
 
 function verbose(msg: string) {

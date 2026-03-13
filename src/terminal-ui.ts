@@ -107,15 +107,51 @@ const GLYPH_COLUMN_WIDTH = 2;
 const MESSAGE_COLUMN_WIDTH =
   Math.max(...THINKING_MESSAGES.map((message) => message.length)) + 3;
 
+export interface ThinkingIndicatorOptions {
+  enabled?: boolean;
+  frameIntervalMs?: number;
+  output?: TerminalWriter;
+}
+
 interface TerminalWriter {
   isTTY?: boolean;
   write(chunk: string): boolean;
 }
 
-export interface ThinkingIndicatorOptions {
-  enabled?: boolean;
-  frameIntervalMs?: number;
-  output?: TerminalWriter;
+export function renderThinkingFrame(frameIndex: number): string {
+  const glyph =
+    THINKING_GLYPHS[
+      Math.floor(frameIndex / GLYPH_HOLD_FRAMES) % THINKING_GLYPHS.length
+    ];
+  const message = resolveMessageForFrame(frameIndex);
+  const glyphPhase =
+    Math.floor(frameIndex / GLYPH_COLOR_HOLD_FRAMES) % GRADIENT_STOPS.length;
+  const textPhase = frameIndex % TEXT_GRADIENT_STOPS.length;
+  const glyphColumn = glyph.padEnd(GLYPH_COLUMN_WIDTH, " ");
+  const messageColumn = `${message}...`.padEnd(MESSAGE_COLUMN_WIDTH, " ");
+
+  return [
+    CLEAR_LINE,
+    colorizeText(glyphColumn, glyphPhase, GRADIENT_STOPS, true),
+    " ",
+    colorizeText(
+      messageColumn,
+      textPhase + GLYPH_COLUMN_WIDTH,
+      TEXT_GRADIENT_STOPS,
+      true,
+    ),
+    RESET,
+  ].join("");
+}
+
+export function shouldAnimateThinkingIndicator(
+  output: TerminalWriter = process.stderr,
+): boolean {
+  return (
+    output.isTTY === true &&
+    process.env.CI !== "true" &&
+    process.env.TERM !== "dumb"
+  );
 }
 
 export async function withThinkingIndicator<T>(
@@ -147,46 +183,10 @@ export async function withThinkingIndicator<T>(
   }
 }
 
-export function shouldAnimateThinkingIndicator(
-  output: TerminalWriter = process.stderr,
-): boolean {
-  return (
-    output.isTTY === true &&
-    process.env.CI !== "true" &&
-    process.env.TERM !== "dumb"
-  );
-}
-
-export function renderThinkingFrame(frameIndex: number): string {
-  const glyph =
-    THINKING_GLYPHS[
-      Math.floor(frameIndex / GLYPH_HOLD_FRAMES) % THINKING_GLYPHS.length
-    ];
-  const message = resolveMessageForFrame(frameIndex);
-  const glyphPhase =
-    Math.floor(frameIndex / GLYPH_COLOR_HOLD_FRAMES) % GRADIENT_STOPS.length;
-  const textPhase = frameIndex % TEXT_GRADIENT_STOPS.length;
-  const glyphColumn = glyph.padEnd(GLYPH_COLUMN_WIDTH, " ");
-  const messageColumn = `${message}...`.padEnd(MESSAGE_COLUMN_WIDTH, " ");
-
-  return [
-    CLEAR_LINE,
-    colorizeText(glyphColumn, glyphPhase, GRADIENT_STOPS, true),
-    " ",
-    colorizeText(
-      messageColumn,
-      textPhase + GLYPH_COLUMN_WIDTH,
-      TEXT_GRADIENT_STOPS,
-      true,
-    ),
-    RESET,
-  ].join("");
-}
-
 function colorizeText(
   text: string,
   phase: number,
-  gradientStops: ReadonlyArray<readonly [number, number, number]>,
+  gradientStops: readonly (readonly [number, number, number])[],
   bold = false,
 ): string {
   return Array.from(text)
@@ -196,9 +196,18 @@ function colorizeText(
           (phase - index + gradientStops.length * 8) % gradientStops.length
         ];
       const weight = bold ? BOLD : "";
-      return `${weight}\x1b[38;2;${red};${green};${blue}m${char}`;
+      return `${weight}\x1b[38;2;${String(red)};${String(green)};${String(blue)}m${char}`;
     })
     .join("");
+}
+
+function getMessageHoldFrames(slotIndex: number): number {
+  const spread = MAX_MESSAGE_HOLD_FRAMES - MIN_MESSAGE_HOLD_FRAMES + 1;
+  return MIN_MESSAGE_HOLD_FRAMES + ((slotIndex * 11 + 7) % spread);
+}
+
+function getMessageIndexForSlot(slotIndex: number): number {
+  return (slotIndex * 17 + 13) % THINKING_MESSAGES.length;
 }
 
 function resolveMessageForFrame(frameIndex: number): string {
@@ -217,13 +226,4 @@ function resolveMessageForFrame(frameIndex: number): string {
   }
 
   return THINKING_MESSAGES[getMessageIndexForSlot(0)];
-}
-
-function getMessageHoldFrames(slotIndex: number): number {
-  const spread = MAX_MESSAGE_HOLD_FRAMES - MIN_MESSAGE_HOLD_FRAMES + 1;
-  return MIN_MESSAGE_HOLD_FRAMES + ((slotIndex * 11 + 7) % spread);
-}
-
-function getMessageIndexForSlot(slotIndex: number): number {
-  return (slotIndex * 17 + 13) % THINKING_MESSAGES.length;
 }

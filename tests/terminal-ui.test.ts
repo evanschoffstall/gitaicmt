@@ -1,5 +1,3 @@
-const { describe, expect, test } = await import("bun:test");
-
 import {
   renderThinkingFrame,
   shouldAnimateThinkingIndicator,
@@ -7,6 +5,8 @@ import {
   THINKING_MESSAGES,
   withThinkingIndicator,
 } from "../src/terminal-ui.js";
+
+const { describe, expect, test } = await import("bun:test");
 
 function createWriter(isTTY: boolean) {
   const writes: string[] = [];
@@ -20,8 +20,12 @@ function createWriter(isTTY: boolean) {
   };
 }
 
+const ESC = String.fromCodePoint(0x1b);
+
 function stripAnsi(value: string): string {
-  return value.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r\x1b\[2K/g, "");
+  return value
+    .replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "")
+    .replace(new RegExp(`\\r${ESC}\\[2K`, "g"), "");
 }
 
 describe("terminal-ui", () => {

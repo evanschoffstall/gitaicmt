@@ -1,6 +1,6 @@
-const { describe, expect, test } = await import("bun:test");
-
 import { waitForStopSignal } from "../scripts/preview-thinking.ts";
+
+const { describe, expect, test } = await import("bun:test");
 
 type StopSignal = "SIGINT" | "SIGTERM";
 
