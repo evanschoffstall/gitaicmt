@@ -40,10 +40,27 @@ describe("terminal-ui", () => {
 
     expect(frame).toContain("\x1b[38;2;");
     expect(
-      THINKING_MESSAGES.some((message) => plainFrame.includes(`${message}...`)),
+      THINKING_MESSAGES.some((message) => plainFrame.includes(message)),
     ).toBe(true);
     expect(THINKING_GLYPHS.some((glyph) => frame.includes(glyph))).toBe(true);
     expect(frame).not.toContain("❄");
+  });
+
+  test("renderThinkingFrame adds a subtle animated pulse tail", () => {
+    const earlyFrame = stripAnsi(renderThinkingFrame(0));
+    const laterFrame = stripAnsi(renderThinkingFrame(10));
+
+    expect(earlyFrame).toMatch(/\.{1,3}\s*$/);
+    expect(laterFrame).toMatch(/\.{1,3}\s*$/);
+    expect(earlyFrame).not.toBe(laterFrame);
+  });
+
+  test("renderThinkingFrame keeps the pulse attached to the message", () => {
+    const frame = stripAnsi(renderThinkingFrame(0));
+
+    expect(
+      THINKING_MESSAGES.some((message) => frame.includes(`${message}.`)),
+    ).toBe(true);
   });
 
   test("renderThinkingFrame keeps a stable two-column layout across messages", () => {
@@ -77,10 +94,12 @@ describe("terminal-ui", () => {
         THINKING_GLYPHS.some((glyph) => chunk.includes(glyph)),
       ),
     ).toBe(true);
+    expect(writer.writes[0]).toBe("\x1b[?25l");
     expect(writer.writes.some((chunk) => chunk.includes("\x1b[38;2;"))).toBe(
       true,
     );
     expect(writer.writes.at(-1)).toContain("\r\x1b[2K");
+    expect(writer.writes.at(-1)).toContain("\x1b[?25h");
   });
 
   test("withThinkingIndicator stays silent when disabled", async () => {
