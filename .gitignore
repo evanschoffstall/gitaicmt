@@ -7,3 +7,4 @@ gitaicmt.config.json
 .cache
 coverage
 dist
+report
