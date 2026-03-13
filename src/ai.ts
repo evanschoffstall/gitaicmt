@@ -33,6 +33,11 @@ type DiffChunk = import("./diff.js").DiffChunk;
 type DiffStats = import("./diff.js").DiffStats;
 type FileDiff = import("./diff.js").FileDiff;
 
+export {
+  getTokenUsageSummary,
+  resetTokenUsageSummary,
+  validateOpenAIConfiguration,
+} from "./ai-client.js";
 export type { TokenEstimateSummary } from "./ai-tokens.js";
 export {
   estimateGenerateOperationTokens,

@@ -111,17 +111,8 @@ export function resetTokenUsageSummary(): void {
   currentTokenUsage = emptyTokenUsageSummary();
 }
 
-function client(): OpenAI {
+export function validateOpenAIConfiguration(): void {
   const cfg = loadConfig();
-
-  if (cachedClient && lastApiKey !== cfg.openai.apiKey) {
-    cachedClient = null;
-    lastApiKey = null;
-  }
-
-  if (cachedClient) {
-    return cachedClient;
-  }
 
   if (!cfg.openai.apiKey) {
     throw new ConfigError(
@@ -140,18 +131,22 @@ function client(): OpenAI {
     );
   }
 
-  const model = cfg.openai.model.trim();
-  if (!model || model.length === 0) {
-    throw new ConfigError("OpenAI model name cannot be empty");
+  validateModelName(cfg.openai.model);
+}
+
+function client(): OpenAI {
+  const cfg = loadConfig();
+
+  if (cachedClient && lastApiKey !== cfg.openai.apiKey) {
+    cachedClient = null;
+    lastApiKey = null;
   }
-  if (model.length > 100) {
-    throw new ConfigError(
-      `OpenAI model name too long (max 100 chars): ${model.slice(0, 50)}...`,
-    );
+
+  if (cachedClient) {
+    return cachedClient;
   }
-  if (!/^[a-zA-Z0-9._-]+$/.test(model)) {
-    throw new ConfigError(`Invalid characters in OpenAI model name: ${model}`);
-  }
+
+  validateOpenAIConfiguration();
 
   lastApiKey = cfg.openai.apiKey;
   cachedClient = new OpenAI({ apiKey: cfg.openai.apiKey });
@@ -261,4 +256,19 @@ function recordTokenUsage(raw: unknown): void {
 
 function supportsTemperature(model: string): boolean {
   return !/^(o1|o2|o3|o4|gpt-5)/i.test(model);
+}
+
+function validateModelName(modelName: string): void {
+  const model = modelName.trim();
+  if (!model || model.length === 0) {
+    throw new ConfigError("OpenAI model name cannot be empty");
+  }
+  if (model.length > 100) {
+    throw new ConfigError(
+      `OpenAI model name too long (max 100 chars): ${model.slice(0, 50)}...`,
+    );
+  }
+  if (!/^[a-zA-Z0-9._-]+$/.test(model)) {
+    throw new ConfigError(`Invalid characters in OpenAI model name: ${model}`);
+  }
 }
