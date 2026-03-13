@@ -31,6 +31,7 @@ import {
 } from "./git.js";
 import { mergeCommitsByFile } from "./merge.js";
 import { stageGroupFiles } from "./staging.js";
+import { withThinkingIndicator } from "./terminal-ui.js";
 
 // -------- Helpers --------
 
@@ -76,7 +77,9 @@ async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
     return null;
   }
 
-  const groups = await planCommits(files, formatFileDiff);
+  const groups = await withThinkingIndicator(() =>
+    planCommits(files, formatFileDiff),
+  );
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
   return { elapsed, files, groups };
 }
@@ -244,7 +247,9 @@ async function cmdCommitSingle(skipTokenCheck: boolean) {
     return;
   }
 
-  const message = await generateForChunks(chunks, stats);
+  const message = await withThinkingIndicator(() =>
+    generateForChunks(chunks, stats),
+  );
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
   log(`${GREEN}${BOLD}Commit message:${RESET}`);
@@ -307,7 +312,9 @@ async function cmdGenerate(skipTokenCheck: boolean) {
   }
 
   verbose("Calling OpenAI API");
-  const message = await generateForChunks(chunks, stats);
+  const message = await withThinkingIndicator(() =>
+    generateForChunks(chunks, stats),
+  );
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
   log(`${DIM}(${elapsed}s)${RESET}`);
