@@ -346,9 +346,10 @@ describe("CLI", () => {
       });
       expect(exitCode).toBe(0);
       expect(stderr).toContain("Estimated token usage exceeds threshold (1).");
-      expect(stderr).toContain(
-        "Estimated token usage exceeds threshold (1). Continue",
-      );
+      expect(stderr).toContain("\x1b[1mContinue?\x1b[0m");
+      expect(
+        stderr.match(/Estimated token usage exceeds threshold \(1\)/g),
+      ).toHaveLength(1);
       expect(stderr).toContain("Aborted.");
       expect(stderr).not.toContain("No OpenAI API key");
 
@@ -420,6 +421,40 @@ describe("CLI", () => {
         "Estimated token usage exceeds threshold (1). Continue",
       );
       expect(stderr).toContain("No OpenAI API key");
+
+      rmSync(dir, { recursive: true });
+    });
+
+    test("'plan' prompts once when token usage crosses the threshold", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-plan-tokenprompt-"));
+      execSync("git init && git commit --allow-empty -m 'init'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
+      );
+      writeFileSync(join(dir, "test.txt"), "hello\nworld\nmore\ntext\n");
+      execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
+
+      const { exitCode, stderr } = run("plan", {
+        cwd: dir,
+        env: {
+          OPENAI_API_KEY: "",
+          PATH: process.env["PATH"] ?? "",
+          XDG_CONFIG_HOME: dir,
+        },
+        input: "n\n",
+      });
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("Estimated token usage exceeds threshold (1).");
+      expect(stderr).toContain("\x1b[1mContinue?\x1b[0m");
+      expect(
+        stderr.match(/Estimated token usage exceeds threshold \(1\)/g),
+      ).toHaveLength(1);
+      expect(stderr).toContain("Aborted.");
+      expect(stderr).not.toContain("No OpenAI API key");
 
       rmSync(dir, { recursive: true });
     });

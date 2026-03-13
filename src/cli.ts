@@ -2,14 +2,16 @@
 
 import { createInterface } from "node:readline";
 
-import { getTokenUsageSummary, resetTokenUsageSummary } from "./ai-client.js";
 import {
   estimateGenerateOperationTokens,
   estimatePlanOperationTokens,
   generateForChunks,
+  getTokenUsageSummary,
   planCommits,
   type PlannedCommitFile,
+  resetTokenUsageSummary,
   type TokenEstimateSummary,
+  validateOpenAIConfiguration,
 } from "./ai.js";
 import { initConfig, loadConfig } from "./config.js";
 import {
@@ -60,7 +62,7 @@ async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
   const files = parseDiff(raw);
   const cfg = loadConfig();
   const tokenEstimate = estimatePlanOperationTokens(files, formatFileDiff, cfg);
-  const shouldPromptForTokenUsage = shouldPromptForHighTokenUsage(
+  const shouldPrompt = shouldPromptForHighTokenUsage(
     tokenEstimate,
     cfg,
     tokenCheckOptions,
@@ -71,11 +73,12 @@ async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
   logTokenEstimate(
     tokenEstimate,
     cfg.analysis.tokenWarningThreshold,
-    shouldPromptForTokenUsage,
+    shouldPrompt,
   );
   if (!(await confirmTokenUsage(tokenEstimate, cfg, tokenCheckOptions))) {
     return null;
   }
+  validateOpenAIConfiguration();
 
   const groups = await withThinkingIndicator(() =>
     planCommits(files, formatFileDiff),
@@ -223,26 +226,14 @@ async function cmdCommitSingle(skipTokenCheck: boolean) {
 
   const cfg = loadConfig();
   const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
-  const shouldPromptForTokenUsage = shouldPromptForHighTokenUsage(
-    tokenEstimate,
-    cfg,
-    {
-      skipPrompt: skipTokenCheck,
-    },
-  );
-  logGenerationContext(
-    cfg.openai.model,
-    stats,
-    tokenEstimate,
-    cfg.analysis.tokenWarningThreshold,
-    shouldPromptForTokenUsage,
-  );
   if (
-    !(await confirmTokenUsage(tokenEstimate, cfg, {
-      skipPrompt: skipTokenCheck,
-    }))
+    !(await confirmTokenCheckedGeneration(
+      cfg,
+      stats,
+      tokenEstimate,
+      skipTokenCheck,
+    ))
   ) {
-    log(`${YELLOW}Aborted.${RESET}`);
     return;
   }
 
@@ -286,27 +277,15 @@ async function cmdGenerate(skipTokenCheck: boolean) {
   const chunks = chunkDiffs(files);
   const stats = getStats(files, chunks);
   const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
-  const shouldPromptForTokenUsage = shouldPromptForHighTokenUsage(
-    tokenEstimate,
-    cfg,
-    {
-      skipPrompt: skipTokenCheck,
-    },
-  );
 
-  logGenerationContext(
-    cfg.openai.model,
-    stats,
-    tokenEstimate,
-    cfg.analysis.tokenWarningThreshold,
-    shouldPromptForTokenUsage,
-  );
   if (
-    !(await confirmTokenUsage(tokenEstimate, cfg, {
-      skipPrompt: skipTokenCheck,
-    }))
+    !(await confirmTokenCheckedGeneration(
+      cfg,
+      stats,
+      tokenEstimate,
+      skipTokenCheck,
+    ))
   ) {
-    log(`${YELLOW}Aborted.${RESET}`);
     return;
   }
 
@@ -383,6 +362,47 @@ async function cmdPlan(skipTokenCheck: boolean) {
 /** Show version information */
 function cmdVersion() {
   log(`gitaicmt v${VERSION}`);
+}
+
+async function confirmTokenCheckedGeneration(
+  cfg: ReturnType<typeof loadConfig>,
+  stats: {
+    additions: number;
+    chunks: number;
+    deletions: number;
+    filesChanged: number;
+  },
+  tokenEstimate: TokenEstimateSummary,
+  skipTokenCheck: boolean,
+): Promise<boolean> {
+  const shouldPrompt = shouldPromptForHighTokenUsage(tokenEstimate, cfg, {
+    skipPrompt: skipTokenCheck,
+  });
+  logGenerationContext(
+    cfg.openai.model,
+    stats,
+    tokenEstimate,
+    cfg.analysis.tokenWarningThreshold,
+    shouldPrompt,
+  );
+
+  return confirmTokenCheckedOperation(tokenEstimate, cfg, {
+    skipPrompt: skipTokenCheck,
+  });
+}
+
+async function confirmTokenCheckedOperation(
+  estimate: TokenEstimateSummary,
+  cfg: ReturnType<typeof loadConfig>,
+  options: TokenCheckOptions,
+): Promise<boolean> {
+  if (!(await confirmTokenUsage(estimate, cfg, options))) {
+    log(`${YELLOW}Aborted.${RESET}`);
+    return false;
+  }
+
+  validateOpenAIConfiguration();
+  return true;
 }
 
 async function confirmTokenUsage(
@@ -571,18 +591,6 @@ function logTokenEstimate(
   ) {
     log(`${YELLOW}${formatTokenWarning(tokenWarningThreshold)}${RESET}`);
   }
-}
-
-function shouldPromptForHighTokenUsage(
-  estimate: TokenEstimateSummary,
-  cfg: ReturnType<typeof loadConfig>,
-  options: TokenCheckOptions,
-): boolean {
-  return (
-    !options.skipPrompt &&
-    cfg.analysis.promptOnTokenWarning &&
-    isHighTokenEstimate(estimate, cfg.analysis.tokenWarningThreshold)
-  );
 }
 
 async function main() {
