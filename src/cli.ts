@@ -669,10 +669,30 @@ async function promptYesNo(question: string): Promise<boolean> {
   try {
     for (;;) {
       const answerPromise = new Promise<string>((resolve) => {
-        rl.question(`${question} ${DIM}(y/n)${RESET} `, resolve);
+        let settled = false;
+
+        const onEnd = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          process.stdin.off("end", onEnd);
+          resolve("__EOF__");
+        };
+
+        process.stdin.once("end", onEnd);
+        rl.question(`${question} ${DIM}(y/n)${RESET} `, (answer) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          process.stdin.off("end", onEnd);
+          resolve(answer);
+        });
       });
 
       const answer = await Promise.race([answerPromise, timeoutPromise]);
+      if (answer === "__EOF__") return true;
       const a = answer.trim().toLowerCase();
       if (a === "y" || a === "yes") return true;
       if (a === "n" || a === "no") return false;
