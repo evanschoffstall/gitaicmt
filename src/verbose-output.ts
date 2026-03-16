@@ -321,7 +321,7 @@ function formatTraceBlock(
       : formatJsonTraceValue(parsed, maxWidth - 2);
 
   for (const rawLine of traceContent.split("\n")) {
-    lines.push(styleTraceRail(`│ ${rawLine}`));
+    lines.push(...wrapTraceLine(rawLine, maxWidth));
   }
 
   lines.push(styleTraceFooter("╰──"));
@@ -467,4 +467,29 @@ function wrapLine(
   }
 
   return lines;
+}
+
+function wrapTraceLine(text: string, maxWidth: number): string[] {
+  const valuePrefixMatch = /^(\s*"[^"]+":\s+)(.*)$/u.exec(text);
+  if (valuePrefixMatch) {
+    const [, firstContentPrefix, valueText] = valuePrefixMatch;
+    const continuationContentPrefix = " ".repeat(firstContentPrefix.length);
+    return wrapLine(
+      valueText,
+      Math.max(12, maxWidth - firstContentPrefix.length - 2),
+      `│ ${firstContentPrefix}`,
+      `│ ${continuationContentPrefix}`,
+    ).map(styleTraceRail);
+  }
+
+  const indentMatch = /^(\s*)(.*)$/u.exec(text);
+  const firstContentPrefix = indentMatch?.[1] ?? "";
+  const content = indentMatch?.[2] ?? text;
+
+  return wrapLine(
+    content,
+    Math.max(12, maxWidth - firstContentPrefix.length - 2),
+    `│ ${firstContentPrefix}`,
+    `│ ${firstContentPrefix}`,
+  ).map(styleTraceRail);
 }
