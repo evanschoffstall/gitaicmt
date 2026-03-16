@@ -4,6 +4,7 @@ import {
   THINKING_GLYPHS,
   THINKING_MESSAGES,
   withThinkingIndicator,
+  writeTerminalLines,
 } from "../src/terminal-ui.js";
 
 const { describe, expect, test } = await import("bun:test");
@@ -111,5 +112,36 @@ describe("terminal-ui", () => {
     });
 
     expect(writer.writes).toHaveLength(0);
+  });
+
+  test("writeTerminalLines rerenders the active thinking indicator after logs", async () => {
+    const writer = createWriter(true);
+
+    await withThinkingIndicator(
+      async () => {
+        writeTerminalLines(["alpha", "beta"], writer);
+      },
+      {
+        frameIntervalMs: 50,
+        output: writer,
+      },
+    );
+
+    expect(writer.writes).toContain("\r\x1b[2K");
+    expect(writer.writes).toContain("alpha\n");
+    expect(writer.writes).toContain("beta\n");
+    expect(
+      writer.writes.filter((chunk) =>
+        THINKING_GLYPHS.some((glyph) => chunk.includes(glyph)),
+      ).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  test("writeTerminalLines writes plain lines without indicator state", () => {
+    const writer = createWriter(true);
+
+    writeTerminalLines(["plain output"], writer);
+
+    expect(writer.writes).toEqual(["plain output\n"]);
   });
 });

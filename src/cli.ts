@@ -35,8 +35,16 @@ import {
   stageAll,
 } from "./git.js";
 import { mergeCommitsByFile } from "./merge.js";
+import {
+  formatCommitFile,
+  formatPlanBodyLine,
+  wrapDisplayFileLines,
+  wrapDisplayText,
+} from "./plan-display.js";
 import { stageGroupFiles } from "./staging.js";
-import { withThinkingIndicator } from "./terminal-ui.js";
+import { resolveTerminalColumns } from "./terminal-geometry.js";
+import { withThinkingIndicator, writeTerminalLines } from "./terminal-ui.js";
+import { formatVerboseAiOutputLines } from "./verbose-output.js";
 
 // -------- Helpers --------
 
@@ -437,21 +445,31 @@ function displayPlan(
   groups: { files: PlannedCommitFile[]; message: string }[],
   fileDiffs?: Map<string, FileDiff>,
 ): void {
+  const maxWidth = resolveDisplayWidth();
+
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i];
     log(
       `${BOLD}${GREEN}Commit ${formatCount(i + 1)}/${formatCount(groups.length)}:${RESET}`,
     );
-    log(`  ${BOLD}${g.message.split("\n")[0]}${RESET}`);
+    for (const line of wrapDisplayText(g.message.split("\n")[0], maxWidth - 2)) {
+      log(`  ${BOLD}${line}${RESET}`);
+    }
     const body = g.message.split("\n").slice(1).join("\n").trim();
     if (body) {
       for (const line of body.split("\n")) {
-        log(`  ${DIM}${line}${RESET}`);
+        for (const wrappedLine of formatPlanBodyLine(line, maxWidth - 2)) {
+          log(`  ${DIM}${wrappedLine}${RESET}`);
+        }
       }
     }
-    log(
-      `  ${DIM}Files: ${g.files.map((f) => formatCommitFile(f, fileDiffs)).join(", ")}${RESET}`,
+    const wrappedFileLines = wrapDisplayFileLines(
+      g.files.map((f) => formatCommitFile(f, fileDiffs)),
+      maxWidth - 2,
     );
+    for (const fileLine of wrappedFileLines) {
+      log(`  ${DIM}${fileLine}${RESET}`);
+    }
     log("");
   }
 }
@@ -494,24 +512,31 @@ function ensureStaged(): void {
 
 // -------- Commands --------
 
-/** Format a PlannedCommitFile for display */
-function formatCommitFile(
-  f: PlannedCommitFile,
-  fileDiffs?: Map<string, FileDiff>,
-): string {
-  if (!f.hunks || f.hunks.length === 0) return f.path;
-  const total = fileDiffs?.get(f.path)?.hunks.length;
-  const idx = f.hunks.join(", ");
-  const word = f.hunks.length === 1 ? "hunk" : "hunks";
-  const suffix =
-    total !== undefined
-      ? `[${word} ${idx} / ${formatCount(total)}]`
-      : `[${word} ${idx}]`;
-  return `${f.path} ${suffix}`;
-}
-
 function formatCount(value: number): string {
   return String(value);
+}
+
+function formatStageUsageLabel(stage: string): string {
+  switch (stage) {
+    case "cluster": {
+      return "merge-review";
+    }
+    case "consolidate": {
+      return "final-consolidation";
+    }
+    case "generate": {
+      return "message-draft";
+    }
+    case "group": {
+      return "grouping";
+    }
+    case "merge": {
+      return "message-merge";
+    }
+    default: {
+      return stage;
+    }
+  }
 }
 
 function formatTokenWarning(tokenWarningThreshold: number): string {
@@ -746,13 +771,27 @@ async function promptYesNo(question: string): Promise<boolean> {
       // Invalid input — re-prompt (no default)
     }
   } finally {
-    // Always clear the timeout so it doesn't hold the event loop open
-    clearTimeout(timeoutId);
     rl.close();
   }
 }
 
-// -------- Entry --------
+function resolveDisplayWidth(): number {
+  const terminalColumns = resolveTerminalColumns({
+    fallbackColumns: DEFAULT_VERBOSE_WIDTH,
+    streams: [process.stderr, process.stdout],
+  });
+
+  return Math.max(68, terminalColumns - 6);
+}
+
+function resolveVerboseWidth(): number {
+  const terminalColumns = resolveTerminalColumns({
+    fallbackColumns: DEFAULT_VERBOSE_WIDTH,
+    streams: [process.stderr, process.stdout],
+  });
+
+  return Math.max(72, terminalColumns - 14);
+}
 
 function shouldPromptForHighTokenUsage(
   estimate: TokenEstimateSummary,
