@@ -7,17 +7,13 @@ import { dirname, join } from "node:path";
 // ---------------------------------------------------------------------------
 
 interface CheckConfig {
-  coverageExcludedFiles: string[];
-  paths: { junitPath: string; lcovPath: string };
+  /** All path values are joined to cwd and exposed as `{key}` tokens. */
+  paths: Record<string, string>;
   steps: StepConfig[];
-  thresholds: {
-    checkSuiteTimeoutEnvVar?: string;
-    checkSuiteTimeoutMs?: number;
-    lineCoverageThreshold: number;
-    testCommandTimeoutEnvVar: string;
-    testCommandTimeoutMs: number;
-    testTimeoutMs: number;
-    typeCoverageThreshold: number;
+  /** Suite-level wall-clock timeout — overridable via `timeoutEnvVar`. */
+  suite?: {
+    timeoutEnvVar?: string;
+    timeoutMs?: number;
   };
 }
 interface InlineTypeScriptConfig {
@@ -42,24 +38,26 @@ interface StepConfig {
   cmd?: string;
   config?: InlineTypeScriptConfig | LintConfig | Record<string, unknown>;
   enabled?: boolean;
+  ensureDirs?: string[];
   failMsg?: string;
   handler?: string;
   key: string;
   label: string;
   outputFilter?: OutputFilter;
   passMsg?: string;
+  postProcess?: InlineTypeScriptConfig | Record<string, unknown>;
   preRun?: boolean;
   summary?: Summary;
+  /** Max drain time for buffered output after a timed-out step is terminated. */
+  timeoutDrainMs?: number | string;
+  /** Environment variable that overrides `timeoutMs` at runtime. */
+  timeoutEnvVar?: string;
   timeoutMs?: number | string;
+  /** Step-local scalar token store exposed as `{key}` placeholders. */
+  tokens?: Record<string, number | string>;
 }
 
 type Summary =
-  | {
-      coverageLabel?: string;
-      coveragePathToken?: string;
-      reportPathToken?: string;
-      type: "test-runner";
-    }
   | { default: string; patterns: SummaryPattern[]; type: "pattern" }
   | { type: "simple" };
 
@@ -78,23 +76,20 @@ const CFG: CheckConfig = JSON.parse(
   readFileSync(join(import.meta.dir, "check.json"), "utf8"),
 ) as CheckConfig;
 
-const PROJECT_MANIFEST = (() => {
+interface PackageManifest {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+}
+
+const PROJECT_MANIFEST: PackageManifest = (() => {
   try {
     return JSON.parse(
       readFileSync(join(process.cwd(), "package.json"), "utf8"),
-    ) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-      optionalDependencies?: Record<string, string>;
-      peerDependencies?: Record<string, string>;
-    };
+    ) as PackageManifest;
   } catch {
-    return {} as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-      optionalDependencies?: Record<string, string>;
-      peerDependencies?: Record<string, string>;
-    };
+    return {};
   }
 })();
 
@@ -137,30 +132,30 @@ const DECLARED_BUNX_TARGETS = (() => {
   return targets;
 })();
 
-const TEST_COMMAND_TIMEOUT_MS = resolveTimeoutMs(
-  CFG.thresholds.testCommandTimeoutEnvVar,
-  CFG.thresholds.testCommandTimeoutMs,
-  CFG.thresholds.testCommandTimeoutMs,
-);
 const SUITE_TIMEOUT_MS = resolveTimeoutMs(
-  CFG.thresholds.checkSuiteTimeoutEnvVar ?? "",
-  CFG.thresholds.checkSuiteTimeoutMs,
-  TEST_COMMAND_TIMEOUT_MS,
+  CFG.suite?.timeoutEnvVar ?? "",
+  CFG.suite?.timeoutMs,
+  120_000,
 );
 const SUITE_LABEL =
   process.env["npm_lifecycle_event"]?.trim() || "quality suite";
 
-// Auto-derive tokens: {key} → scalar thresholds, {key} → cwd-joined paths.
-// Every key added to "thresholds" or "paths" in check.json becomes a usable
-// {token} in any step's args or summary format strings — zero TS changes.
-const TOKENS: Record<string, string> = (() => {
+// Auto-derive shared path tokens: every key in "paths" becomes a cwd-joined
+// `{token}` available to any step.
+const PATH_TOKENS: Record<string, string> = (() => {
   const t: Record<string, string> = {};
-  for (const [k, v] of Object.entries(CFG.thresholds))
-    if (typeof v === "string" || typeof v === "number") t[`{${k}}`] = String(v);
   for (const [k, v] of Object.entries(CFG.paths))
-    if (typeof v === "string") t[`{${k}}`] = join(process.cwd(), v);
+    t[`{${k}}`] = join(process.cwd(), v);
   return t;
 })();
+
+interface CliArguments {
+  directStep?: StepConfig;
+  directStepArgs: string[];
+  invalidSuiteFlags: string[];
+  keyFilter: null | Set<string>;
+  summaryOnly: boolean;
+}
 
 interface Command {
   durationMs?: number;
@@ -168,14 +163,6 @@ interface Command {
   notFound?: boolean;
   output: string;
   timedOut: boolean;
-}
-
-interface CoverageSummary {
-  covered: number;
-  found: number;
-  issues: string[];
-  ok: boolean;
-  pct: number;
 }
 
 interface InlineTypeScriptContext {
@@ -190,18 +177,63 @@ interface InlineTypeScriptContext {
   readFileSync: typeof readFileSync;
   step: StepConfig;
 }
-
 interface InlineTypeScriptOverrides {
   importModule?: (specifier: string) => Promise<unknown>;
 }
-type InlineTypeScriptRunner = (
-  context: InlineTypeScriptContext,
-) => Command | Promise<Command>;
 
+interface InlineTypeScriptPostProcessContext {
+  command: Command;
+  cwd: string;
+  data: Record<string, unknown>;
+  displayOutput: string;
+  existsSync: typeof existsSync;
+  helpers: {
+    compactDomAssertionNoise: typeof compactDomAssertionNoise;
+    stripAnsi: typeof stripAnsi;
+  };
+  join: typeof join;
+  readFileSync: typeof readFileSync;
+  resolveTokenString: (value: string) => string;
+  step: StepConfig;
+  tokens: Record<string, string>;
+}
+
+type InlineTypeScriptPostProcessor = (
+  context: InlineTypeScriptPostProcessContext,
+) => Promise<StepPostProcessResult> | StepPostProcessResult;
+
+interface PostProcessMessage {
+  text: string;
+  tone?: PostProcessTone;
+}
+
+interface PostProcessSection {
+  items: string[];
+  title: string;
+  tone?: PostProcessTone;
+}
+
+type PostProcessTone = "fail" | "info" | "pass" | "warn";
+
+interface ProcessedCheck {
+  details: string;
+  label: string;
+  status: "fail" | "pass";
+}
 interface RunOptions {
   extraEnv?: Record<string, string>;
   label?: string;
+  timeoutDrainMs?: number;
   timeoutMs?: number;
+}
+
+interface StepPostProcessResult {
+  extraChecks?: ProcessedCheck[];
+  messages?: PostProcessMessage[];
+  output?: string;
+  sections?: PostProcessSection[];
+  status?: "fail" | "pass";
+  summary?: string;
 }
 
 type StepRunner = (
@@ -209,30 +241,6 @@ type StepRunner = (
   timeoutMs?: number,
   extraArgs?: string[],
 ) => Promise<Command>;
-
-interface TestResult {
-  file?: string;
-  line?: string;
-  message?: string;
-  name: string;
-  suite?: string;
-}
-
-interface TestRunnerArtifacts {
-  coverageLabel: string;
-  coverageReportPath: string;
-  testReportPath: string;
-}
-
-interface TestSummary {
-  failed: number;
-  failedTests: TestResult[];
-  issues: string[];
-  ok: boolean;
-  passed: number;
-  skipped: number;
-  skippedTests: TestResult[];
-}
 
 export function resolveTimeoutMs(
   envVarName: string,
@@ -251,6 +259,25 @@ function getBunxCommandTarget(args: string[]): null | string {
   return target && target.length > 0 ? target : null;
 }
 
+/** Returns the enabled non-pre-run step keys that can be selected from the CLI. */
+function getRunnableSuiteStepKeys(): Set<string> {
+  return new Set(
+    CFG.steps
+      .filter((step) => !step.preRun && step.enabled !== false)
+      .map((step) => step.key),
+  );
+}
+
+function getStepTokens(
+  step: Pick<StepConfig, "tokens">,
+): Record<string, string> {
+  const tokens = { ...PATH_TOKENS };
+  for (const [key, value] of Object.entries(step.tokens ?? {})) {
+    tokens[`{${key}}`] = String(value);
+  }
+  return tokens;
+}
+
 function hasExplicitPackageVersion(specifier: string): boolean {
   if (!specifier.startsWith("@")) return specifier.includes("@");
 
@@ -263,6 +290,7 @@ function hasMissingSignal(output: string): boolean {
   const text = stripAnsi(output);
   return [
     /command not found:/i,
+    /\bscript not found\b/i,
     /should be provided by a local binary/i,
     /cannot find package ['"][^'"]+['"]/i,
     /cannot find module ['"][^'"]+['"]/i,
@@ -296,32 +324,41 @@ function parsePositiveTimeoutMs(
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-// Substitute {token} placeholders in args, including embedded (e.g. --flag={token})
-function resolveArgs(args: string[]): string[] {
-  return args.map((a) =>
-    a.replace(/\{(\w+)\}/g, (whole, k) => TOKENS[`{${k}}`] ?? whole),
+/** Resolves `{token}` placeholders in a string via a token map. */
+function resolveTokenString(
+  value: string,
+  tokens: Record<string, string>,
+): string {
+  return value.replace(
+    /\{(\w+)\}/g,
+    (whole, key) => tokens[`{${key}}`] ?? whole,
   );
 }
 
-function resolvePathToken(tokenName: string | undefined): string {
-  if (!tokenName) return "";
-  return TOKENS[`{${tokenName}}`] ?? "";
-}
+/** Resolves `{token}` placeholders in each element of an args array. */
+const resolveArgs = (args: string[], tokens: Record<string, string>) =>
+  args.map((argument) => resolveTokenString(argument, tokens));
 
-function resolveScalarToken(value: string): string {
-  return value.replace(
-    /\{(\w+)\}/g,
-    (whole, key) => TOKENS[`{${key}}`] ?? whole,
+function resolveStepTimeoutDrainMsValue(step: StepConfig): null | number {
+  if (typeof step.timeoutDrainMs === "number")
+    return parsePositiveTimeoutMs(step.timeoutDrainMs);
+  if (typeof step.timeoutDrainMs !== "string") return null;
+  return parsePositiveTimeoutMs(
+    resolveTokenString(step.timeoutDrainMs, getStepTokens(step)),
   );
 }
 
 function resolveStepTimeoutMsValue(step: StepConfig): null | number {
-  if (typeof step.timeoutMs === "number") {
+  const envMs = step.timeoutEnvVar
+    ? parsePositiveTimeoutMs(process.env[step.timeoutEnvVar])
+    : null;
+  if (envMs !== null) return envMs;
+  if (typeof step.timeoutMs === "number")
     return parsePositiveTimeoutMs(step.timeoutMs);
-  }
   if (typeof step.timeoutMs !== "string") return null;
-
-  return parsePositiveTimeoutMs(resolveScalarToken(step.timeoutMs));
+  return parsePositiveTimeoutMs(
+    resolveTokenString(step.timeoutMs, getStepTokens(step)),
+  );
 }
 
 function stripPackageVersion(specifier: string): string {
@@ -434,21 +471,6 @@ const splitLines = (v: string) =>
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
-const attrs = (raw: string) =>
-  Object.fromEntries(
-    Array.from(raw.matchAll(/(\w+)="([^"]*)"/g)).flatMap((m) =>
-      m[1] ? [[m[1], m[2] ?? ""]] : [],
-    ),
-  );
-const toTest = (a: Record<string, string>): TestResult => ({
-  file: a.file,
-  line: a.line,
-  name: a.name ?? "(unnamed test)",
-  suite: a.classname,
-});
-const where = ({ file, line, name, suite }: TestResult) =>
-  `${file ?? "unknown-file"}${line ? `:${line}` : ""} - ${suite ? `${suite} > ` : ""}${name}`;
-
 interface DelayHandle<T> {
   cancel(): void;
   promise: Promise<T>;
@@ -462,6 +484,19 @@ interface KillableProcess {
 interface StreamCollector {
   done: Promise<void>;
   getOutput: () => string;
+}
+
+const DOM_ASSERTION_RECEIVED_LINE =
+  /^Received:\s+(?:HTML|SVG|Window|Document|Element|Node|NodeList|HTMLCollection|Text)\w*\s*\{/;
+
+function appendTimedOutDrainMessage(
+  output: string,
+  label: string,
+  timeoutDrainMs: number,
+): string {
+  const drainLine = `${label} output drain exceeded the ${formatDuration(timeoutDrainMs)} timeout after termination\n`;
+  if (!output.trim()) return drainLine;
+  return `${output.endsWith("\n") ? output : `${output}\n`}${drainLine}`;
 }
 
 function appendTimedOutMessage(
@@ -488,14 +523,24 @@ function buildSummary(step: StepConfig, cmd: Command): string {
   if (cmd.exitCode === 0 && step.passMsg !== undefined) return step.passMsg;
 
   const { summary } = step;
+  const tokens = getStepTokens(step);
   if (!summary || summary.type === "simple") {
     if (cmd.exitCode === 0) return "passed";
+
+    if (cmd.timedOut) {
+      const timeoutLine =
+        splitLines(cmd.output)
+          .reverse()
+          .find((line) => /\btimeout\b/i.test(line)) ??
+        `${step.label} exceeded its timeout`;
+      return step.failMsg ? `${step.failMsg}: ${timeoutLine}` : timeoutLine;
+    }
+
     const firstError = splitLines(cmd.output).find((l) => !l.startsWith("$ "));
     return firstError
       ? `${step.failMsg ?? "failed"}: ${firstError}`
       : (step.failMsg ?? "failed");
   }
-  if (summary.type === "test-runner") return "";
   // pattern
   const n = norm(cmd.output);
   for (const pat of summary.patterns) {
@@ -505,13 +550,14 @@ function buildSummary(step: StepConfig, cmd: Command): string {
         return resolveSummaryTokens(
           pat.format.replaceAll("{count}", String(count)),
           null,
+          tokens,
         );
     } else if (pat.type === "literal") {
       if (new RegExp(pat.regex, "i").test(n))
-        return resolveSummaryTokens(pat.format, null);
+        return resolveSummaryTokens(pat.format, null, tokens);
     } else if (pat.type === "match") {
       const m = n.match(new RegExp(pat.regex, "i"));
-      if (m) return resolveSummaryTokens(pat.format, m);
+      if (m) return resolveSummaryTokens(pat.format, m, tokens);
     } else if (pat.type === "table-row") {
       const tableRow = splitLines(cmd.output).find((l) =>
         l.includes(pat.regex),
@@ -532,9 +578,54 @@ function buildSummary(step: StepConfig, cmd: Command): string {
   return summary.default;
 }
 
-// ---------------------------------------------------------------------------
-// Output filters
-// ---------------------------------------------------------------------------
+/**
+ * Collapses oversized Happy DOM assertion dumps so test failures stay readable
+ * even when Bun serializes full DOM nodes into the reporter output.
+ */
+function compactDomAssertionNoise(output: string): string {
+  const lines = output.split(/\r?\n/);
+  const compacted: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const plainLine = stripAnsi(line);
+
+    if (!DOM_ASSERTION_RECEIVED_LINE.test(plainLine)) {
+      compacted.push(line);
+      continue;
+    }
+
+    let skippedLineCount = 0;
+    compacted.push(line.replace(/\{\s*$/, "{ /* DOM tree omitted */ }"));
+
+    for (index += 1; index < lines.length; index += 1) {
+      const nextLine = lines[index] ?? "";
+      const plainNextLine = stripAnsi(nextLine);
+
+      if (
+        plainNextLine.length === 0 ||
+        /^\s*at\s/.test(plainNextLine) ||
+        /^\s*\d+\s+\|/.test(plainNextLine) ||
+        /^error:\s/.test(plainNextLine) ||
+        /^Bun v/.test(plainNextLine) ||
+        /^pass\s/.test(plainNextLine) ||
+        /^fail\s/.test(plainNextLine)
+      ) {
+        index -= 1;
+        break;
+      }
+
+      skippedLineCount += 1;
+    }
+
+    if (skippedLineCount > 0)
+      compacted.push(
+        `  ... omitted ${skippedLineCount} DOM detail line(s) ...`,
+      );
+  }
+
+  return compacted.join("\n");
+}
 
 function createDelay<T>(ms: number, value: T): DelayHandle<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -556,6 +647,10 @@ function createDelay<T>(ms: number, value: T): DelayHandle<T> {
     promise,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Output filters
+// ---------------------------------------------------------------------------
 
 async function estLintFiles(cfg: LintConfig): Promise<number> {
   const glob = new Bun.Glob(`**/*.{${cfg.globExtensions.join(",")}}`);
@@ -583,28 +678,18 @@ function getConcurrency(n: number): number {
       : Math.min(8, Math.max(4, Math.ceil(c / 2)));
 }
 
+/** Returns the remaining suite budget in milliseconds without clamping. */
+function getRemainingTimeoutMs(deadlineMs: number): number {
+  return deadlineMs - Date.now();
+}
+
 // ---------------------------------------------------------------------------
 // Summary builders
 // ---------------------------------------------------------------------------
 
-function getRemainingTimeoutMs(deadlineMs: number): number {
-  return Math.max(1, deadlineMs - Date.now());
-}
-
-function getTestRunnerArtifacts(step: StepConfig): TestRunnerArtifacts {
-  if (step.summary?.type !== "test-runner") {
-    return {
-      coverageLabel: "coverage",
-      coverageReportPath: "",
-      testReportPath: "",
-    };
-  }
-
-  return {
-    coverageLabel: step.summary.coverageLabel ?? "coverage",
-    coverageReportPath: resolvePathToken(step.summary.coveragePathToken),
-    testReportPath: resolvePathToken(step.summary.reportPathToken),
-  };
+/** Reports whether the overall suite deadline has already been exhausted. */
+function hasDeadlineExpired(deadlineMs: number): boolean {
+  return getRemainingTimeoutMs(deadlineMs) <= 0;
 }
 
 function makeTimedOutCommand(label: string, timeoutMs: number): Command {
@@ -612,119 +697,6 @@ function makeTimedOutCommand(label: string, timeoutMs: number): Command {
     exitCode: 124,
     output: `${label} exceeded the ${formatDuration(timeoutMs)} timeout\n`,
     timedOut: true,
-  };
-}
-
-function parseCoverage(path: string): CoverageSummary {
-  if (!existsSync(path)) {
-    return {
-      covered: 0,
-      found: 0,
-      issues: [
-        `${paint("FAIL", ANSI.bold, ANSI.red)} No coverage report found at ${path}`,
-      ],
-      ok: false,
-      pct: 0,
-    };
-  }
-  const hits = new Map<string, Map<number, number>>();
-  let file = "";
-  let include = false;
-  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-    if (line.startsWith("SF:")) {
-      file = line.slice(3);
-      include = !CFG.coverageExcludedFiles.includes(file);
-      if (include && !hits.has(file)) hits.set(file, new Map<number, number>());
-      continue;
-    }
-    if (!include || !file || !line.startsWith("DA:")) continue;
-    const [lineRaw, hitRaw] = line.slice(3).split(",");
-    const lineNo = Number.parseInt(lineRaw ?? "", 10);
-    const hit = Number.parseInt(hitRaw ?? "", 10);
-    if (!Number.isFinite(lineNo) || !Number.isFinite(hit)) continue;
-    const map = hits.get(file);
-    if (!map) continue;
-    map.set(lineNo, Math.max(hit, map.get(lineNo) ?? 0));
-  }
-  const allHits = Array.from(hits.values()).flatMap((m) =>
-    Array.from(m.values()),
-  );
-  const found = allHits.length;
-  const covered = allHits.filter((h) => h > 0).length;
-  if (!found) {
-    return {
-      covered,
-      found: 0,
-      issues: [
-        `${paint("FAIL", ANSI.bold, ANSI.red)} No executable lines found in coverage report`,
-      ],
-      ok: false,
-      pct: 0,
-    };
-  }
-  const pct = (covered / found) * 100;
-  return {
-    covered,
-    found,
-    issues: [],
-    ok: pct >= CFG.thresholds.lineCoverageThreshold,
-    pct,
-  };
-}
-
-function parseTests(reportPath: string): TestSummary {
-  if (!existsSync(reportPath)) {
-    return {
-      failed: 1,
-      failedTests: [
-        {
-          message: `Report file not found: ${reportPath}`,
-          name: "Test report missing",
-        },
-      ],
-      issues: [
-        paint(
-          `FAIL [test-summary] Report file not found: ${reportPath}`,
-          ANSI.red,
-          ANSI.bold,
-        ),
-      ],
-      ok: false,
-      passed: 0,
-      skipped: 0,
-      skippedTests: [],
-    };
-  }
-  const failed: TestResult[] = [];
-  const skipped: TestResult[] = [];
-  let passed = 0;
-  const matches = Array.from(
-    readFileSync(reportPath, "utf8").matchAll(
-      /<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g,
-    ),
-  );
-  for (const m of matches) {
-    const test = toTest(attrs(m[1] ?? ""));
-    const body = m[2] ?? "";
-    const isSkip = /<skipped\b/.test(body);
-    const isFail = body.includes("<failure") || body.includes("<error");
-    if (isSkip) skipped.push(test);
-    if (isFail)
-      failed.push({
-        ...test,
-        message: attrs(body.match(/<(?:failure|error)\b([^>]*)>/)?.[1] ?? "")
-          .message,
-      });
-    if (!isSkip && !isFail) passed += 1;
-  }
-  return {
-    failed: failed.length,
-    failedTests: failed,
-    issues: [],
-    ok: failed.length === 0,
-    passed,
-    skipped: skipped.length,
-    skippedTests: skipped,
   };
 }
 
@@ -737,22 +709,14 @@ function printStepOutput(label: string, output: string) {
     );
 }
 
-function printTests(label: string, color: string, tests: TestResult[]) {
-  if (!tests.length) return;
-  console.log(`\n${paint(label, ANSI.bold, color)}`);
-  for (const test of tests)
-    console.log(
-      `  ${paint("•", color)} ${paint(where(test), color)}${test.message ? ` [${test.message}]` : ""}`,
-    );
-}
-
 function resolveSummaryTokens(
   format: string,
   match: null | RegExpMatchArray,
+  tokens: Record<string, string>,
 ): string {
   return format.replace(/\{(\w+)\}/g, (whole, key) => {
     if (/^\d+$/.test(key)) return match?.[Number(key)] ?? "";
-    return TOKENS[`{${key}}`] ?? whole;
+    return tokens[`{${key}}`] ?? whole;
   });
 }
 
@@ -780,6 +744,10 @@ async function withStepTimeout(
 
 const PROCESS_KILL_GRACE_MS = 250;
 const STREAM_FLUSH_GRACE_MS = 250;
+const INLINE_TS_FUNCTION_CACHE = new Map<
+  string,
+  (context: unknown) => Promise<unknown> | unknown
+>();
 
 function createStreamCollector(
   stream: null | ReadableStream<Uint8Array> | undefined,
@@ -817,13 +785,19 @@ function createStreamCollector(
   };
 }
 
-async function flushCollectors(collectors: StreamCollector[]): Promise<void> {
-  const delay = createDelay(STREAM_FLUSH_GRACE_MS, undefined);
+async function flushCollectors(
+  collectors: StreamCollector[],
+  timeoutMs = STREAM_FLUSH_GRACE_MS,
+): Promise<boolean> {
+  const delay = createDelay(timeoutMs, false);
   try {
-    await Promise.race([
-      Promise.all(collectors.map((collector) => collector.done)),
+    const outcome = await Promise.race([
+      Promise.all(collectors.map((collector) => collector.done)).then(
+        () => true,
+      ),
       delay.promise,
     ]);
+    return outcome;
   } finally {
     delay.cancel();
   }
@@ -860,7 +834,6 @@ async function terminateProcess(child: KillableProcess): Promise<void> {
 }
 
 const INLINE_TS_TRANSPILE = new Bun.Transpiler({ loader: "ts" });
-const INLINE_TS_RUNNER_CACHE = new Map<string, InlineTypeScriptRunner>();
 
 export async function run(
   cmd: string,
@@ -868,7 +841,9 @@ export async function run(
   options: RunOptions = {},
 ): Promise<Command> {
   const startMs = Date.now();
-  const { extraEnv, label = cmd, timeoutMs } = options;
+  const { extraEnv, label = cmd, timeoutDrainMs, timeoutMs } = options;
+  const activeTimeoutDrainMs =
+    parsePositiveTimeoutMs(timeoutDrainMs) ?? STREAM_FLUSH_GRACE_MS;
   if (cmd === "bunx" && !isBunxCommandAvailable(args)) {
     const target = getBunxCommandTarget(args) ?? "bunx target";
     return {
@@ -919,15 +894,22 @@ export async function run(
   if (outcome.kind === "timeout") {
     const activeTimeoutMs = timeoutMs ?? 1;
     await terminateProcess(child);
-    await flushCollectors([stdoutCollector, stderrCollector]);
+    const didFlushOutput = await flushCollectors(
+      [stdoutCollector, stderrCollector],
+      activeTimeoutDrainMs,
+    );
+    let output = appendTimedOutMessage(
+      `${stdoutCollector.getOutput()}${stderrCollector.getOutput()}`,
+      label,
+      activeTimeoutMs,
+    );
+    if (!didFlushOutput) {
+      output = appendTimedOutDrainMessage(output, label, activeTimeoutDrainMs);
+    }
     return {
       durationMs: Date.now() - startMs,
       exitCode: 124,
-      output: appendTimedOutMessage(
-        `${stdoutCollector.getOutput()}${stderrCollector.getOutput()}`,
-        label,
-        activeTimeoutMs,
-      ),
+      output,
       timedOut: true,
     };
   }
@@ -964,7 +946,10 @@ export async function runInlineTypeScriptStep(
     });
 
   try {
-    const runner = compileInlineTypeScriptRunner(inlineConfig.source);
+    const runner = compileInlineTypeScriptFunction<
+      InlineTypeScriptContext,
+      Command
+    >(inlineConfig.source);
     const result = await runner({
       cwd: process.cwd(),
       data: inlineConfig.data ?? {},
@@ -996,16 +981,19 @@ export async function runInlineTypeScriptStep(
   }
 }
 
-function compileInlineTypeScriptRunner(source: string): InlineTypeScriptRunner {
-  const cached = INLINE_TS_RUNNER_CACHE.get(source);
-  if (cached) return cached;
+function compileInlineTypeScriptFunction<TContext, TResult>(
+  source: string,
+): (context: TContext) => Promise<TResult> | TResult {
+  const cached = INLINE_TS_FUNCTION_CACHE.get(source);
+  if (cached)
+    return cached as (context: TContext) => Promise<TResult> | TResult;
 
   const jsSource = INLINE_TS_TRANSPILE.transformSync(
     `const __runner = (${source});`,
   );
   const factory = new Function(
     `"use strict";\n${jsSource}\nreturn __runner;`,
-  ) as () => InlineTypeScriptRunner | unknown;
+  ) as () => unknown;
   const runner = factory();
   if (typeof runner !== "function") {
     throw new Error(
@@ -1013,8 +1001,68 @@ function compileInlineTypeScriptRunner(source: string): InlineTypeScriptRunner {
     );
   }
 
-  INLINE_TS_RUNNER_CACHE.set(source, runner as InlineTypeScriptRunner);
-  return runner as InlineTypeScriptRunner;
+  INLINE_TS_FUNCTION_CACHE.set(
+    source,
+    runner as (context: unknown) => Promise<unknown> | unknown,
+  );
+  return runner as (context: TContext) => Promise<TResult> | TResult;
+}
+
+function ensureStepDirectories(step: StepConfig): void {
+  const tokens = getStepTokens(step);
+  for (const entry of step.ensureDirs ?? []) {
+    mkdirSync(resolveConfiguredPath(resolveTokenString(entry, tokens)), {
+      recursive: true,
+    });
+  }
+}
+
+function getToneColor(tone: PostProcessTone | undefined): string {
+  switch (tone) {
+    case "fail": {
+      return ANSI.red;
+    }
+    case "pass": {
+      return ANSI.green;
+    }
+    case "warn": {
+      return ANSI.yellow;
+    }
+    default: {
+      return ANSI.gray;
+    }
+  }
+}
+
+function normalizeTone(value: unknown): PostProcessTone | undefined {
+  return value === "fail" ||
+    value === "info" ||
+    value === "pass" ||
+    value === "warn"
+    ? value
+    : undefined;
+}
+
+function printPostProcessMessages(messages: PostProcessMessage[]): void {
+  for (const message of messages) {
+    console.log(
+      `\n${paint(message.text, ANSI.bold, getToneColor(message.tone))}`,
+    );
+  }
+}
+
+function printPostProcessSections(sections: PostProcessSection[]): void {
+  for (const section of sections) {
+    const color = getToneColor(section.tone);
+    console.log(`\n${paint(section.title, ANSI.bold, color)}`);
+    for (const item of section.items) {
+      console.log(`  ${paint("•", color)} ${paint(item, color)}`);
+    }
+  }
+}
+
+function resolveConfiguredPath(entry: string): string {
+  return entry.startsWith("/") ? entry : join(process.cwd(), entry);
 }
 
 async function runLint(
@@ -1035,27 +1083,222 @@ async function runLint(
   });
 }
 
+async function runStepPostProcess(
+  step: StepConfig,
+  command: Command,
+  displayOutput: string,
+): Promise<null | StepPostProcessResult> {
+  const inlineConfig = toInlineTypeScriptConfig(step.postProcess);
+  if (!inlineConfig || command.notFound || command.timedOut) return null;
+
+  try {
+    const postProcessor = compileInlineTypeScriptFunction<
+      InlineTypeScriptPostProcessContext,
+      StepPostProcessResult
+    >(inlineConfig.source) as InlineTypeScriptPostProcessor;
+    const tokens = getStepTokens(step);
+    const processedResult = await postProcessor({
+      command,
+      cwd: process.cwd(),
+      data: inlineConfig.data ?? {},
+      displayOutput,
+      existsSync,
+      helpers: {
+        compactDomAssertionNoise,
+        stripAnsi,
+      },
+      join,
+      readFileSync,
+      resolveTokenString: (value) => resolveTokenString(value, tokens),
+      step,
+      tokens,
+    });
+
+    const normalizedResult = toStepPostProcessResult(processedResult);
+    if (normalizedResult) return normalizedResult;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      messages: [
+        {
+          text: `${step.label} post-process failed: ${message}`,
+          tone: "fail",
+        },
+      ],
+      status: "fail",
+      summary: `${step.label} post-process failed`,
+    };
+  }
+
+  return {
+    messages: [
+      {
+        text: `${step.label} post-process returned an invalid result`,
+        tone: "fail",
+      },
+    ],
+    status: "fail",
+    summary: `${step.label} post-process returned an invalid result`,
+  };
+}
+
+function toPostProcessMessage(value: unknown): null | PostProcessMessage {
+  if (!isRecord(value)) return null;
+  const text = value["text"];
+  if (typeof text !== "string") return null;
+  return {
+    text,
+    tone: normalizeTone(value["tone"]),
+  };
+}
+
+function toPostProcessSection(value: unknown): null | PostProcessSection {
+  if (!isRecord(value)) return null;
+  const title = value["title"];
+  const items = value["items"];
+  if (
+    typeof title !== "string" ||
+    !Array.isArray(items) ||
+    items.some((item) => typeof item !== "string")
+  ) {
+    return null;
+  }
+  return {
+    items,
+    title,
+    tone: normalizeTone(value["tone"]),
+  };
+}
+
+function toProcessedCheck(value: unknown): null | ProcessedCheck {
+  if (!isRecord(value)) return null;
+  const label = value["label"];
+  const details = value["details"];
+  const status = value["status"];
+  if (
+    typeof label !== "string" ||
+    typeof details !== "string" ||
+    (status !== "fail" && status !== "pass")
+  ) {
+    return null;
+  }
+
+  return { details, label, status };
+}
+
+function toStepPostProcessResult(value: unknown): null | StepPostProcessResult {
+  if (!isRecord(value)) return null;
+
+  const extraChecks = value["extraChecks"];
+  const messages = value["messages"];
+  const output = value["output"];
+  const sections = value["sections"];
+  const status = value["status"];
+  const summary = value["summary"];
+
+  if (output !== undefined && typeof output !== "string") return null;
+  if (summary !== undefined && typeof summary !== "string") return null;
+  if (status !== undefined && status !== "fail" && status !== "pass")
+    return null;
+
+  const normalizedExtraChecks =
+    extraChecks === undefined
+      ? undefined
+      : Array.isArray(extraChecks)
+        ? extraChecks
+            .map((entry) => toProcessedCheck(entry))
+            .filter((entry): entry is ProcessedCheck => entry !== null)
+        : null;
+  if (normalizedExtraChecks === null) return null;
+
+  const normalizedMessages =
+    messages === undefined
+      ? undefined
+      : Array.isArray(messages)
+        ? messages
+            .map((entry) => toPostProcessMessage(entry))
+            .filter((entry): entry is PostProcessMessage => entry !== null)
+        : null;
+  if (normalizedMessages === null) return null;
+
+  const normalizedSections =
+    sections === undefined
+      ? undefined
+      : Array.isArray(sections)
+        ? sections
+            .map((entry) => toPostProcessSection(entry))
+            .filter((entry): entry is PostProcessSection => entry !== null)
+        : null;
+  if (normalizedSections === null) return null;
+
+  return {
+    extraChecks: normalizedExtraChecks,
+    messages: normalizedMessages,
+    output,
+    sections: normalizedSections,
+    status,
+    summary,
+  };
+}
+
 // Handler registry — keyed by step "handler" field
 const HANDLERS: Record<string, StepRunner> = {
   "inline-ts": (step, timeoutMs) =>
     withStepTimeout(step.label, runInlineTypeScriptStep(step), timeoutMs),
   lint: (step, timeoutMs, extraArgs = []) =>
     runLint(step, step.config as LintConfig, extraArgs, timeoutMs),
-  test: (step, timeoutMs, extraArgs = []) => {
-    const artifacts = getTestRunnerArtifacts(step);
-    if (artifacts.testReportPath)
-      mkdirSync(dirname(artifacts.testReportPath), { recursive: true });
-    return run("bun", [...resolveArgs(step.args ?? []), ...extraArgs], {
-      label: step.label,
-      timeoutMs,
-    });
-  },
 };
 
-export async function runCheckSuite(keyFilter?: null | Set<string>) {
+/** Splits CLI arguments into global flags, step filters, and direct step execution. */
+export function parseCliArguments(argv: string[]): CliArguments {
+  const command = argv[2];
+  const directStep =
+    command && !command.startsWith("--")
+      ? CFG.steps.find((step) => step.key === command && step.enabled !== false)
+      : undefined;
+
+  if (directStep) {
+    return {
+      directStep,
+      directStepArgs: argv.slice(3),
+      invalidSuiteFlags: [],
+      keyFilter: null,
+      summaryOnly: false,
+    };
+  }
+
+  const globalFlags = new Set(["summary"]);
+  const runnableSuiteStepKeys = getRunnableSuiteStepKeys();
+  const summaryOnly = argv.slice(2).includes("--summary");
+  const suiteFlags = argv
+    .slice(2)
+    .filter((argument) => argument.startsWith("--"))
+    .map((argument) => argument.slice(2));
+  const suiteStepKeys = suiteFlags.filter((flag) => !globalFlags.has(flag));
+  const invalidSuiteFlags = suiteStepKeys.filter(
+    (flag) => !runnableSuiteStepKeys.has(flag),
+  );
+
+  return {
+    directStep: undefined,
+    directStepArgs: [],
+    invalidSuiteFlags,
+    keyFilter: suiteStepKeys.length > 0 ? new Set(suiteStepKeys) : null,
+    summaryOnly,
+  };
+}
+
+/** Runs the configured quality suite with optional step filtering and summary mode. */
+export async function runCheckSuite(
+  keyFilter?: null | Set<string>,
+  options: { summaryOnly?: boolean } = {},
+) {
   const startedAtMs = Date.now();
   const deadlineMs = startedAtMs + SUITE_TIMEOUT_MS;
-  process.stdout.write(paint("⏳ Please wait ... ", ANSI.bold, ANSI.cyan));
+  const summaryOnly = options.summaryOnly === true;
+  if (!summaryOnly) {
+    process.stdout.write(paint("⏳ Please wait ... ", ANSI.bold, ANSI.cyan));
+  }
 
   const preRunSteps = keyFilter
     ? []
@@ -1069,51 +1312,71 @@ export async function runCheckSuite(keyFilter?: null | Set<string>) {
   const preRunTimedOut = Object.values(preRunResults).some(
     (run) => run.timedOut,
   );
-  const executedMainSteps = preRunTimedOut ? [] : mainSteps;
-  const mainResults = preRunTimedOut
-    ? {}
-    : await runStepBatch(mainSteps, deadlineMs);
+  const suiteExpiredBeforeMain =
+    !preRunTimedOut && hasDeadlineExpired(deadlineMs);
+  const executedMainSteps =
+    preRunTimedOut || suiteExpiredBeforeMain ? [] : mainSteps;
+  const mainResults =
+    preRunTimedOut || suiteExpiredBeforeMain
+      ? {}
+      : await runStepBatch(mainSteps, deadlineMs);
   const runs = { ...preRunResults, ...mainResults };
+  const suiteExpiredBeforeOutput =
+    !preRunTimedOut &&
+    !suiteExpiredBeforeMain &&
+    hasDeadlineExpired(deadlineMs);
 
-  const timedOut = Object.values(runs).some((result) => result.timedOut);
+  const timedOut =
+    suiteExpiredBeforeMain ||
+    suiteExpiredBeforeOutput ||
+    Object.values(runs).some((result) => result.timedOut);
   const allExecutedSteps = [...preRunSteps, ...executedMainSteps];
   const missingSteps = allExecutedSteps
     .filter((step) => runs[step.key]?.notFound)
     .map((s) => s.label);
+  const processedResults = suiteExpiredBeforeOutput
+    ? Object.fromEntries(
+        allExecutedSteps.map((step) => {
+          const filteredOutput = step.outputFilter
+            ? applyOutputFilter(step.outputFilter, runs[step.key].output)
+            : runs[step.key].output;
+          return [
+            step.key,
+            { displayOutput: filteredOutput, postProcess: null },
+          ] as const;
+        }),
+      )
+    : Object.fromEntries(
+        await Promise.all(
+          allExecutedSteps.map(async (step) => {
+            const filteredOutput = step.outputFilter
+              ? applyOutputFilter(step.outputFilter, runs[step.key].output)
+              : runs[step.key].output;
+            return [
+              step.key,
+              {
+                displayOutput: filteredOutput,
+                postProcess: await runStepPostProcess(
+                  step,
+                  runs[step.key],
+                  filteredOutput,
+                ),
+              },
+            ] as const;
+          }),
+        ),
+      );
 
-  for (const step of allExecutedSteps) {
-    if (runs[step.key]?.notFound) continue;
-    printStepOutput(
-      step.label,
-      step.outputFilter
-        ? applyOutputFilter(step.outputFilter, runs[step.key].output)
-        : runs[step.key].output,
-    );
+  if (!summaryOnly && !suiteExpiredBeforeOutput) {
+    for (const step of allExecutedSteps) {
+      if (runs[step.key]?.notFound) continue;
+      const displayOutput =
+        processedResults[step.key]?.postProcess?.output ??
+        processedResults[step.key]?.displayOutput ??
+        runs[step.key].output;
+      printStepOutput(step.label, displayOutput);
+    }
   }
-
-  const selectedTestRunnerStep = executedMainSteps.find(
-    (step) => step.summary?.type === "test-runner",
-  );
-  const testRunnerArtifacts = selectedTestRunnerStep
-    ? getTestRunnerArtifacts(selectedTestRunnerStep)
-    : null;
-  const runTests = !timedOut && selectedTestRunnerStep !== undefined;
-  const tests =
-    runTests && testRunnerArtifacts
-      ? parseTests(testRunnerArtifacts.testReportPath)
-      : {
-          failed: 0,
-          failedTests: [],
-          issues: [],
-          ok: true,
-          passed: 0,
-          skipped: 0,
-          skippedTests: [],
-        };
-  const coverage =
-    runTests && testRunnerArtifacts?.coverageReportPath
-      ? parseCoverage(testRunnerArtifacts.coverageReportPath)
-      : null;
 
   interface CheckRow {
     d: string;
@@ -1122,43 +1385,48 @@ export async function runCheckSuite(keyFilter?: null | Set<string>) {
     status: "fail" | "pass";
     stpk: null | string;
   }
-  const checks: CheckRow[] = executedMainSteps.map((step) => {
+  const checks: CheckRow[] = executedMainSteps.flatMap((step) => {
     const cmd = runs[step.key];
-    const isTestRunner = step.summary?.type === "test-runner";
-    const status: "fail" | "pass" =
-      cmd.exitCode === 0 && (!isTestRunner || tests.ok) ? "pass" : "fail";
-    const d =
-      isTestRunner && status === "fail"
-        ? `${tests.passed} passed · ${tests.failed} failed · ${tests.skipped} skipped · runner exit ${cmd.exitCode}`
-        : buildSummary(step, cmd);
-    return {
-      d,
+    const processed = processedResults[step.key]?.postProcess;
+    const stepCheck: CheckRow = {
+      d: processed?.summary ?? buildSummary(step, cmd),
       k: step.label,
       ms: cmd.durationMs,
-      status,
+      status: processed?.status ?? (cmd.exitCode === 0 ? "pass" : "fail"),
       stpk: step.key,
     };
+    const extraChecks = (processed?.extraChecks ?? []).map((check) => ({
+      d: check.details,
+      k: check.label,
+      status: check.status,
+      stpk: null,
+    }));
+    return [stepCheck, ...extraChecks];
   });
 
-  if (coverage)
-    checks.push({
-      d: `${coverage.pct.toFixed(2)}% (${coverage.covered}/${coverage.found}) · threshold ${CFG.thresholds.lineCoverageThreshold.toFixed(1)}%`,
-      k: testRunnerArtifacts?.coverageLabel ?? "coverage",
-      status: coverage.ok ? "pass" : "fail",
-      stpk: null,
-    });
+  if (!summaryOnly) {
+    if (suiteExpiredBeforeOutput) {
+      console.log(
+        `\n${paint("Suite deadline reached before detailed output; skipping step output and post-processing.", ANSI.bold, ANSI.yellow)}`,
+      );
+    }
 
-  for (const issue of [...tests.issues, ...(coverage?.issues ?? [])]) {
-    console.log(`\n${issue}`);
+    for (const step of executedMainSteps) {
+      if (suiteExpiredBeforeOutput) break;
+      const processed = processedResults[step.key]?.postProcess;
+      if (processed?.messages?.length) {
+        printPostProcessMessages(processed.messages);
+      }
+      if (processed?.sections?.length) {
+        printPostProcessSections(processed.sections);
+      }
+    }
+
+    if (missingSteps.length > 0)
+      console.log(
+        `\n${paint("missing/not found:", ANSI.bold, ANSI.yellow)} ${paint(missingSteps.join(", "), ANSI.yellow)}`,
+      );
   }
-
-  printTests("Failed tests", ANSI.red, tests.failedTests);
-  printTests("Skipped tests", ANSI.gray, tests.skippedTests);
-
-  if (missingSteps.length > 0)
-    console.log(
-      `\n${paint("missing/not found:", ANSI.bold, ANSI.yellow)} ${paint(missingSteps.join(", "), ANSI.yellow)}`,
-    );
 
   const presentChecks = checks.filter(
     (c) => !c.stpk || !runs[c.stpk]?.notFound,
@@ -1190,8 +1458,46 @@ export async function runCheckSuite(keyFilter?: null | Set<string>) {
   if (!allOk) process.exit(1);
 }
 
+/** Runs a parallel batch while refusing to start steps after the deadline. */
+export async function runStepBatch(
+  steps: StepConfig[],
+  deadlineMs: number,
+): Promise<Record<string, Command>> {
+  return Object.fromEntries(
+    await Promise.all(
+      steps.map(
+        async (step) =>
+          [step.key, await runStepWithinDeadline(step, deadlineMs)] as const,
+      ),
+    ),
+  ) as Record<string, Command>;
+}
+
+/**
+ * Runs a step only when the suite still has time budget remaining.
+ *
+ * This prevents late steps from spawning child processes or inline handlers
+ * after a long pre-run phase has already consumed the suite timeout.
+ */
+export function runStepWithinDeadline(
+  step: StepConfig,
+  deadlineMs: number,
+  extraArgs: string[] = [],
+): Promise<Command> {
+  const timeoutMs = getStepTimeoutMs(step, deadlineMs);
+  if (timeoutMs <= 0) {
+    return Promise.resolve(makeTimedOutCommand(step.label, 0));
+  }
+
+  return runStep(step, timeoutMs, extraArgs);
+}
+
 function getStepTimeoutMs(step: StepConfig, deadlineMs: number): number {
   const remainingTimeoutMs = getRemainingTimeoutMs(deadlineMs);
+  if (remainingTimeoutMs <= 0) {
+    return 0;
+  }
+
   const configuredTimeoutMs = resolveStepTimeoutMsValue(step);
   if (configuredTimeoutMs !== null) {
     return Math.min(configuredTimeoutMs, remainingTimeoutMs);
@@ -1201,30 +1507,32 @@ function getStepTimeoutMs(step: StepConfig, deadlineMs: number): number {
 }
 
 async function main() {
-  const command = Bun.argv[2];
-  const args = Bun.argv.slice(3);
+  const cliArguments = parseCliArguments(Bun.argv);
   const writeOut = (output: string) =>
     process.stdout.write(
       output.endsWith("\n") ? output : `${output.replace(/\s+$/g, "")}\n`,
     );
-  const directStep =
-    command && !command.startsWith("--")
-      ? CFG.steps.find((step) => step.key === command && step.enabled !== false)
-      : undefined;
-  if (directStep) {
-    const result = await runStep(
-      directStep,
-      getStepTimeoutMs(directStep, Date.now() + SUITE_TIMEOUT_MS),
-      args,
+
+  if (cliArguments.invalidSuiteFlags.length > 0) {
+    writeOut(
+      `unknown suite flag(s): ${cliArguments.invalidSuiteFlags.join(", ")}`,
+    );
+    process.exit(1);
+  }
+
+  if (cliArguments.directStep) {
+    const result = await runStepWithinDeadline(
+      cliArguments.directStep,
+      Date.now() + SUITE_TIMEOUT_MS,
+      cliArguments.directStepArgs,
     );
     writeOut(result.output);
     process.exit(result.exitCode);
   }
-  const flagKeys = Bun.argv
-    .slice(2)
-    .filter((a) => a.startsWith("--"))
-    .map((a) => a.slice(2));
-  await runCheckSuite(flagKeys.length > 0 ? new Set(flagKeys) : null);
+
+  await runCheckSuite(cliArguments.keyFilter, {
+    summaryOnly: cliArguments.summaryOnly,
+  });
 }
 
 function runStep(
@@ -1241,35 +1549,42 @@ function runStep(
         timedOut: false,
       })
     );
+
   if (!step.cmd)
     return Promise.resolve({
       exitCode: 1,
       output: `step "${step.key}" missing cmd`,
       timedOut: false,
     });
-  return run(step.cmd, [...resolveArgs(step.args ?? []), ...extraArgs], {
-    label: step.label,
-    timeoutMs,
-  });
+
+  ensureStepDirectories(step);
+  const tokens = getStepTokens(step);
+
+  return run(
+    step.cmd,
+    [...resolveArgs(step.args ?? [], tokens), ...extraArgs],
+    {
+      label: step.label,
+      timeoutDrainMs: resolveStepTimeoutDrainMsValue(step) ?? undefined,
+      timeoutMs,
+    },
+  );
 }
 
-async function runStepBatch(
-  steps: StepConfig[],
-  deadlineMs: number,
-): Promise<Record<string, Command>> {
-  return Object.fromEntries(
-    await Promise.all(
-      steps.map(
-        async (step) =>
-          [
-            step.key,
-            await runStep(step, getStepTimeoutMs(step, deadlineMs)),
-          ] as const,
-      ),
-    ),
-  ) as Record<string, Command>;
+/** Limits CLI auto-execution to direct `bun scripts/check.ts` entrypoints. */
+function shouldAutoRunCheckCli(argv: string[]): boolean {
+  const invokedScriptPath = argv[1];
+  return (
+    typeof invokedScriptPath === "string" &&
+    invokedScriptPath.endsWith("/scripts/check.ts")
+  );
 }
 
-export { applyOutputFilter, buildSummary, parseCoverage, parseTests };
+export {
+  applyOutputFilter,
+  buildSummary,
+  compactDomAssertionNoise,
+  runStepPostProcess,
+};
 
-if (import.meta.main) void main();
+if (import.meta.main && shouldAutoRunCheckCli(Bun.argv)) void main();
