@@ -1,10 +1,12 @@
 import { formatLabeledDiff, formatScalar } from "./ai-format.js";
+import { parseConventionalSubject } from "./commit-subject.js";
 import { loadConfig } from "./config.js";
 
 export interface GroupingPromptContext {
   allFiles?: FileDiff[];
   batchCount?: number;
   batchIndex?: number;
+  deferFinalization?: boolean;
 }
 type DiffChunk = import("./diff.js").DiffChunk;
 type DiffStats = import("./diff.js").DiffStats;
@@ -16,24 +18,18 @@ type PlannedCommitFile = import("./ai-types.js").PlannedCommitFile;
 const MAX_PREVIEW_FILES_PER_COMMIT = 3;
 const MAX_PREVIEW_HUNKS_PER_FILE = 2;
 const MAX_PREVIEW_LINES_PER_HUNK = 3;
+const SUPPORT_COMMIT_TYPES = new Set(["chore", "docs", "style", "test"]);
 
 export function buildClusterSystemPrompt(): string {
   return [
     "You are grouping git commit messages into semantic clusters.",
     "Each cluster contains commits that belong to the same overarching change.",
-    "Bias toward the FEWEST clusters: merge aggressively unless changes are genuinely independent.",
-    "",
-    "Rules:",
-    "- ALL style, import-order, formatting, and whitespace-only commits → ONE cluster (two at most).",
-    "- Same file appearing in multiple commits → those commits likely belong in the same cluster.",
-    "- Commits for the same feature across source, tests, docs, config → same cluster.",
-    "- Rename or terminology sweeps across multiple files → same cluster.",
-    "- Commits that together introduce or harden one system (e.g., proxy credentials, legal consent, tooling) → same cluster.",
-    "- Keep genuinely independent features, bug fixes, and major refactors as separate clusters.",
-    "",
+    "Bias toward the FEWEST clusters unless changes are genuinely independent.",
+    "Merge same-feature source/test/docs/config work, same-file fragments, rename sweeps, and tooling rollouts.",
+    "ALL style, import-order, formatting, and whitespace-only commits should collapse into ONE cluster when possible.",
+    "Keep unrelated features, bug fixes, and major refactors separate.",
     "Return ONLY valid JSON: an array of arrays of 0-based commit indices.",
     "Every index from 0 to N-1 must appear exactly once.",
-    "Example for 5 commits: [[0,1,5],[2,8],[3],[4,6,7]] — wrong if N=9. Should be [[0,1],[2,3],[4]].",
     "Minimal example: [[0,2],[1],[3,4]]",
   ].join("\n");
 }
@@ -55,25 +51,26 @@ export function buildClusterUserPrompt(groups: PlannedCommit[]): string {
 export function buildConsolidationSystemPrompt(): string {
   return [
     "You are reviewing an AI-generated commit plan and deciding which commits should be merged.",
-    "Your job is to reduce fragmentation by merging commits that are clearly part of the same overarching change.",
-    "Keep merging until no further meaningful merge opportunity remains in the returned plan.",
+    "Reduce fragmentation by merging commits that are clearly part of the same overarching change.",
+    "Keep merging until no meaningful merge opportunity remains.",
     "Bias toward the fewest commits that still preserve genuinely independent changes.",
-    "",
-    "Rules:",
     "- You MAY merge any commits, including non-adjacent ones, when they clearly belong together.",
     "- You MUST NOT split commits.",
     "- You MUST NOT drop, duplicate, or invent files/hunks.",
-    "- You may reorder commits to bring non-adjacent related work together; otherwise preserve original order.",
-    "- Keep independent features, fixes, and isolated refactors separate.",
+    "- You MUST keep separate commits separate when they represent different reasons for change, even if they sit in the same subsystem or rollout.",
+    "- If you cannot justify the merged result with one clear why-oriented sentence, do not merge those commits.",
+    "- If the best merged subject naturally wants to say X and Y as two separate reasons, keep those commits separate.",
     "- Absorb narrow style, import-order, formatting, rename-only, docs, test, config, and helper-script follow-up commits into the neighboring owning feature/refactor when they exist to support that same rollout.",
+    "- A new helper, parser, utility, or shared abstraction should stay separate when later commits build on it as a distinct enabling step; only merge it when it has no meaningful standalone why beyond the owning change.",
+    "- When merging a support commit into an implementation commit, keep the implementation or workflow subject and move support details into body bullets.",
     "- Standalone style/import-order/formatting commits should be rare and kept only when they are broad independent sweeps across otherwise unrelated files.",
     "- Collapse ALL style, import-order, formatting, and whitespace-only sweep commits into as few commits as possible regardless of their position in the plan. Multiple style-sweep commits should reduce to 1-2 commits maximum.",
     "- If two commits modify different hunks of the SAME file, merge them into one commit unless they are clearly independent features.",
-    "- Consolidate fragmented tooling/workflow/config sweeps when they are one cohesive rollout.",
+    "- Consolidate tooling/workflow/config sweeps when they are one cohesive rollout.",
     "- Consolidate package.json, config files, helper scripts, docs, and tests into the same commit when they enable, describe, or verify the same feature or workflow.",
-    "- Do not stop after the first obvious merge if the merged result should also absorb another commit.",
+    "- When one merged commit covers a broad rollout, write an umbrella subject that names the rollout or affected area.",
+    "- Do NOT cram multiple implementation details into the subject with comma-separated lists; move those details into body bullets.",
     "- When no merge is warranted, return the plan unchanged.",
-    "",
     "Output raw JSON only.",
     'Return an array of commit objects: [{"files":[{"path":"file.ts","hunks":[0]}],"message":"..."}]',
   ].join("\n");
@@ -84,14 +81,25 @@ export function buildConsolidationUserPrompt(
   groups: PlannedCommit[],
 ): string {
   const fileByPath = new Map(allFiles.map((file) => [file.path, file]));
+  const fileAliases = buildFileAliases(allFiles);
+  const repeatedPaths = getRepeatedPlanPaths(groups);
   const parts = [
     `Review ${formatScalar(groups.length)} planned commit(s) covering ${formatScalar(allFiles.length)} changed file(s).`,
     "Merge any commits that clearly belong to the same overarching change, including non-adjacent ones.",
     "Prefer the minimum commit count that still keeps truly independent work separate.",
+    "Keep separate whys separate: do not merge two commits unless the combined result still reads like one reason for change.",
+    "If the combined commit would need an and-subject to explain itself cleanly, keep it split.",
     "Absorb narrow cleanup-only, import-order, docs, test, config, and helper-script commits into the neighboring owning change when they are part of the same rollout.",
+    "If one commit introduces a helper/parser/utility and another commit applies it elsewhere, keep them separate unless the helper has no independent value.",
     "Collapse ALL style/import-order/formatting sweep commits across the plan into 1-2 commits maximum, regardless of their position.",
+    "Preserve buildable order when related commits stay separate: enabling helpers should come before dependent refactors or features.",
     "If multiple commits modify different hunks of the SAME file, merge them unless they cover clearly independent features.",
     "Return the fully consolidated plan, not just a single merge step.",
+    "",
+    "File legend:",
+    ...allFiles.map(
+      (file) => `${getFileAlias(fileAliases, file.path)} = ${file.path}`,
+    ),
     "",
     "Changed files:",
     ...allFiles.map((file) => {
@@ -99,7 +107,7 @@ export function buildConsolidationUserPrompt(
         file.hunks.length === 0
           ? "file-level change"
           : `${formatScalar(file.hunks.length)} hunk(s)`;
-      return `- ${file.path} (${hunkDescriptor})`;
+      return `- ${getFileAlias(fileAliases, file.path)} (${hunkDescriptor})`;
     }),
     "",
     "Proposed commits:",
@@ -112,21 +120,26 @@ export function buildConsolidationUserPrompt(
     parts.push("Files:");
     for (const file of group.files) {
       if (file.hunks && file.hunks.length > 0) {
-        parts.push(`- ${file.path} [hunks ${file.hunks.join(", ")}]`);
+        parts.push(
+          `- ${getFileAlias(fileAliases, file.path)} [hunks ${file.hunks.join(", ")}]`,
+        );
       } else {
-        parts.push(`- ${file.path} [all hunks]`);
+        parts.push(`- ${getFileAlias(fileAliases, file.path)} [all hunks]`);
       }
     }
-    parts.push("Selected diff preview:");
-    parts.push(...buildConsolidationPreviewLines(group, fileByPath));
+    if (shouldIncludeConsolidationPreview(group, repeatedPaths)) {
+      parts.push("Selected diff preview:");
+      parts.push(
+        ...buildConsolidationPreviewLines(group, fileByPath, fileAliases),
+      );
+    } else {
+      parts.push("Selected diff preview: omitted for low-ambiguity commit.");
+    }
     parts.push("");
   }
 
   parts.push(
-    "If commit 2 and commit 3 should merge, and that merged result should also merge with commit 4, your returned plan must already reflect both merges.",
-  );
-  parts.push(
-    "Return the final commit plan as JSON using the same file/hunk coverage with merged adjacent commits where warranted.",
+    "Return the final commit plan as JSON using the same file/hunk coverage with every warranted merge already applied.",
   );
   return parts.join("\n");
 }
@@ -135,128 +148,52 @@ export function buildGroupingSystemPrompt(): string {
   const parts = [
     "You are an expert at analyzing git diffs and organizing them into logical, atomic commits.",
     "Given a set of file diffs with labeled hunks, your job is to group hunks into commits where each commit represents ONE coherent, complete change.",
-    "",
-    "══════════════════════════════════════════════════════════════════",
     "STEP 1 — READ THE HUNK REFERENCE MAP FIRST.",
-    "  Before looking at any diff content, scan the HUNK REFERENCE MAP in the user message.",
-    "  For every hunk, ask: 'Is this hunk the cause or effect of any hunk in another file?'",
-    "  If yes, those hunks MUST go into the same commit.",
-    "══════════════════════════════════════════════════════════════════",
-    "",
-    "══════════════════════════════════════════════════════════════════",
+    "Before reading diff bodies, scan the HUNK REFERENCE MAP and ask whether each hunk is the cause or effect of another hunk.",
+    "If yes, those hunks MUST go into the same commit.",
     "STEP 2 — WIRE LINKED HUNKS ACROSS FILES. THIS IS NOT OPTIONAL.",
-    "",
-    "  When hunk X in file A is functionally linked to hunk Y in file B,",
-    "  you MUST place both hunks in the SAME commit, even if A and B also",
-    "  contain unrelated hunks that belong in other commits.",
-    "",
-    "  A hunk is 'linked' to another if one would be broken, incomplete, or",
-    "  meaningless without the other. Common patterns:",
-    "    • A defines a type/constant   → B uses that type/constant",
-    "    • A adds a function            → B calls that function",
-    "    • A changes a function signature → B, C, D update the call sites",
-    "    • A adds a new component       → B imports and renders it",
-    "    • A adds a config key          → B reads that key",
-    "    • A adds an error class        → B throws or catches it",
-    "    • A changes a schema/model     → B runs the migration, C tests it",
-    "    • A adds a route               → B adds the handler, C adds the type",
-    "",
-    "  HOW TO WIRE: In the JSON output, list EACH linked file with its specific",
-    "  hunks array. Do NOT omit the hunks array when only some hunks from a file",
-    "  are part of that logical change.",
-    "",
-    "  ✗ WRONG — lumping an entire file when only one hunk is involved:",
+    "When a hunk in one file is functionally linked to a hunk in another file, place both hunks in the SAME commit even if the files also contain unrelated hunks.",
+    "Linked means one hunk defines, wires, migrates, configures, imports, tests, or validates behavior used by another hunk.",
+    "In JSON, list EACH linked file with a hunks array whenever only some hunks from that file belong to the commit.",
+    "WRONG — lumping an entire file when only one hunk is involved:",
     '    {"files": [{"path": "src/models.ts"}, {"path": "src/api.ts"}], ...}',
-    "    (This stages ALL hunks of both files—unrelated changes get merged in.)",
-    "",
-    "  ✓ RIGHT — scalpel-precise hunk wiring:",
+    "RIGHT — scalpel-precise hunk wiring:",
     '    {"files": [{"path": "src/models.ts", "hunks": [0]}, {"path": "src/api.ts", "hunks": [2]}], ...}',
-    "    (Only the linked hunks. Other hunks from those files go in their own commits.)",
-    "",
     "  ANY COMBINATION IS VALID. A single commit may reference:",
     "    • hunk 0 from file A  +  hunk 2 from file B  +  hunk 1 from file C  +  all of file D",
     "    • hunk 3 from file A  +  hunk 0 from file E",
-    "    • ...any mix, across any number of files, any number of hunks per file.",
     "  There is NO restriction on which files or how many hunks appear in one commit.",
     "  The only rule: every hunk in the commit must be part of the same logical change.",
-    "══════════════════════════════════════════════════════════════════",
-    "",
     "RULE 3 — Hunks in the SAME file that serve DIFFERENT purposes MUST be split.",
-    "  Reference them by index in separate commits. Do not combine unrelated intra-file hunks.",
-    "  But do NOT split out incidental formatting, import-order, rename-only, wiring, docs, test, or config hunks when they clearly exist to support the same feature/refactor/fix.",
-    "",
+    "Reference them by index in different commits. But do NOT split out incidental formatting, import-order, rename-only, wiring, docs, test, or config hunks when they clearly support the same feature/refactor/fix.",
     "RULE 4 — Split into separate commits ONLY for genuinely independent changes:",
-    "  • Docs separate from code (unless docs describe the exact feature being added)",
-    "  • Config/build changes as their own commits (unless wired into the feature)",
-    "  • When multiple config/build/tooling files together introduce one quality or tooling workflow, keep them in the SAME commit instead of atomizing them file-by-file.",
-    "  • package.json, lockfiles, config files, and helper scripts that enable the same check/lint/tooling change SHOULD travel together.",
-    "  • Distinct, unrelated features or bugfixes",
-    "  • Test files SHOULD accompany the source code they test in the same commit.",
-    "  • Standalone style/import-order/formatting commits should be RARE. Prefer absorbing local cleanup into the owning feature/refactor unless it is a broad independent sweep across many otherwise unrelated files.",
-    "  • Do NOT atomize one rollout into separate source, config, docs, and test commits when those pieces only make sense together.",
-    "",
+    "- Keep source, tests, docs, config, package changes, and helper scripts together when they ship one rollout.",
+    "- Distinct features or bug fixes belong in different commits.",
+    "- Standalone style/import-order/formatting commits should be RARE.",
+    "- Do NOT atomize one rollout into separate source, config, docs, and test commits when those pieces only make sense together.",
     "RULE 5 — Every hunk must appear in exactly one commit. No duplicates, no omissions.",
-    "",
-    "═══ EXAMPLES ═══",
-    "",
-    "EXAMPLE 1 — Whole-file grouping (all hunks in each file belong together):",
-    "  src/auth.ts (new API key validator), src/errors.ts (new AuthError), tests/auth.test.ts",
+    "EXAMPLE 1 — Whole-file grouping:",
+    "  src/auth.ts, src/errors.ts, tests/auth.test.ts",
     '→ [{"files": [{"path": "src/auth.ts"}, {"path": "src/errors.ts"}, {"path": "tests/auth.test.ts"}],',
     '    "message": "feat(auth): add API key validation"}]',
-    "",
-    "EXAMPLE 2 — Split unrelated whole-file changes:",
-    "  package.json (license fix), src/cache.ts (eviction), README.md (doc update)",
-    '→ [{"files": [{"path": "package.json"}], "message": "chore: fix license field"},',
-    '   {"files": [{"path": "src/cache.ts"}], "message": "refactor(cache): add bounded eviction"},',
-    '   {"files": [{"path": "README.md"}], "message": "docs: update configuration section"}]',
-    "",
-    "EXAMPLE 3 — Intra-file split (one file, two unrelated hunks):",
+    "EXAMPLE 2 — Intra-file split:",
     "  src/handler.ts: [Hunk 0] add retry logic, [Hunk 1] fix null response (unrelated), [Hunk 2] add retry counter",
     '→ [{"files": [{"path": "src/handler.ts", "hunks": [0, 2]}], "message": "feat: add retry logic"},',
     '   {"files": [{"path": "src/handler.ts", "hunks": [1]}], "message": "fix: handle null response"}]',
-    "",
-    "EXAMPLE 4 — Cross-file hunk wiring (THE KEY PATTERN — do this whenever hunks are linked):",
+    "EXAMPLE 3 — Cross-file hunk wiring:",
     "  src/parser.ts: [Hunk 0] define ParseError type, [Hunk 1] unrelated whitespace fix",
     "  src/handler.ts: [Hunk 0] add import, [Hunk 1] throw ParseError (LINKED to parser.ts[0])",
     "  tests/parser.test.ts: [Hunk 0] test ParseError (LINKED to parser.ts[0])",
-    "  → parser.ts[0], handler.ts[0,1], and tests[0] are all part of ONE logical change.",
-    "    parser.ts[1] is unrelated and gets its own commit.",
     '→ [{"files": [{"path": "src/parser.ts", "hunks": [0]},',
     '              {"path": "src/handler.ts", "hunks": [0, 1]},',
     '              {"path": "tests/parser.test.ts", "hunks": [0]}],',
     '    "message": "feat(parser): add ParseError type and integrate into handler"},',
     '   {"files": [{"path": "src/parser.ts", "hunks": [1]}], "message": "style(parser): clean up whitespace"}]',
-    "",
-    "EXAMPLE 5 — Multi-file hunk wiring (feature touches many files, each has unrelated hunks too):",
-    "  src/models.ts: [Hunk 0] add createdAt field, [Hunk 1] unrelated bugfix",
-    "  src/db.ts:     [Hunk 0] migration for createdAt, [Hunk 1] unrelated index change",
-    "  src/api.ts:    [Hunk 0] expose createdAt in response, [Hunk 1] unrelated log statement",
-    "  tests/user.test.ts: [Hunk 0] test createdAt",
-    "  → models[0], db[0], api[0], tests[0] all belong together (one feature).",
-    "    models[1], db[1], api[1] are each independent and get their own commits.",
-    '→ [{"files": [{"path": "src/models.ts", "hunks": [0]}, {"path": "src/db.ts", "hunks": [0]},',
-    '              {"path": "src/api.ts", "hunks": [0]}, {"path": "tests/user.test.ts", "hunks": [0]}],',
-    '    "message": "feat(user): add createdAt field with migration and API exposure"},',
-    '   {"files": [{"path": "src/models.ts", "hunks": [1]}], "message": "fix(models): ..."},',
-    '   {"files": [{"path": "src/db.ts", "hunks": [1]}], "message": "perf(db): ..."},',
-    '   {"files": [{"path": "src/api.ts", "hunks": [1]}], "message": "chore(api): ..."}]',
-    "",
-    "EXAMPLE 6 — Cohesive tooling rollout (do NOT split one config file per commit):",
+    "EXAMPLE 4 — Cohesive tooling rollout:",
     "  eslint.config.js, knip.json, package.json, bun.lock, scripts/check.ts, scripts/check.json",
-    "  → these all support one quality-check workflow and should usually be ONE commit unless there is a clearly independent change mixed in.",
     '→ [{"files": [{"path": "eslint.config.js"}, {"path": "knip.json"}, {"path": "package.json"},',
     '             {"path": "bun.lock"}, {"path": "scripts/check.ts"}, {"path": "scripts/check.json"}],',
     '    "message": "chore(tooling): add lint and quality check workflow"}]',
-    "",
-    "EXAMPLE 7 — Absorb incidental cleanup into the owning feature (do NOT peel it off into a tiny follow-up commit):",
-    "  src/signup.ts: [Hunk 0] require acceptedLegalVersion, [Hunk 1] reorder imports used by the new logic",
-    "  tests/signup.test.ts: [Hunk 0] cover acceptedLegalVersion requirement",
-    "  src/legal.ts: [Hunk 0] export LEGAL_CONSENT_VERSION used by signup",
-    "  → the import reorder is incidental to the feature and belongs WITH the feature commit, not in a separate style commit.",
-    '→ [{"files": [{"path": "src/signup.ts", "hunks": [0, 1]}, {"path": "src/legal.ts", "hunks": [0]},',
-    '              {"path": "tests/signup.test.ts", "hunks": [0]}],',
-    '    "message": "feat(auth): require legal consent version during signup"}]',
-    "",
     "For each commit, write a message following these rules:",
     ...commitFormatInstructions(),
     "",
@@ -284,6 +221,7 @@ export function buildGroupingUserPrompt(
   context?: GroupingPromptContext,
 ): string {
   const allFiles = context?.allFiles ?? files;
+  const fileAliases = buildFileAliases(files);
 
   const parts: string[] = [
     `Analyzing ${formatScalar(files.length)} changed file(s). Organize into logical, atomic commits.`,
@@ -304,9 +242,9 @@ export function buildGroupingUserPrompt(
     );
   }
 
-  parts.push("", "Files in this prompt:");
+  parts.push("", "File legend:");
   for (const file of files) {
-    parts.push(`  - ${file.path}`);
+    parts.push(`  ${getFileAlias(fileAliases, file.path)} = ${file.path}`);
   }
 
   parts.push("");
@@ -314,12 +252,13 @@ export function buildGroupingUserPrompt(
     "HUNK REFERENCE MAP (use this to identify linked hunks across files):",
   );
   for (const file of files) {
+    const fileAlias = getFileAlias(fileAliases, file.path);
     if (file.hunks.length === 0) {
-      parts.push(`  ${file.path}: (no hunks — file-level change only)`);
+      parts.push(`  ${fileAlias}: (no hunks — file-level change only)`);
       continue;
     }
 
-    parts.push(`  ${file.path}:`);
+    parts.push(`  ${fileAlias}:`);
     for (let i = 0; i < file.hunks.length; i++) {
       parts.push(`    [Hunk ${formatScalar(i)}] ${file.hunks[i].header}`);
     }
@@ -332,8 +271,8 @@ export function buildGroupingUserPrompt(
   parts.push("");
 
   for (const file of files) {
-    parts.push(`=== ${file.path} ===`);
-    parts.push(formatLabeledDiff(file, formatFileDiff));
+    parts.push(`=== ${getFileAlias(fileAliases, file.path)} ===`);
+    parts.push(formatPromptDiff(file, formatFileDiff));
     parts.push("");
   }
   return parts.join("\n");
@@ -349,13 +288,19 @@ export function buildMergePrompt(messages: string[], stats: DiffStats): string {
       (message, index) => `--- Part ${formatScalar(index + 1)} ---\n${message}`,
     ),
     "",
-    "Combine these into a single cohesive commit message.",
+    "Preserve or reconstruct the strongest why-oriented rationale from the partials so the final message explains why the change exists, not just what files moved.",
+    "If the reason is only implicit, infer it from the concrete behavior, safeguard, workflow, or product outcome described across the partials.",
+    "Prefer a subject that names the motivation or outcome the commit delivers; keep raw implementation inventory in body bullets.",
+    "Preserve the most concrete subsystem or workflow nouns from the strongest partial message instead of collapsing to generic wording.",
+    "If the combined change is one cohesive rollout, name that rollout in the subject instead of listing every mechanism touched.",
+    "Do not write a comma-separated subject that enumerates three or more implementation details; put detail inventory in body bullets.",
+    "Combine these into one professional Conventional Commit that reads like a careful human wrote it.",
   ].join("\n");
 }
 
 export function buildSystemPrompt(): string {
   const parts = [
-    "You are a concise git commit message generator.",
+    "You are a professional git commit message writer.",
     "Analyze the provided diff and produce a commit message.",
     ...commitFormatInstructions(),
     "Respond with ONLY the commit message, nothing else.",
@@ -383,6 +328,7 @@ export function buildUserPrompt(chunk: DiffChunk, stats?: DiffStats): string {
 function buildConsolidationPreviewLines(
   group: PlannedCommit,
   fileByPath: Map<string, FileDiff>,
+  fileAliases: Map<string, string>,
 ): string[] {
   const previewLines: string[] = [];
   const previewFiles = group.files.slice(0, MAX_PREVIEW_FILES_PER_COMMIT);
@@ -390,11 +336,13 @@ function buildConsolidationPreviewLines(
   for (const fileRef of previewFiles) {
     const file = fileByPath.get(fileRef.path);
     if (!file) {
-      previewLines.push(`- ${fileRef.path}: missing file metadata`);
+      previewLines.push(
+        `- ${getFileAlias(fileAliases, fileRef.path)}: missing file metadata`,
+      );
       continue;
     }
 
-    previewLines.push(...buildFilePreviewLines(file, fileRef));
+    previewLines.push(...buildFilePreviewLines(file, fileRef, fileAliases));
   }
 
   const remainingFiles = group.files.length - previewFiles.length;
@@ -407,11 +355,18 @@ function buildConsolidationPreviewLines(
   return previewLines;
 }
 
+function buildFileAliases(files: FileDiff[]): Map<string, string> {
+  return new Map(
+    files.map((file, index) => [file.path, `F${String(index + 1)}`]),
+  );
+}
+
 function buildFilePreviewLines(
   file: FileDiff,
   fileRef: PlannedCommitFile,
+  fileAliases: Map<string, string>,
 ): string[] {
-  const lines: string[] = [`- ${file.path}:`];
+  const lines: string[] = [`- ${getFileAlias(fileAliases, file.path)}:`];
   const selectedHunks = getSelectedPreviewHunks(file, fileRef);
 
   if (selectedHunks.length === 0) {
@@ -447,6 +402,10 @@ function buildFilePreviewLines(
   return lines;
 }
 
+/**
+ * Keep commit-writing guidance centered on intent so every prompt path asks
+ * the model to infer and explain why a change exists before listing mechanics.
+ */
 function commitFormatInstructions(): string[] {
   const cfg = loadConfig();
   const parts: string[] = [];
@@ -467,7 +426,19 @@ function commitFormatInstructions(): string[] {
     `Language: ${cfg.commit.language}.`,
   );
   parts.push(
+    "Write as if an involved, thoughtful senior engineer is committing premium change by hand.",
+    "Center the message on why the change is being made; heavily infer the motivating bug, safeguard, product behavior, maintenance goal, or workflow need from the diff whenever it is implied.",
+    "Lead with the reason, outcome, or defended behavior the commit introduces, not a flat description of edited files or implementation steps.",
+    "Infer the actual subsystem, workflow, or product surface from the file paths, scopes, symbols, and diff content, and name that directly.",
+    "Heavily infer from the content to surface the intent a human reviewer would care about, even when the diff mostly shows mechanics.",
+    "When one commit covers a broad but cohesive rollout, the subject should name the umbrella outcome or area, not enumerate every mechanism changed.",
+    "Avoid comma-separated or and-linked subject lists that read like a changelog headline; move secondary details into body bullets.",
     "After the subject, add a blank line then a concise body using bullet points to summarize key changes.",
+    "Prefer 2-4 bullets that capture the most important behavioral, architectural, or validation details.",
+    "Use the body to justify the subject with impact, constraints, guarantees, or verification details; do not just restate the same wording.",
+    "Each bullet should add concrete information beyond the subject; avoid filler, hype, and repetition.",
+    "Prefer precise technical verbs and nouns over generic phrases like update, improve, changes, or stuff when the diff supports something more specific.",
+    "Badly generic subjects like feat: update tests, chore: improve code, or refactor: tweak prompts are invalid when the diff supports a more exact area.",
     `Wrap body lines at ${formatScalar(cfg.commit.maxBodyLineLength)} characters.`,
     "A subject-only commit message is invalid.",
   );
@@ -475,6 +446,21 @@ function commitFormatInstructions(): string[] {
     "Do NOT include markdown formatting, code fences, or quotation marks around the message.",
   );
   return parts;
+}
+
+function formatPromptDiff(
+  file: FileDiff,
+  formatFileDiff: (f: FileDiff) => string,
+): string {
+  const labeled = formatLabeledDiff(file, formatFileDiff).split("\n");
+  if (
+    labeled.length >= 2 &&
+    labeled[0]?.startsWith("--- ") &&
+    labeled[1]?.startsWith("+++ ")
+  ) {
+    return labeled.slice(2).join("\n");
+  }
+  return labeled.join("\n");
 }
 
 function getAreaKey(path: string): string {
@@ -486,6 +472,11 @@ function getAreaKey(path: string): string {
     return segments[0];
   }
   return segments.slice(0, 2).join("/");
+}
+
+function getFileAlias(fileAliases: Map<string, string>, path: string): string {
+  const alias = fileAliases.get(path);
+  return alias ?? path;
 }
 
 function getPreviewChangeLines(lines: string[]): string[] {
@@ -503,6 +494,21 @@ function getPreviewChangeLines(lines: string[]): string[] {
   return lines.slice(0, MAX_PREVIEW_LINES_PER_HUNK);
 }
 
+function getRepeatedPlanPaths(groups: PlannedCommit[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const group of groups) {
+    for (const file of group.files) {
+      counts.set(file.path, (counts.get(file.path) ?? 0) + 1);
+    }
+  }
+
+  return new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([path]) => path),
+  );
+}
+
 function getSelectedPreviewHunks(file: FileDiff, fileRef: PlannedCommitFile) {
   if (fileRef.hunks && fileRef.hunks.length > 0) {
     return fileRef.hunks
@@ -513,12 +519,29 @@ function getSelectedPreviewHunks(file: FileDiff, fileRef: PlannedCommitFile) {
   return file.hunks.slice(0, MAX_PREVIEW_HUNKS_PER_FILE);
 }
 
+function isSupportLikeSubject(subject: string): boolean {
+  const parsed = parseConventionalSubject(subject.trim().toLowerCase());
+  return parsed.type !== "" && SUPPORT_COMMIT_TYPES.has(parsed.type);
+}
+
 function samplePaths(paths: string[]): string[] {
   if (paths.length <= 3) {
     return [...paths];
   }
 
   return [paths[0], paths[1], paths.at(-1) ?? paths[paths.length - 1]];
+}
+
+function shouldIncludeConsolidationPreview(
+  group: PlannedCommit,
+  repeatedPaths: Set<string>,
+): boolean {
+  const subject = group.message.split("\n")[0] ?? "";
+  return (
+    group.files.some((file) => repeatedPaths.has(file.path)) ||
+    group.files.some((file) => (file.hunks?.length ?? 0) > 0) ||
+    isSupportLikeSubject(subject)
+  );
 }
 
 function summarizeFileAreas(files: FileDiff[]): string[] {
