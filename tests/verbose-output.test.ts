@@ -16,7 +16,14 @@ describe("verbose-output", () => {
               "test(ai-cache): isolate cache state\n\n- Reset AI cache in shared hooks.\n- Verify cached plans are reused.\n- Track stage output for repeated planning runs.",
           },
         ]),
+        durationMs: 842,
+        inputTokens: 610,
+        kind: "model-output",
+        outputTokens: 128,
+        requestCountDelta: 1,
         stage: "group",
+        totalTokens: 738,
+        transport: "chat",
       },
       { maxWidth: 88, mode: "summary", sequence: 2 },
     );
@@ -45,6 +52,9 @@ describe("verbose-output", () => {
     expect(lines[0]).toContain("\x1b[1m");
     expect(lines[0]).toContain("\x1b[36m");
     expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(true);
+    expect(lines.some((line) => line.includes("stats: kind: model-output"))).toBe(true);
+    expect(lines.some((line) => line.includes("time: 842ms"))).toBe(true);
+    expect(lines.some((line) => line.includes("tok: 738"))).toBe(true);
   });
 
   test("formats plain commit messages without requiring JSON", () => {
@@ -74,13 +84,24 @@ describe("verbose-output", () => {
     const lines = formatVerboseAiOutputLines(
       {
         content: raw,
+        durationMs: 1_256,
+        inputTokens: 444,
+        kind: "model-output",
+        outputTokens: 111,
+        requestCountDelta: 1,
         stage: "consolidate",
+        totalTokens: 555,
+        transport: "responses",
       },
       { maxWidth: 84, mode: "trace", sequence: 1 },
     );
 
     expect(lines[0]).toContain("Final consolidation #1 trace");
     expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(true);
+    expect(lines.some((line) => line.includes("transport: responses"))).toBe(true);
+    expect(lines.some((line) => line.includes("time: 1.26s"))).toBe(true);
+    expect(lines.some((line) => line.includes("in"))).toBe(true);
+    expect(lines.some((line) => line.includes("444 · out: 111 · tok: 555"))).toBe(true);
     expect(
       lines.some((line) => line.includes('"hunks": [0, 1, 2, 3, 4]')),
     ).toBe(true);
@@ -174,5 +195,47 @@ describe("verbose-output", () => {
         line.includes("[[0, 6], [1, 5, 8], [3, 4, 7, 9], [2]]"),
       ),
     ).toBe(true);
+  });
+
+  test("formats planner decision events with internal timing stats", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          decision: "dependency-ordering",
+          dependencyEdgeCount: 4,
+          groupCount: 3,
+          reordered: true,
+        }),
+        durationMs: 37,
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "summary", sequence: 2 },
+    );
+
+    expect(lines[0]).toContain("Final consolidation #2");
+    expect(lines.some((line) => line.includes("kind: planner-decision"))).toBe(true);
+    expect(lines.some((line) => line.includes("transport: internal"))).toBe(true);
+    expect(lines.some((line) => line.includes("time: 37ms"))).toBe(true);
+    expect(lines.some((line) => line.includes('"decision": "dependency-ordering"'))).toBe(true);
+  });
+
+  test("formats sub-millisecond event durations without rounding down to zero", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          decision: "plan-finalization",
+          finalCommitCount: 1,
+        }),
+        durationMs: 0.24,
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 1 },
+    );
+
+    expect(lines.some((line) => line.includes("time: <1ms"))).toBe(true);
   });
 });

@@ -38,14 +38,43 @@ export function formatVerboseAiOutputLines(
   }
 
   if (isCommitPlan(parsed)) {
-    return formatCommitPlanBlock(event.stage, parsed, maxWidth, sequence);
+    return formatCommitPlanBlock(event, parsed, maxWidth, sequence);
   }
 
   return formatGenericBlock(
+    event,
     buildStageTitle(event.stage, sequence),
     normalizeGenericContent(event.content, parsed),
     maxWidth,
   );
+}
+
+function buildEventStatParts(event: AiOutputEvent): string[] {
+  const parts: string[] = [];
+
+  if (event.kind) {
+    parts.push(`kind: ${event.kind}`);
+  }
+  if (event.transport) {
+    parts.push(`transport: ${event.transport}`);
+  }
+  if (typeof event.durationMs === "number") {
+    parts.push(`time: ${formatDuration(event.durationMs)}`);
+  }
+  if (typeof event.requestCountDelta === "number") {
+    parts.push(`req: ${String(event.requestCountDelta)}`);
+  }
+  if (typeof event.inputTokens === "number") {
+    parts.push(`in: ${String(event.inputTokens)}`);
+  }
+  if (typeof event.outputTokens === "number") {
+    parts.push(`out: ${String(event.outputTokens)}`);
+  }
+  if (typeof event.totalTokens === "number") {
+    parts.push(`tok: ${String(event.totalTokens)}`);
+  }
+
+  return parts.length > 0 ? [`stats: ${parts.join(" · ")}`] : [];
 }
 
 function buildStageTitle(
@@ -124,7 +153,7 @@ function formatCommitFiles(files: VerboseCommitFile[]): string {
 }
 
 function formatCommitPlanBlock(
-  stage: AiOutputEvent["stage"],
+  event: AiOutputEvent,
   commits: VerboseCommitPlanItem[],
   maxWidth: number,
   sequence?: number,
@@ -133,9 +162,10 @@ function formatCommitPlanBlock(
     commits.length === 1 ? "candidate commit" : "candidate commits";
   const lines = [
     styleTraceHeader(
-      `╭── ${buildStageTitle(stage, sequence)} · ${String(commits.length)} ${commitLabel}`,
+      `╭── ${buildStageTitle(event.stage, sequence)} · ${String(commits.length)} ${commitLabel}`,
     ),
   ];
+  lines.push(...formatEventStatLines(event, maxWidth));
 
   for (let index = 0; index < commits.length; index++) {
     const commit = commits[index];
@@ -182,13 +212,39 @@ function formatCommitPlanBlock(
   return lines;
 }
 
+function formatDuration(durationMs: number): string {
+  if (durationMs > 0 && durationMs < 1) {
+    return "<1ms";
+  }
+
+  return durationMs >= 1000
+    ? `${(durationMs / 1000).toFixed(2)}s`
+    : `${Math.round(durationMs)}ms`;
+}
+
+function formatEventStatLines(
+  event: AiOutputEvent,
+  maxWidth: number,
+): string[] {
+  const [statsLine] = buildEventStatParts(event);
+  if (!statsLine) {
+    return [];
+  }
+
+  return wrapLine(statsLine, maxWidth - 4, "│   ", "│     ").map(
+    styleTraceRail,
+  );
+}
+
 function formatGenericBlock(
+  event: AiOutputEvent,
   title: string,
   content: string,
   maxWidth: number,
 ): string[] {
   const trimmedContent = content.trim();
   const lines = [styleTraceHeader(`╭── ${title}`)];
+  lines.push(...formatEventStatLines(event, maxWidth));
 
   if (trimmedContent.length === 0) {
     lines.push(styleTraceRail("│ (empty)"), styleTraceFooter("╰──"));
@@ -309,6 +365,7 @@ function formatTraceBlock(
   const title = `${buildStageTitle(event.stage, sequence)} trace`;
   const rawContent = event.content.trimEnd();
   const lines = [styleTraceHeader(`╭── ${title}`)];
+  lines.push(...formatEventStatLines(event, maxWidth));
 
   if (rawContent.length === 0) {
     lines.push(styleTraceRail("│ (empty)"), styleTraceFooter("╰──"));
