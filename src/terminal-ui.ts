@@ -130,10 +130,17 @@ export interface ThinkingIndicatorOptions {
   output?: TerminalWriter;
 }
 
+interface ActiveThinkingIndicator {
+  output: TerminalWriter;
+  renderCurrentFrame: () => void;
+}
+
 interface TerminalWriter {
   isTTY?: boolean;
   write(chunk: string): boolean;
 }
+
+let activeThinkingIndicator: ActiveThinkingIndicator | null = null;
 
 export function renderThinkingFrame(frameIndex: number): string {
   const glyph =
@@ -195,9 +202,18 @@ export async function withThinkingIndicator<T>(
 
   output.write(HIDE_CURSOR);
 
-  const renderFrame = () => {
+  const renderCurrentFrame = () => {
     output.write(renderThinkingFrame(frameIndex));
+  };
+
+  const renderFrame = () => {
+    renderCurrentFrame();
     frameIndex++;
+  };
+
+  activeThinkingIndicator = {
+    output,
+    renderCurrentFrame,
   };
 
   renderFrame();
@@ -207,7 +223,33 @@ export async function withThinkingIndicator<T>(
     return await task();
   } finally {
     clearInterval(intervalId);
+    if (activeThinkingIndicator.output === output) {
+      activeThinkingIndicator = null;
+    }
     output.write(`${CLEAR_LINE}${SHOW_CURSOR}`);
+  }
+}
+
+/**
+ * Write terminal lines without corrupting the active thinking indicator frame.
+ */
+export function writeTerminalLines(
+  lines: string[],
+  output: TerminalWriter = process.stderr,
+): void {
+  const activeIndicator =
+    activeThinkingIndicator?.output === output ? activeThinkingIndicator : null;
+
+  if (activeIndicator) {
+    output.write(CLEAR_LINE);
+  }
+
+  for (const line of lines) {
+    output.write(`${line}\n`);
+  }
+
+  if (activeIndicator) {
+    activeIndicator.renderCurrentFrame();
   }
 }
 

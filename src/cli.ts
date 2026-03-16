@@ -3,13 +3,16 @@
 import { createInterface } from "node:readline";
 
 import {
+  type AiOutputEvent,
   estimateGenerateOperationTokens,
   estimatePlanOperationTokens,
   generateForChunks,
+  getTokenUsageByStage,
   getTokenUsageSummary,
   planCommits,
   type PlannedCommitFile,
   resetTokenUsageSummary,
+  setAiOutputObserver,
   type TokenEstimateSummary,
   validateOpenAIConfiguration,
 } from "./ai.js";
@@ -47,6 +50,15 @@ const CYAN = "\x1b[36m";
 const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
+const DEFAULT_VERBOSE_WIDTH = 100;
+
+type OutputMode = "off" | "summary" | "trace";
+
+let outputMode: OutputMode = "off";
+let verboseStageCounts: Record<string, number> = Object.create(null) as Record<
+  string,
+  number
+>;
 
 interface TokenCheckOptions {
   skipPrompt: boolean;
@@ -314,7 +326,8 @@ function cmdHelp() {
   log(`${CYAN}Flags:${RESET}`);
   log("  -y, --yes             Auto-confirm (skip prompts)");
   log("  --no-token-check      Skip high-token confirmation prompts");
-  log("  -v, --verbose         Show detailed operation logs");
+  log("  -v, --verbose         Show concise stage summaries and diagnostics");
+  log("  --trace               Show raw intermediate AI payloads");
   log("  --version             Show version information");
   log("  -h, --help            Show this help\n");
   log(`${CYAN}Usage:${RESET}`);
@@ -323,6 +336,7 @@ function cmdHelp() {
     "  gitaicmt -y                      Detect, analyze & commit (no prompt)",
   );
   log("  gitaicmt -v plan                 Show verbose logs during planning");
+  log("  gitaicmt --trace plan            Show raw AI planning payloads");
   log("  gitaicmt plan                    Preview the split before committing");
   log("  gitaicmt gen | git commit -F -   Pipe single message to git\n");
   log(`${CYAN}Config:${RESET}`);
@@ -516,7 +530,7 @@ function isHighTokenEstimate(
 }
 
 function log(msg: string) {
-  process.stderr.write(msg + "\n");
+  writeTerminalLines(msg.split("\n"));
 }
 
 function logActualTokenUsage(usage: {
@@ -528,6 +542,22 @@ function logActualTokenUsage(usage: {
   log(
     `${DIM}tokens used: ${formatCount(usage.totalTokens)} total across ${formatCount(usage.requestCount)} request(s)${RESET}`,
   );
+
+  if (!verboseMode) {
+    return;
+  }
+
+  const usageByStage = getTokenUsageByStage();
+  const stageLines = Object.entries(usageByStage)
+    .filter(([, stageUsage]) => stageUsage.requestCount > 0)
+    .map(
+      ([stage, stageUsage]) =>
+        `${formatStageUsageLabel(stage)}=${formatCount(stageUsage.totalTokens)} (${formatCount(stageUsage.requestCount)} req)`,
+    );
+
+  if (stageLines.length > 0) {
+    verbose(`Token stages: ${stageLines.join(", ")}`);
+  }
 }
 
 function logGenerationContext(
@@ -587,17 +617,42 @@ function logTokenEstimate(
   }
 }
 
+function logVerboseAiOutput(event: AiOutputEvent): void {
+  const stageKey = event.stage;
+  verboseStageCounts[stageKey] = (verboseStageCounts[stageKey] ?? 0) + 1;
+  const lines = formatVerboseAiOutputLines(event, {
+    maxWidth: resolveVerboseWidth(),
+    mode: outputMode === "trace" ? "trace" : "summary",
+    sequence: verboseStageCounts[stageKey],
+  });
+  logVerboseBlock(lines);
+}
+
+function logVerboseBlock(lines: string[]): void {
+  if (!verboseMode) {
+    return;
+  }
+
+  const label = outputMode === "trace" ? "trace" : "verbose";
+
+  writeTerminalLines(lines.map((line) => `${DIM}[${label}]${RESET} ${line}`));
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const hasYFlag = args.includes("-y") || args.includes("--yes");
   const hasNoTokenCheckFlag = args.includes("--no-token-check");
   const hasVerboseFlag = args.includes("-v") || args.includes("--verbose");
+  const hasTraceFlag = args.includes("--trace");
   const hasVersionFlag = args.includes("--version");
   // Help flags are special — treat them as commands
   const hasHelpFlag = args.includes("-h") || args.includes("--help");
 
   // Set verbose mode globally
-  verboseMode = hasVerboseFlag;
+  outputMode = hasTraceFlag ? "trace" : hasVerboseFlag ? "summary" : "off";
+  verboseMode = outputMode !== "off";
+  verboseStageCounts = Object.create(null) as Record<string, number>;
+  setAiOutputObserver(outputMode === "off" ? null : logVerboseAiOutput);
 
   // Version flag takes precedence
   if (hasVersionFlag) {
@@ -713,7 +768,8 @@ function shouldPromptForHighTokenUsage(
 
 function verbose(msg: string) {
   if (verboseMode) {
-    log(`${DIM}[verbose] ${msg}${RESET}`);
+    const label = outputMode === "trace" ? "trace" : "verbose";
+    log(`${DIM}[${label}] ${msg}${RESET}`);
   }
 }
 
