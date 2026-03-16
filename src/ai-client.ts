@@ -6,6 +6,18 @@ import { ConfigError, OpenAIError, OpenAITimeoutError } from "./errors.js";
 let cachedClient: null | OpenAI = null;
 let lastApiKey: null | string = null;
 
+export interface AiOutputEvent {
+  content: string;
+  stage: "unknown" | TokenUsageStage;
+}
+
+export type TokenUsageStage =
+  | "cluster"
+  | "consolidate"
+  | "generate"
+  | "group"
+  | "merge";
+
 export interface TokenUsageSummary {
   inputTokens: number;
   outputTokens: number;
@@ -14,9 +26,13 @@ export interface TokenUsageSummary {
 }
 
 let currentTokenUsage: TokenUsageSummary = emptyTokenUsageSummary();
+let currentTokenUsageByStage: Record<TokenUsageStage, TokenUsageSummary> =
+  emptyTokenUsageByStage();
+let aiOutputObserver: ((event: AiOutputEvent) => void) | null = null;
 
 export interface CompleteOptions {
   maxTokens?: number;
+  stage?: TokenUsageStage;
   temperature?: number;
   timeoutMs?: number;
 }
@@ -30,6 +46,7 @@ export async function complete(
   const timeoutMs = options?.timeoutMs ?? cfg.performance.timeoutMs;
   const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
   const maxTokens = options?.maxTokens ?? cfg.openai.maxTokens;
+  const stage = options?.stage;
   const temperature = options?.temperature ?? cfg.openai.temperature;
 
   const chatPayload = {
@@ -44,10 +61,12 @@ export async function complete(
 
   try {
     const res = await client().chat.completions.create(chatPayload, { signal });
-    recordTokenUsage(res);
+    recordTokenUsage(res, stage);
     const content = res.choices[0]?.message?.content;
     if (typeof content === "string" && content.trim()) {
-      return content.trim();
+      const trimmedContent = content.trim();
+      notifyAiOutputObserver(stage, trimmedContent);
+      return trimmedContent;
     }
     throw new OpenAIError("API returned empty or invalid response");
   } catch (err: unknown) {
@@ -76,7 +95,7 @@ export async function complete(
         { signal },
       );
 
-      recordTokenUsage(res);
+      recordTokenUsage(res, stage);
 
       const content = extractResponseText(res);
       if (!content) {
@@ -84,6 +103,7 @@ export async function complete(
           "Responses API returned empty or invalid response",
         );
       }
+      notifyAiOutputObserver(stage, content);
       return content;
     } catch (fallbackErr: unknown) {
       if (fallbackErr instanceof Error) {
@@ -103,12 +123,35 @@ export async function complete(
   }
 }
 
+export function getTokenUsageByStage(): Record<
+  TokenUsageStage,
+  TokenUsageSummary
+> {
+  return {
+    cluster: { ...currentTokenUsageByStage.cluster },
+    consolidate: { ...currentTokenUsageByStage.consolidate },
+    generate: { ...currentTokenUsageByStage.generate },
+    group: { ...currentTokenUsageByStage.group },
+    merge: { ...currentTokenUsageByStage.merge },
+  };
+}
+
 export function getTokenUsageSummary(): TokenUsageSummary {
   return { ...currentTokenUsage };
 }
 
 export function resetTokenUsageSummary(): void {
   currentTokenUsage = emptyTokenUsageSummary();
+  currentTokenUsageByStage = emptyTokenUsageByStage();
+}
+
+/**
+ * Register a process-local observer for successful AI stage outputs.
+ */
+export function setAiOutputObserver(
+  observer: ((event: AiOutputEvent) => void) | null,
+): void {
+  aiOutputObserver = observer;
 }
 
 export function validateOpenAIConfiguration(): void {
@@ -151,6 +194,16 @@ function client(): OpenAI {
   lastApiKey = cfg.openai.apiKey;
   cachedClient = new OpenAI({ apiKey: cfg.openai.apiKey });
   return cachedClient;
+}
+
+function emptyTokenUsageByStage(): Record<TokenUsageStage, TokenUsageSummary> {
+  return {
+    cluster: emptyTokenUsageSummary(),
+    consolidate: emptyTokenUsageSummary(),
+    generate: emptyTokenUsageSummary(),
+    group: emptyTokenUsageSummary(),
+    merge: emptyTokenUsageSummary(),
+  };
 }
 
 function emptyTokenUsageSummary(): TokenUsageSummary {
@@ -236,11 +289,26 @@ function isNonChatModelError(err: unknown): boolean {
   );
 }
 
+function notifyAiOutputObserver(
+  stage: TokenUsageStage | undefined,
+  content: string,
+): void {
+  if (!aiOutputObserver) {
+    return;
+  }
+
+  try {
+    aiOutputObserver({ content, stage: stage ?? "unknown" });
+  } catch {
+    // Verbose logging must never interfere with commit generation.
+  }
+}
+
 function readUsageNumber(value: unknown): null | number {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function recordTokenUsage(raw: unknown): void {
+function recordTokenUsage(raw: unknown, stage?: TokenUsageStage): void {
   const usage = extractTokenUsage(raw);
   if (!usage) {
     return;
@@ -251,6 +319,18 @@ function recordTokenUsage(raw: unknown): void {
     outputTokens: currentTokenUsage.outputTokens + usage.outputTokens,
     requestCount: currentTokenUsage.requestCount + 1,
     totalTokens: currentTokenUsage.totalTokens + usage.totalTokens,
+  };
+
+  if (!stage) {
+    return;
+  }
+
+  const stageUsage = currentTokenUsageByStage[stage];
+  currentTokenUsageByStage[stage] = {
+    inputTokens: stageUsage.inputTokens + usage.inputTokens,
+    outputTokens: stageUsage.outputTokens + usage.outputTokens,
+    requestCount: stageUsage.requestCount + 1,
+    totalTokens: stageUsage.totalTokens + usage.totalTokens,
   };
 }
 

@@ -3,14 +3,20 @@ import {
   batchingMakesProgress,
   shouldBatchFiles,
 } from "./ai-batching.js";
-import { getCachedMessage, setCachedMessage } from "./ai-cache.js";
+import {
+  getCachedMessage,
+  getCachedPlan,
+  serializePlanCacheInput,
+  setCachedMessage,
+  setCachedPlan,
+} from "./ai-cache.js";
 import { complete } from "./ai-client.js";
 import {
   formatLabeledDiff,
   formatScalar,
   validateCommitMessage,
 } from "./ai-format.js";
-import { finalizePlannedGroups } from "./ai-grouping.js";
+import { finalizePlannedGroups, premergeBySubject } from "./ai-grouping.js";
 import {
   buildGroupingSystemPrompt,
   buildGroupingUserPrompt,
@@ -34,15 +40,18 @@ type DiffStats = import("./diff.js").DiffStats;
 type FileDiff = import("./diff.js").FileDiff;
 
 export {
+  getTokenUsageByStage,
   getTokenUsageSummary,
   resetTokenUsageSummary,
+  setAiOutputObserver,
   validateOpenAIConfiguration,
 } from "./ai-client.js";
-export type { TokenEstimateSummary } from "./ai-tokens.js";
+export type { AiOutputEvent } from "./ai-client.js";
 export {
   estimateGenerateOperationTokens,
   estimatePlanOperationTokens,
 } from "./ai-tokens.js";
+export type { TokenEstimateSummary } from "./ai-tokens.js";
 export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
 export type { PlannedCommit, PlannedCommitFile };
 
@@ -57,7 +66,9 @@ export async function generateForChunk(
 
   const sys = buildSystemPrompt();
   const usr = buildUserPrompt(chunk, stats);
-  const msg = validateCommitMessage(await complete(sys, usr));
+  const msg = validateCommitMessage(
+    await complete(sys, usr, { stage: "generate" }),
+  );
   setCachedMessage(chunk.content, msg);
   return msg;
 }
@@ -85,7 +96,7 @@ export async function generateForChunks(
 
   const sys = buildSystemPrompt();
   const usr = buildMergePrompt(partials, stats);
-  return validateCommitMessage(await complete(sys, usr));
+  return validateCommitMessage(await complete(sys, usr, { stage: "merge" }));
 }
 
 export async function planCommits(
@@ -142,6 +153,7 @@ export async function planCommits(
   );
   const raw = await complete(sys, usr, {
     maxTokens: groupingTokens,
+    stage: "group",
     temperature: Math.min(cfg.openai.temperature, 0.3),
     timeoutMs: groupingTimeout,
   });
