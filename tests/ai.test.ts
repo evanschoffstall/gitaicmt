@@ -432,6 +432,326 @@ describe("grouping user prompt", () => {
   });
 });
 
+describe("consolidation user prompt", () => {
+  test("includes selected diff previews for grouped files", async () => {
+    const { buildConsolidationUserPrompt } =
+      await import("../src/ai-prompt-builders.js");
+    const fileA = makeMultiHunkFileDiff("src/app.ts", [
+      {
+        header: "@@ -1,3 +1,5 @@",
+        lines: ["+import { helper } from './helper'", "+const x = helper()"],
+      },
+      {
+        header: "@@ -20,2 +22,4 @@",
+        lines: ["+return x"],
+      },
+    ]);
+    const fileB = makeMultiHunkFileDiff("tests/app.test.ts", [
+      {
+        header: "@@ -1,1 +1,3 @@",
+        lines: ["+it('uses helper', () => {})"],
+      },
+    ]);
+
+    const prompt = buildConsolidationUserPrompt(
+      [fileA, fileB],
+      [
+        {
+          files: [
+            { hunks: [0], path: "src/app.ts" },
+            { path: "tests/app.test.ts" },
+          ],
+          message:
+            "feat(app): add helper integration\n\n- Wire helper usage into the app.",
+        },
+      ],
+    );
+
+    expect(prompt).toContain("Selected diff preview:");
+    expect(prompt).toContain("@@ -1,3 +1,5 @@");
+    expect(prompt).toContain("+import { helper } from './helper'");
+    expect(prompt).toContain("+it('uses helper', () => {})");
+  });
+
+  test("prefers absorbing narrow support commits into the owning change", async () => {
+    const { buildConsolidationSystemPrompt, buildConsolidationUserPrompt } =
+      await import("../src/ai-prompt-builders.js");
+    const fileA = makeMultiHunkFileDiff("src/signup.ts", [
+      {
+        header: "@@ -1,2 +1,5 @@",
+        lines: [
+          "+import { LEGAL_CONSENT_VERSION } from './legal'",
+          "+body.acceptedLegalVersion = LEGAL_CONSENT_VERSION",
+        ],
+      },
+    ]);
+    const fileB = makeMultiHunkFileDiff("tests/signup.test.ts", [
+      {
+        header: "@@ -1,1 +1,3 @@",
+        lines: ["+it('requires acceptedLegalVersion', () => {})"],
+      },
+    ]);
+
+    const systemPrompt = buildConsolidationSystemPrompt();
+    const userPrompt = buildConsolidationUserPrompt(
+      [fileA, fileB],
+      [
+        {
+          files: [{ path: "src/signup.ts" }],
+          message:
+            "feat(auth): require legal consent version\n\n- Require acceptedLegalVersion during signup.",
+        },
+        {
+          files: [{ path: "tests/signup.test.ts" }],
+          message:
+            "test(auth): cover legal consent version\n\n- Add signup tests for legal consent validation.",
+        },
+      ],
+    );
+
+    expect(systemPrompt).toContain(
+      "Absorb narrow style, import-order, formatting, rename-only, docs, test, config, and helper-script follow-up commits into the neighboring owning feature/refactor",
+    );
+    expect(systemPrompt).toContain(
+      "Standalone style/import-order/formatting commits should be rare",
+    );
+    expect(userPrompt).toContain(
+      "Absorb narrow cleanup-only, import-order, docs, test, config, and helper-script commits into the neighboring owning change",
+    );
+  });
+
+  test("allows non-adjacent merges and collapses style sweep commits", async () => {
+    const { buildConsolidationSystemPrompt, buildConsolidationUserPrompt } =
+      await import("../src/ai-prompt-builders.js");
+
+    const systemPrompt = buildConsolidationSystemPrompt();
+
+    // Non-adjacent merges must be allowed
+    expect(systemPrompt).toContain("including non-adjacent ones");
+    // Style sweeps must be explicitly collapsed
+    expect(systemPrompt).toContain(
+      "Collapse ALL style, import-order, formatting, and whitespace-only sweep commits",
+    );
+    expect(systemPrompt).toContain("1-2 commits maximum");
+    // Same-file multi-hunk splits must always merge
+    expect(systemPrompt).toContain(
+      "If two commits modify different hunks of the SAME file, merge them",
+    );
+
+    const fileA = makeMultiHunkFileDiff("tests/api-services.test.ts", [
+      {
+        header: "@@ -1,2 +1,5 @@",
+        lines: ["+test('auth service signup', () => {})"],
+      },
+      {
+        header: "@@ -30,2 +33,5 @@",
+        lines: ["+test('article compat check', () => {})"],
+      },
+    ]);
+
+    const userPrompt = buildConsolidationUserPrompt(
+      [fileA],
+      [
+        {
+          files: [{ hunks: [0], path: "tests/api-services.test.ts" }],
+          message:
+            "test(auth-service): require legal version in signup\n\n- Assert acceptedLegalVersion in AuthService payload.",
+        },
+        {
+          files: [{ hunks: [1], path: "tests/api-services.test.ts" }],
+          message:
+            "test(article-service): rename compatibility check coverage\n\n- Update proxy check test to new API names.",
+        },
+      ],
+    );
+
+    expect(userPrompt).toContain(
+      "Collapse ALL style/import-order/formatting sweep commits",
+    );
+    expect(userPrompt).toContain(
+      "If multiple commits modify different hunks of the SAME file",
+    );
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+
+describe("cluster prompts", () => {
+  test("buildClusterSystemPrompt instructs collapsing style sweeps into one cluster", async () => {
+    const { buildClusterSystemPrompt } =
+      await import("../src/ai-prompt-builders.js");
+    const prompt = buildClusterSystemPrompt();
+    expect(prompt).toContain("style, import-order, formatting");
+    expect(prompt).toContain("ONE cluster");
+    expect(prompt).toContain("same feature");
+  });
+
+  test("buildClusterUserPrompt lists all commit subjects by index", async () => {
+    const { buildClusterUserPrompt } =
+      await import("../src/ai-prompt-builders.js");
+    const groups = [
+      {
+        files: [{ path: "src/a.ts" }],
+        message: "feat(auth): add login\n\n- Wire auth flow.",
+      },
+      {
+        files: [{ path: "src/b.ts" }],
+        message: "style(imports): normalize ordering\n\n- Reorder imports.",
+      },
+      {
+        files: [{ path: "tests/a.test.ts" }],
+        message: "test(auth): cover login flow\n\n- Add auth tests.",
+      },
+    ];
+    const prompt = buildClusterUserPrompt(groups);
+    expect(prompt).toContain("0: feat(auth): add login");
+    expect(prompt).toContain("1: style(imports): normalize ordering");
+    expect(prompt).toContain("2: test(auth): cover login flow");
+    expect(prompt).toContain("3 commits");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+
+describe("deterministic pre-merge", () => {
+  test("parseSubjectWords extracts type and significant words", async () => {
+    const { parseSubjectWords } = await import("../src/ai-grouping.js");
+    const result = parseSubjectWords(
+      "style(dashboard): normalize import ordering and spacing",
+    );
+    expect(result.type).toBe("style");
+    expect(result.words).toContain("normalize");
+    expect(result.words).toContain("import");
+    expect(result.words).toContain("ordering");
+    expect(result.words).toContain("spacing");
+    // "and" is a stop word
+    expect(result.words).not.toContain("and");
+  });
+
+  test("parseSubjectWords handles messages without conventional prefix", async () => {
+    const { parseSubjectWords } = await import("../src/ai-grouping.js");
+    const result = parseSubjectWords("some random message");
+    expect(result.type).toBe("");
+    expect(result.words.size).toBeGreaterThan(0);
+  });
+
+  test("wordsRelated matches inflected forms via prefix", async () => {
+    const { wordsRelated } = await import("../src/ai-grouping.js");
+    expect(wordsRelated("import", "imports")).toBe(true);
+    expect(wordsRelated("order", "ordering")).toBe(true);
+    expect(wordsRelated("format", "formatting")).toBe(true);
+    expect(wordsRelated("normalize", "normalize")).toBe(true);
+    // Short words are not prefix-matched
+    expect(wordsRelated("add", "address")).toBe(false);
+    // Unrelated words
+    expect(wordsRelated("import", "export")).toBe(false);
+  });
+
+  test("hasHighWordOverlap detects matching style descriptions", async () => {
+    const { hasHighWordOverlap, parseSubjectWords } =
+      await import("../src/ai-grouping.js");
+    const a = parseSubjectWords(
+      "style(dashboard): normalize import ordering and spacing",
+    );
+    const b = parseSubjectWords(
+      "style(tests): normalize import ordering in test files",
+    );
+    expect(hasHighWordOverlap(a.words, b.words)).toBe(true);
+  });
+
+  test("hasHighWordOverlap rejects unrelated descriptions", async () => {
+    const { hasHighWordOverlap, parseSubjectWords } =
+      await import("../src/ai-grouping.js");
+    const a = parseSubjectWords("feat(auth): add login endpoint");
+    const b = parseSubjectWords("feat(legal): add legal document framework");
+    expect(hasHighWordOverlap(a.words, b.words)).toBe(false);
+  });
+
+  test("premergeBySubject merges style commits with similar descriptions", async () => {
+    const { premergeBySubject } = await import("../src/ai-grouping.js");
+    const fileByPath = new Map([
+      ["src/a.ts", makeFileDiff("src/a.ts", 1, 0)],
+      ["src/b.ts", makeFileDiff("src/b.ts", 1, 0)],
+      ["src/c.ts", makeFileDiff("src/c.ts", 1, 0)],
+      ["src/d.ts", makeFileDiff("src/d.ts", 1, 0)],
+    ]);
+    const groups = [
+      {
+        files: [{ path: "src/a.ts" }],
+        message: "feat(auth): add login\n\n- Add login handler.",
+      },
+      {
+        files: [{ path: "src/b.ts" }],
+        message:
+          "style(dashboard): normalize import ordering\n\n- Reorder imports.",
+      },
+      {
+        files: [{ path: "src/c.ts" }],
+        message:
+          "style(lib): normalize import ordering and spacing\n\n- Clean imports.",
+      },
+      {
+        files: [{ path: "src/d.ts" }],
+        message: "fix(parser): handle null response\n\n- Guard against nulls.",
+      },
+    ];
+    const result = premergeBySubject(groups, fileByPath);
+    // Two style commits merge into one; feat and fix stay separate
+    expect(result).toHaveLength(3);
+    const styleCommit = result.find((c) => c.message.includes("style"));
+    expect(styleCommit?.files).toHaveLength(2);
+  });
+
+  test("premergeBySubject uses transitive closure", async () => {
+    const { premergeBySubject } = await import("../src/ai-grouping.js");
+    const fileByPath = new Map([
+      ["a.ts", makeFileDiff("a.ts", 1, 0)],
+      ["b.ts", makeFileDiff("b.ts", 1, 0)],
+      ["c.ts", makeFileDiff("c.ts", 1, 0)],
+    ]);
+    // A~B share "normalize import", B~C share "import ordering"
+    // Transitivity: A+B+C all merge together
+    const groups = [
+      {
+        files: [{ path: "a.ts" }],
+        message: "style: normalize import order\n\n- a.",
+      },
+      {
+        files: [{ path: "b.ts" }],
+        message: "style: normalize import ordering\n\n- b.",
+      },
+      {
+        files: [{ path: "c.ts" }],
+        message: "style: apply import ordering cleanup\n\n- c.",
+      },
+    ];
+    const result = premergeBySubject(groups, fileByPath);
+    expect(result).toHaveLength(1);
+    expect(result[0].files).toHaveLength(3);
+  });
+
+  test("premergeBySubject does not merge different types", async () => {
+    const { premergeBySubject } = await import("../src/ai-grouping.js");
+    const fileByPath = new Map([
+      ["a.ts", makeFileDiff("a.ts", 1, 0)],
+      ["b.ts", makeFileDiff("b.ts", 1, 0)],
+    ]);
+    const groups = [
+      {
+        files: [{ path: "a.ts" }],
+        message: "style: normalize import ordering\n\n- a.",
+      },
+      {
+        files: [{ path: "b.ts" }],
+        message: "refactor: normalize import ordering\n\n- b.",
+      },
+    ];
+    const result = premergeBySubject(groups, fileByPath);
+    // Different types → stay separate
+    expect(result).toHaveLength(2);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════
 
 describe("planCommits - cross-file hunk validation", () => {
