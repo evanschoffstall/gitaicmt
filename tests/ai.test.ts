@@ -1,3 +1,4 @@
+import { resetAiCache } from "../src/ai-cache.js";
 import { resetConfigCache } from "../src/config.js";
 
 const { beforeEach, describe, expect, test } = await import("bun:test");
@@ -16,6 +17,7 @@ type FileDiff = import("../src/diff.js").FileDiff;
 
 beforeEach(() => {
   resetConfigCache();
+  resetAiCache();
   // Set a fake API key so the module doesn't throw on client init
   process.env["OPENAI_API_KEY"] = "sk-test-key-for-testing";
 });
@@ -266,7 +268,7 @@ describe("grouping system prompt", () => {
     expect(prompt).toContain("EXAMPLE 2");
     expect(prompt).toContain("EXAMPLE 3");
     expect(prompt).toContain("EXAMPLE 4");
-    expect(prompt).toContain("EXAMPLE 5");
+    expect(prompt).toContain("Cross-file hunk wiring");
   });
 
   test("examples show JSON with per-file hunks arrays", async () => {
@@ -288,7 +290,7 @@ describe("grouping system prompt", () => {
     const prompt = buildGroupingSystemPrompt();
     // STEP 2 wiring section
     expect(prompt).toContain("STEP 2");
-    expect(prompt).toContain("same commit");
+    expect(prompt).toContain("SAME commit");
   });
 
   test("instructs unrelated hunks in same file to go in different commits", async () => {
@@ -377,8 +379,8 @@ describe("grouping user prompt", () => {
     expect(prompt).toContain("src/parser.ts");
     // Both files in the reference map
     const mapSection = prompt.slice(prompt.indexOf("HUNK REFERENCE MAP"));
-    expect(mapSection).toContain("src/errors.ts");
-    expect(mapSection).toContain("src/parser.ts");
+    expect(mapSection).toContain("F1:");
+    expect(mapSection).toContain("F2:");
   });
 
   test("labels hunks in FULL DIFFS section too", async () => {
@@ -395,7 +397,7 @@ describe("grouping user prompt", () => {
     expect(diffSection).toContain("[Hunk 1]");
   });
 
-  test("lists files in the prompt without heuristic categories", async () => {
+  test("uses a stable file legend without heuristic categories", async () => {
     const { buildGroupingUserPrompt } = await import("../src/ai.js");
     const srcFile = makeMultiHunkFileDiff("src/app.ts", [
       { header: "@@ -1,1 +1,2 @@", lines: ["+const x = 1;"] },
@@ -404,10 +406,25 @@ describe("grouping user prompt", () => {
       { header: "@@ -1,1 +1,3 @@", lines: ["+it('works', () => {})"] },
     ]);
     const prompt = buildGroupingUserPrompt([srcFile, testFile], formatFn);
-    expect(prompt).toContain("Files in this prompt:");
+    expect(prompt).toContain("File legend:");
+    expect(prompt).toContain("F1 = src/app.ts");
+    expect(prompt).toContain("F2 = tests/app.test.ts");
     expect(prompt).toContain("src/app.ts");
     expect(prompt).toContain("tests/app.test.ts");
     expect(prompt).not.toContain("File categories (for context):");
+  });
+
+  test("strips repeated file headers from diff bodies once files are aliased", async () => {
+    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const file = makeMultiHunkFileDiff("src/models.ts", [
+      { header: "@@ -1,3 +1,4 @@", lines: ["+createdAt: Date"] },
+    ]);
+
+    const prompt = buildGroupingUserPrompt([file], formatFn);
+
+    expect(prompt).toContain("F1 = src/models.ts");
+    expect(prompt).not.toContain("--- src/models.ts");
+    expect(prompt).not.toContain("+++ src/models.ts");
   });
 
   test("includes overall changeset context for batched prompts", async () => {
@@ -429,6 +446,22 @@ describe("grouping user prompt", () => {
     expect(prompt).toContain("overall 3-file changeset");
     expect(prompt).toContain("tests/app.test.ts");
     expect(prompt).toContain("package.json");
+  });
+
+  test("does not inject project cue summaries into grouping prompts", async () => {
+    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const cacheFile = makeFileDiff("src/ai-cache.ts", 1, 0);
+    const tokensFile = makeFileDiff("src/ai-tokens.ts", 1, 0);
+    const coverageFile = makeFileDiff("tests/ai-coverage.test.ts", 1, 0);
+
+    const prompt = buildGroupingUserPrompt(
+      [cacheFile, tokensFile, coverageFile],
+      formatFn,
+    );
+
+    expect(prompt).not.toContain("Project/workstream cues from paths:");
+    expect(prompt).not.toContain("Inferred workstream cues:");
+    expect(prompt).not.toContain("Project cues:");
   });
 });
 
@@ -471,6 +504,43 @@ describe("consolidation user prompt", () => {
     expect(prompt).toContain("@@ -1,3 +1,5 @@");
     expect(prompt).toContain("+import { helper } from './helper'");
     expect(prompt).toContain("+it('uses helper', () => {})");
+    expect(prompt).toContain("F1 = src/app.ts");
+  });
+
+  test("omits diff previews for low-ambiguity commits", async () => {
+    const { buildConsolidationUserPrompt } =
+      await import("../src/ai-prompt-builders.js");
+    const featureFile = makeMultiHunkFileDiff("src/auth.ts", [
+      {
+        header: "@@ -1,1 +1,3 @@",
+        lines: ["+export function login() {}"],
+      },
+    ]);
+    const fixFile = makeMultiHunkFileDiff("src/legal.ts", [
+      {
+        header: "@@ -4,1 +4,1 @@",
+        lines: ["-const oldText = 'x'", "+const noticeText = 'x'"],
+      },
+    ]);
+
+    const prompt = buildConsolidationUserPrompt(
+      [featureFile, fixFile],
+      [
+        {
+          files: [{ path: "src/auth.ts" }],
+          message: "feat(auth): add login entrypoint\n\n- Add auth entrypoint.",
+        },
+        {
+          files: [{ path: "src/legal.ts" }],
+          message: "fix(legal): rename notice text\n\n- Clarify legal wording.",
+        },
+      ],
+    );
+
+    expect(prompt).toContain(
+      "Selected diff preview: omitted for low-ambiguity commit.",
+    );
+    expect(prompt).not.toContain("export function login");
   });
 
   test("prefers absorbing narrow support commits into the owning change", async () => {
@@ -513,10 +583,22 @@ describe("consolidation user prompt", () => {
       "Absorb narrow style, import-order, formatting, rename-only, docs, test, config, and helper-script follow-up commits into the neighboring owning feature/refactor",
     );
     expect(systemPrompt).toContain(
+      "If you cannot justify the merged result with one clear why-oriented sentence, do not merge those commits.",
+    );
+    expect(systemPrompt).toContain(
+      "If the best merged subject naturally wants to say X and Y as two separate reasons, keep those commits separate.",
+    );
+    expect(systemPrompt).toContain(
       "Standalone style/import-order/formatting commits should be rare",
     );
     expect(userPrompt).toContain(
       "Absorb narrow cleanup-only, import-order, docs, test, config, and helper-script commits into the neighboring owning change",
+    );
+    expect(userPrompt).toContain(
+      "Keep separate whys separate: do not merge two commits unless the combined result still reads like one reason for change.",
+    );
+    expect(userPrompt).toContain(
+      "If the combined commit would need an and-subject to explain itself cleanly, keep it split.",
     );
   });
 
@@ -583,7 +665,7 @@ describe("cluster prompts", () => {
     const prompt = buildClusterSystemPrompt();
     expect(prompt).toContain("style, import-order, formatting");
     expect(prompt).toContain("ONE cluster");
-    expect(prompt).toContain("same feature");
+    expect(prompt).toContain("same-feature");
   });
 
   test("buildClusterUserPrompt lists all commit subjects by index", async () => {
@@ -607,6 +689,7 @@ describe("cluster prompts", () => {
     expect(prompt).toContain("0: feat(auth): add login");
     expect(prompt).toContain("1: style(imports): normalize ordering");
     expect(prompt).toContain("2: test(auth): cover login flow");
+    expect(prompt).not.toContain("[cues:");
     expect(prompt).toContain("3 commits");
   });
 });

@@ -1,24 +1,27 @@
 import {
-  batchFilesForGrouping,
-  batchingMakesProgress,
-  shouldBatchFiles,
+    batchFilesForGrouping,
+    batchingMakesProgress,
+    shouldBatchFiles,
 } from "./ai-batching.js";
 import {
-  buildConsolidationSystemPrompt,
-  buildConsolidationUserPrompt,
-  buildGroupingSystemPrompt,
-  buildGroupingUserPrompt,
-  buildMergePrompt,
-  buildSystemPrompt,
-  buildUserPrompt,
-  type GroupingPromptContext,
+    buildClusterSystemPrompt,
+    buildClusterUserPrompt,
+    buildConsolidationSystemPrompt,
+    buildConsolidationUserPrompt,
+    buildGroupingSystemPrompt,
+    buildGroupingUserPrompt,
+    buildMergePrompt,
+    buildSystemPrompt,
+    buildUserPrompt,
+    type GroupingPromptContext,
 } from "./ai-prompt-builders.js";
 import { type Config } from "./config.js";
 import {
-  GROUPING_BASE_TOKENS,
-  MIN_COMMIT_MESSAGE_TOKENS,
-  MIN_GROUPING_TOKENS,
-  TOKENS_PER_FILE,
+    CLUSTERING_THRESHOLD,
+    GROUPING_BASE_TOKENS,
+    MIN_COMMIT_MESSAGE_TOKENS,
+    MIN_GROUPING_TOKENS,
+    TOKENS_PER_FILE,
 } from "./constants.js";
 
 type DiffChunk = import("./diff.js").DiffChunk;
@@ -96,73 +99,8 @@ export function estimatePlanOperationTokens(
   cfg: Config,
   promptContext?: GroupingPromptContext,
 ): TokenEstimateSummary {
-  if (files.length === 0) {
-    return emptySummary();
-  }
-
-  if (files.length === 1 && files[0].hunks.length <= 1) {
-    const content = formatFileDiff(files[0]);
-    return summarizeRequests([
-      estimateCompletionTokens(
-        buildSystemPrompt(),
-        buildUserPrompt(
-          {
-            content,
-            files: [files[0].path],
-            id: 0,
-            lineCount: content.split("\n").length,
-          },
-          undefined,
-        ),
-        cfg.openai.maxTokens,
-      ),
-    ]);
-  }
-
-  if (files.length > 1 && shouldBatchFiles(files)) {
-    const batches = batchFilesForGrouping(files);
-    if (batchingMakesProgress(files, batches)) {
-      const allFiles = promptContext?.allFiles ?? files;
-      const batchSummaries = batches.map((batch, batchIndex) =>
-        estimatePlanOperationTokens(batch, formatFileDiff, cfg, {
-          allFiles,
-          batchCount: batches.length,
-          batchIndex,
-        }),
-      );
-
-      const summaries = [...batchSummaries];
-      if (batches.length > 1) {
-        summaries.push(
-          summarizeRequests([
-            estimateCompletionTokens(
-              buildConsolidationSystemPrompt(),
-              buildConsolidationUserPrompt(
-                allFiles,
-                buildPlaceholderPlanGroups(batches),
-              ),
-              cfg.openai.maxTokens,
-            ),
-          ]),
-        );
-      }
-
-      return combineSummaries(summaries);
-    }
-  }
-
-  const groupingTokens = getGroupingResponseTokenBudget(
-    cfg.openai.maxTokens,
-    files.length,
-  );
-
-  return summarizeRequests([
-    estimateCompletionTokens(
-      buildGroupingSystemPrompt(),
-      buildGroupingUserPrompt(files, formatFileDiff, promptContext),
-      groupingTokens,
-    ),
-  ]);
+  return estimatePlanOperationDetails(files, formatFileDiff, cfg, promptContext)
+    .summary;
 }
 
 export function estimateTextTokens(text: string): number {
@@ -196,15 +134,36 @@ function buildPlaceholderMessages(count: number): string[] {
   );
 }
 
-function buildPlaceholderPlanGroups(batches: FileDiff[][]): PlannedCommit[] {
-  return batches.map((batch, index) => ({
-    files: batch.map((file) => ({ path: file.path })),
-    message: [
-      `chore(plan): batch ${String(index + 1)}`,
-      "",
-      `- Cover the staged changes grouped in batch ${String(index + 1)}.`,
-    ].join("\n"),
-  }));
+function buildPlaceholderPlanGroupsForEstimate(
+  files: FileDiff[],
+  estimatedGroupCount: number,
+): PlannedCommit[] {
+  if (estimatedGroupCount <= 1) {
+    return [
+      {
+        files: files.map((file) => ({ path: file.path })),
+        message:
+          "chore(plan): summarize staged changes\n\n- Cover the staged changes coherently.",
+      },
+    ];
+  }
+
+  const groups: PlannedCommit[] = [];
+  const size = Math.max(1, Math.ceil(files.length / estimatedGroupCount));
+
+  for (let index = 0; index < files.length; index += size) {
+    const batch = files.slice(index, index + size);
+    groups.push({
+      files: batch.map((file) => ({ path: file.path })),
+      message: [
+        `feat(plan): change ${String(groups.length + 1)}`,
+        "",
+        `- Cover the staged files grouped into change ${String(groups.length + 1)}.`,
+      ].join("\n"),
+    });
+  }
+
+  return groups;
 }
 
 function combineSummaries(
@@ -233,6 +192,185 @@ function emptySummary(): TokenEstimateSummary {
     totalOutputTokens: 0,
     totalTokens: 0,
   };
+}
+
+function estimateLikelyConsolidationPassCount(groupCount: number): number {
+  let remainingGroups = groupCount;
+  let passCount = 0;
+
+  while (remainingGroups > 2) {
+    passCount++;
+    remainingGroups = Math.max(1, Math.ceil(remainingGroups / 2));
+  }
+
+  return passCount;
+}
+
+function estimateLikelyPlanGroupCount(files: FileDiff[]): number {
+  if (files.length <= 1) {
+    return 1;
+  }
+
+  const multiHunkFiles = files.filter((file) => file.hunks.length > 1).length;
+  const areaCount = new Set(files.map((file) => getTopLevelArea(file.path)))
+    .size;
+  const complexityScore =
+    files.length + multiHunkFiles + Math.max(0, areaCount - 1);
+
+  return Math.max(2, Math.min(files.length, Math.ceil(complexityScore / 3)));
+}
+
+function estimatePlanFollowUpSummaries(
+  files: FileDiff[],
+  estimatedGroupCount: number,
+  cfg: Config,
+): TokenEstimateSummary[] {
+  if (estimatedGroupCount <= 1) {
+    return [];
+  }
+
+  const summaries: TokenEstimateSummary[] = [];
+  let currentGroups = buildPlaceholderPlanGroupsForEstimate(
+    files,
+    estimatedGroupCount,
+  );
+
+  if (currentGroups.length >= CLUSTERING_THRESHOLD) {
+    summaries.push(
+      summarizeRequests([
+        estimateCompletionTokens(
+          buildClusterSystemPrompt(),
+          buildClusterUserPrompt(currentGroups),
+          cfg.openai.maxTokens,
+        ),
+      ]),
+    );
+    currentGroups = buildPlaceholderPlanGroupsForEstimate(
+      files,
+      Math.max(2, Math.ceil(currentGroups.length / 2)),
+    );
+  }
+
+  for (
+    let pass = 0;
+    pass < estimateLikelyConsolidationPassCount(currentGroups.length);
+    pass++
+  ) {
+    summaries.push(
+      summarizeRequests([
+        estimateCompletionTokens(
+          buildConsolidationSystemPrompt(),
+          buildConsolidationUserPrompt(files, currentGroups),
+          cfg.openai.maxTokens,
+        ),
+      ]),
+    );
+
+    currentGroups = buildPlaceholderPlanGroupsForEstimate(
+      files,
+      Math.max(1, Math.ceil(currentGroups.length / 2)),
+    );
+  }
+
+  return summaries;
+}
+
+function estimatePlanOperationDetails(
+  files: FileDiff[],
+  formatFileDiff: (f: FileDiff) => string,
+  cfg: Config,
+  promptContext?: GroupingPromptContext,
+  includeFollowUpEstimates = true,
+): { estimatedGroupCount: number; summary: TokenEstimateSummary } {
+  if (files.length === 0) {
+    return { estimatedGroupCount: 0, summary: emptySummary() };
+  }
+
+  if (files.length === 1 && files[0].hunks.length <= 1) {
+    const content = formatFileDiff(files[0]);
+    return {
+      estimatedGroupCount: 1,
+      summary: summarizeRequests([
+        estimateCompletionTokens(
+          buildSystemPrompt(),
+          buildUserPrompt(
+            {
+              content,
+              files: [files[0].path],
+              id: 0,
+              lineCount: content.split("\n").length,
+            },
+            undefined,
+          ),
+          cfg.openai.maxTokens,
+        ),
+      ]),
+    };
+  }
+
+  if (files.length > 1 && shouldBatchFiles(files)) {
+    const batches = batchFilesForGrouping(files);
+    if (batchingMakesProgress(files, batches)) {
+      const allFiles = promptContext?.allFiles ?? files;
+      const batchDetails = batches.map((batch, batchIndex) =>
+        estimatePlanOperationDetails(
+          batch,
+          formatFileDiff,
+          cfg,
+          {
+            allFiles,
+            batchCount: batches.length,
+            batchIndex,
+            deferFinalization: true,
+          },
+          false,
+        ),
+      );
+
+      const estimatedGroupCount = batchDetails.reduce(
+        (total, detail) => total + detail.estimatedGroupCount,
+        0,
+      );
+      const summaries = batchDetails.map((detail) => detail.summary);
+      if (includeFollowUpEstimates) {
+        summaries.push(
+          ...estimatePlanFollowUpSummaries(allFiles, estimatedGroupCount, cfg),
+        );
+      }
+
+      return {
+        estimatedGroupCount,
+        summary: combineSummaries(summaries),
+      };
+    }
+  }
+
+  const groupingTokens = getGroupingResponseTokenBudget(
+    cfg.openai.maxTokens,
+    files.length,
+  );
+
+  const estimatedGroupCount = estimateLikelyPlanGroupCount(files);
+  return {
+    estimatedGroupCount,
+    summary: combineSummaries([
+      summarizeRequests([
+        estimateCompletionTokens(
+          buildGroupingSystemPrompt(),
+          buildGroupingUserPrompt(files, formatFileDiff, promptContext),
+          groupingTokens,
+        ),
+      ]),
+      ...(includeFollowUpEstimates
+        ? estimatePlanFollowUpSummaries(files, estimatedGroupCount, cfg)
+        : []),
+    ]),
+  };
+}
+
+function getTopLevelArea(path: string): string {
+  const [head, tail] = path.split("/");
+  return tail ? head : "(root)";
 }
 
 function summarizeRequests(requests: TokenEstimate[]): TokenEstimateSummary {

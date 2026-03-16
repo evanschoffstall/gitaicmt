@@ -1,12 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { resetAiCache } from "../src/ai-cache.js";
 import { DEFAULTS, resetConfigCache } from "../src/config.js";
 import {
-  OpenAIError,
-  OpenAITimeoutError,
-  ValidationError,
+    OpenAIError,
+    OpenAITimeoutError,
+    ValidationError,
 } from "../src/errors.js";
 
 type DiffChunk = import("../src/diff.js").DiffChunk;
@@ -173,6 +174,7 @@ beforeEach(() => {
   process.chdir(sandboxDir);
   process.env.XDG_CONFIG_HOME = xdgConfigHome;
   delete process.env.OPENAI_API_KEY;
+  resetAiCache();
   resetConfigCache();
   mock.restore();
   setSystemTime();
@@ -191,6 +193,7 @@ afterEach(() => {
     process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   }
   resetConfigCache();
+  resetAiCache();
   mock.restore();
   setSystemTime();
   if (sandboxDir) {
@@ -263,6 +266,106 @@ describe("ai coverage", () => {
       requestCount: 1,
       totalTokens: 30,
     });
+  });
+
+  test("complete tracks token usage by stage", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("usage-stage"), model: "gpt-4o-mini" },
+    });
+    installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            { message: { content: commitMessage("feat(core): stage usage") } },
+          ],
+          usage: {
+            completion_tokens: 5,
+            prompt_tokens: 11,
+            total_tokens: 16,
+          },
+        },
+      ],
+    });
+
+    const aiClient = await importFreshAiClient("usage-stage");
+    aiClient.resetTokenUsageSummary();
+
+    await aiClient.complete("system", "user", { stage: "group" });
+
+    expect(aiClient.getTokenUsageByStage().group).toEqual({
+      inputTokens: 11,
+      outputTokens: 5,
+      requestCount: 1,
+      totalTokens: 16,
+    });
+    expect(aiClient.getTokenUsageByStage().generate).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      requestCount: 0,
+      totalTokens: 0,
+    });
+  });
+
+  test("complete emits successful AI output to the observer with its stage", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("observer-stage"), model: "gpt-4o-mini" },
+    });
+    installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: commitMessage("feat(core): surface stage output"),
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const aiClient = await importFreshAiClient("observer-stage");
+    const events: { content: string; stage: string }[] = [];
+    aiClient.setAiOutputObserver((event) => {
+      events.push(event);
+    });
+
+    await aiClient.complete("system", "user", { stage: "group" });
+
+    expect(events).toEqual([
+      {
+        content: commitMessage("feat(core): surface stage output"),
+        stage: "group",
+      },
+    ]);
+  });
+
+  test("complete ignores observer failures and still returns content", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("observer-failure"), model: "gpt-4o-mini" },
+    });
+    installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: commitMessage("feat(core): keep observer optional"),
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const aiClient = await importFreshAiClient("observer-failure");
+    aiClient.setAiOutputObserver(() => {
+      throw new Error("observer failure");
+    });
+
+    await expect(aiClient.complete("system", "user")).resolves.toBe(
+      commitMessage("feat(core): keep observer optional"),
+    );
   });
 
   test("generateForChunk reuses cached responses until TTL expires", async () => {
@@ -465,6 +568,41 @@ describe("ai coverage", () => {
     expect(prompt).not.toContain("Include a scope in parentheses");
   });
 
+  test("buildGroupingSystemPrompt asks for professional handwritten-style commits", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("prompt-tone"), model: "gpt-4o-mini" },
+    });
+    const ai = await importFreshAi("prompt-tone");
+
+    const prompt = ai.buildGroupingSystemPrompt();
+
+    expect(prompt).toContain("thoughtful senior engineer");
+    expect(prompt).toContain("Prefer 2-4 bullets");
+    expect(prompt).toContain("avoid filler, hype, and repetition");
+    expect(prompt).toContain(
+      "Center the message on why the change is being made",
+    );
+    expect(prompt).toContain(
+      "Lead with the reason, outcome, or defended behavior",
+    );
+    expect(prompt).toContain(
+      "Heavily infer from the content to surface the intent",
+    );
+    expect(prompt).toContain(
+      "Use the body to justify the subject with impact, constraints, guarantees, or verification details",
+    );
+    expect(prompt).toContain(
+      "Infer the actual subsystem, workflow, or product surface",
+    );
+    expect(prompt).toContain(
+      "the subject should name the umbrella outcome or area",
+    );
+    expect(prompt).toContain(
+      "Avoid comma-separated or and-linked subject lists",
+    );
+    expect(prompt).toContain("Badly generic subjects like feat: update tests");
+  });
+
   test("buildGroupingSystemPrompt keeps cohesive tooling rollouts together", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("tooling-prompt"), model: "gpt-4o-mini" },
@@ -473,11 +611,11 @@ describe("ai coverage", () => {
 
     const prompt = ai.buildGroupingSystemPrompt();
 
-    expect(prompt).toContain("quality or tooling workflow");
     expect(prompt).toContain(
-      "package.json, lockfiles, config files, and helper scripts",
+      "Keep source, tests, docs, config, package changes, and helper scripts together",
     );
-    expect(prompt).toContain("EXAMPLE 6");
+    expect(prompt).toContain("EXAMPLE 4");
+    expect(prompt).toContain("scripts/check.ts");
   });
 
   test("buildGroupingSystemPrompt keeps incidental cleanup with the owning feature", async () => {
@@ -494,7 +632,39 @@ describe("ai coverage", () => {
     expect(prompt).toContain(
       "Standalone style/import-order/formatting commits should be RARE",
     );
-    expect(prompt).toContain("EXAMPLE 7");
+    expect(prompt).toContain("RULE 3");
+  });
+
+  test("buildMergePrompt keeps the combined message centered on intent", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("merge-tone"), model: "gpt-4o-mini" },
+    });
+    await importFreshAi("merge-tone");
+    const { buildMergePrompt } = await import("../src/ai-prompt-builders.js");
+
+    const prompt = buildMergePrompt(
+      [
+        commitMessage(
+          "fix(auth): enforce legal consent version",
+          "- Reject signup payloads that omit acceptedLegalVersion.",
+        ),
+        commitMessage(
+          "test(auth): cover legal consent validation",
+          "- Add signup assertions for missing legal version.",
+        ),
+      ],
+      makeStats(2, 8, 1, 2),
+    );
+
+    expect(prompt).toContain(
+      "Preserve or reconstruct the strongest why-oriented rationale",
+    );
+    expect(prompt).toContain(
+      "infer it from the concrete behavior, safeguard, workflow, or product outcome",
+    );
+    expect(prompt).toContain(
+      "Prefer a subject that names the motivation or outcome the commit delivers",
+    );
   });
 
   test("planCommits skips grouping for a single file with one hunk", async () => {
@@ -522,6 +692,1146 @@ describe("ai coverage", () => {
       },
     ]);
     expect(calls.chat).toHaveLength(1);
+  });
+
+  test("planCommits reuses cached plans for identical inputs", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("plan-cache"), model: "gpt-4o-mini" },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [{ path: "src/a.ts" }, { path: "src/b.ts" }],
+                    message: commitMessage("feat(core): cache grouped plan"),
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const ai = await importFreshAi("plan-cache");
+    const files = [makeFile("src/a.ts"), makeFile("src/b.ts")];
+
+    const first = await ai.planCommits(files, formatFileDiff);
+    const second = await ai.planCommits(files, formatFileDiff);
+
+    expect(first).toEqual(second);
+    expect(calls.chat).toHaveLength(1);
+  });
+
+  test("finalizePlannedGroups skips follow-up AI passes for clearly independent commits", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("postprocess-gate"), model: "gpt-4o-mini" },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?postprocess-gate-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/auth.ts" }],
+        message: commitMessage("feat(auth): add login endpoint"),
+      },
+      {
+        files: [{ path: "src/legal.ts" }],
+        message: commitMessage("fix(legal): rename notice copy"),
+      },
+    ];
+    const allFiles = [makeFile("src/auth.ts"), makeFile("src/legal.ts")];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(result).toEqual(groups);
+    expect(calls.chat).toHaveLength(0);
+  });
+
+  test("finalizePlannedGroups keeps the implementation-led subject when merging support coverage", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("support-subject-merge"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-cache.ts" },
+                      { path: "tests/ai-coverage.test.ts" },
+                    ],
+                    message:
+                      "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?support-subject-merge-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "tests/ai-coverage.test.ts" }],
+        message:
+          "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+      },
+      {
+        files: [{ path: "src/ai-cache.ts" }],
+        message:
+          "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
+      },
+    ];
+    const allFiles = [
+      makeFile("src/ai-cache.ts"),
+      makeFile("tests/ai-coverage.test.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.message).toContain(
+      "feat(ai-cache): cache planned commit analysis",
+    );
+    expect(result[0]?.message).toContain(
+      "- Verify cache hits and stage reporting.",
+    );
+  });
+
+  test("finalizePlannedGroups merges duplicate file entries inside one consolidated commit", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidated-duplicate-files"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { hunks: [0, 1], path: "src/ai.ts" },
+                      { hunks: [3], path: "src/ai.ts" },
+                      { path: "src/cli.ts" },
+                    ],
+                    message:
+                      "feat(ai): consolidate duplicate file entries\n\n- Keep one file entry per path after consolidation.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?consolidated-duplicate-files-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ hunks: [0, 1], path: "src/ai.ts" }],
+        message: commitMessage(
+          "feat(ai): normalize stage metrics",
+          "- Keep stage metric handling consistent across planner outputs.",
+        ),
+      },
+      {
+        files: [{ hunks: [3], path: "src/ai.ts" }, { path: "src/cli.ts" }],
+        message: commitMessage(
+          "feat(ai): normalize stage metrics output",
+          "- Align CLI rendering with the normalized stage metric shape.",
+        ),
+      },
+    ];
+    const allFiles = [makeFile("src/ai.ts", 5), makeFile("src/cli.ts")];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.files).toEqual([
+      { hunks: [0, 1, 3], path: "src/ai.ts" },
+      { path: "src/cli.ts" },
+    ]);
+  });
+
+  test("finalizePlannedGroups splits disconnected consolidation intents back apart", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("split-disconnected-consolidation"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-grouping.ts" },
+                      { path: "src/ai-prompt-builders.ts" },
+                      { path: "tests/ai.test.ts" },
+                    ],
+                    message:
+                      "refactor(ai): tighten merge planning rules\n\n- Combine grouping heuristics and prompt changes into one broader update.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?split-disconnected-consolidation-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "refactor(ai-grouping): tighten merge-signal gating",
+          "- Limit consolidation to commits with strong merge evidence.",
+        ),
+      },
+      {
+        files: [{ path: "src/ai-prompt-builders.ts" }],
+        message: commitMessage(
+          "refactor(prompts): clarify consolidation guidance",
+          "- Keep the prompt focused on one clear why per commit.",
+        ),
+      },
+      {
+        files: [{ path: "tests/ai.test.ts" }],
+        message: commitMessage(
+          "test(prompts): lock consolidation wording",
+          "- Cover the stronger why-first consolidation rules.",
+        ),
+      },
+    ];
+    const allFiles = [
+      makeFile("src/ai-grouping.ts"),
+      makeFile("src/ai-prompt-builders.ts"),
+      makeFile("tests/ai.test.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(groups[0]);
+    expect(result[1]?.files).toEqual([
+      { path: "src/ai-prompt-builders.ts" },
+      { path: "tests/ai.test.ts" },
+    ]);
+    expect(result[1]?.message).toContain(
+      "refactor(prompts): clarify consolidation guidance",
+    );
+    expect(result[1]?.message).toContain(
+      "- Cover the stronger why-first consolidation rules.",
+    );
+  });
+
+  test("finalizePlannedGroups keeps runtime telemetry separate from cli trace presentation", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("split-runtime-from-cli"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-client.ts" },
+                      { path: "src/ai.ts" },
+                      { path: "src/cli.ts" },
+                      { path: "src/verbose-output.ts" },
+                      { path: "tests/verbose-output.test.ts" },
+                    ],
+                    message:
+                      "feat(ai): add stage tracing and terminal presentation\n\n- Combine runtime telemetry plumbing with CLI trace rendering.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?split-runtime-from-cli-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-client.ts" }, { path: "src/ai.ts" }],
+        message: commitMessage(
+          "feat(ai-client): track stage-level token usage",
+          "- Record stage attribution and AI output events.",
+        ),
+      },
+      {
+        files: [
+          { path: "src/cli.ts" },
+          { path: "src/verbose-output.ts" },
+          { path: "tests/verbose-output.test.ts" },
+        ],
+        message: commitMessage(
+          "feat(cli): render trace output in the terminal",
+          "- Show raw AI payloads with readable CLI formatting.",
+        ),
+      },
+    ];
+
+    const cliFile = makeFile("src/cli.ts");
+    cliFile.hunks[0]!.lines = [
+      " import { setAiOutputObserver } from './ai.js'",
+      "+setAiOutputObserver(logVerboseAiOutput)",
+    ];
+
+    const result = await finalizePlannedGroups(
+      [
+        makeFile("src/ai-client.ts"),
+        makeFile("src/ai.ts"),
+        cliFile,
+        makeFile("src/verbose-output.ts"),
+        makeFile("tests/verbose-output.test.ts"),
+      ],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual(groups);
+  });
+
+  test("finalizePlannedGroups keeps cache outputs separate from stage telemetry", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("split-cache-from-telemetry"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-cache.ts" },
+                      { path: "src/ai-client.ts" },
+                      { path: "src/ai.ts" },
+                      { path: "tests/ai-coverage.test.ts" },
+                    ],
+                    message:
+                      "feat(ai): add stage-aware telemetry and cache planned outputs\n\n- Combine plan caching with stage observability for the planning pipeline.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?split-cache-from-telemetry-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [
+          { path: "src/ai-cache.ts" },
+          { path: "tests/ai-coverage.test.ts" },
+        ],
+        message: commitMessage(
+          "feat(ai-cache): cache commit grouping plans",
+          "- Reuse identical planning outputs across repeated runs.",
+        ),
+      },
+      {
+        files: [{ path: "src/ai-client.ts" }, { path: "src/ai.ts" }],
+        message: commitMessage(
+          "feat(ai-client): track stage-level token usage",
+          "- Surface per-stage telemetry and AI output events.",
+        ),
+      },
+    ];
+
+    const aiFile = makeFile("src/ai.ts");
+    aiFile.hunks[0]!.lines = [
+      " import { getPlanCache, setPlanCache } from './ai-cache.js'",
+      "+setPlanCache(cacheKey, result)",
+    ];
+
+    const result = await finalizePlannedGroups(
+      [
+        makeFile("src/ai-cache.ts"),
+        makeFile("src/ai-client.ts"),
+        aiFile,
+        makeFile("tests/ai-coverage.test.ts"),
+      ],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual(groups);
+  });
+
+  test("finalizePlannedGroups does not attach broad ai coverage to mixed cache runtime commits", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("split-broad-coverage-from-mixed-cache-runtime"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-cache.ts" },
+                      { hunks: [0], path: "src/ai.ts" },
+                      { path: "src/ai-grouping.ts" },
+                      { path: "tests/ai-coverage.test.ts" },
+                    ],
+                    message:
+                      "feat(ai): harden planning cache and grouping coverage\n\n- Combine runtime caching, grouping heuristics, and regression coverage into one planner update.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?split-broad-coverage-from-mixed-cache-runtime-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const aiFile = makeFile("src/ai.ts");
+    aiFile.hunks[0]!.lines = [
+      " import { getCachedPlan } from './ai-cache.js'",
+      "+const cachedPlan = getCachedPlan(cacheKey)",
+    ];
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-cache.ts" }, { hunks: [0], path: "src/ai.ts" }],
+        message: commitMessage(
+          "feat(ai-cache): cache planned outputs",
+          "- Reuse serialized planning results before recomputing batch output.",
+        ),
+      },
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "feat(ai-grouping): preserve dependency order",
+          "- Keep helper commits ahead of their first consumers.",
+        ),
+      },
+      {
+        files: [{ path: "tests/ai-coverage.test.ts" }],
+        message: commitMessage(
+          "test(ai): expand planning coverage",
+          "- Cover cache reuse, dependency ordering, and consolidation boundaries.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [
+        makeFile("src/ai-cache.ts"),
+        aiFile,
+        makeFile("src/ai-grouping.ts"),
+        makeFile("tests/ai-coverage.test.ts"),
+      ],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(
+      result.some((group: { files: { path: string }[] }) => {
+        const paths = new Set(group.files.map((file: { path: string }) => file.path));
+        return (
+          paths.has("tests/ai-coverage.test.ts") &&
+          paths.has("src/ai-cache.ts") &&
+          paths.has("src/ai.ts")
+        );
+      }),
+    ).toBe(false);
+  });
+
+  test("finalizePlannedGroups keeps cache, estimation, and validation reasons separate", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("split-cache-estimate-validate"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-cache.ts" },
+                      { path: "src/ai-tokens.ts" },
+                      { path: "src/ai-validation.ts" },
+                      { path: "src/ai.ts" },
+                    ],
+                    message:
+                      "feat(planning): estimate and cache multi-pass workflows\n\n- Combine caching, estimation, and validation hardening for planning.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?split-cache-estimate-validate-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-cache.ts" }],
+        message: commitMessage(
+          "feat(ai-cache): cache commit plans",
+          "- Reuse equivalent planning runs from persisted plan outputs.",
+        ),
+      },
+      {
+        files: [{ path: "src/ai-tokens.ts" }, { path: "src/ai.ts" }],
+        message: commitMessage(
+          "feat(planning): estimate multi-pass planning costs",
+          "- Predict grouping and consolidation follow-up request sizes.",
+        ),
+      },
+      {
+        files: [{ path: "src/ai-validation.ts" }],
+        message: commitMessage(
+          "fix(ai-validation): dedupe repeated file entries",
+          "- Keep normalized plan coverage deterministic and structurally valid.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [
+        makeFile("src/ai-cache.ts"),
+        makeFile("src/ai-tokens.ts"),
+        makeFile("src/ai-validation.ts"),
+        makeFile("src/ai.ts"),
+      ],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual(groups);
+  });
+
+  test("finalizePlannedGroups keeps grouping, prompts, helper, and cli fixes separate", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("split-grouping-prompts-helper-cli"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-grouping.ts" },
+                      { path: "src/ai-prompt-builders.ts" },
+                      { path: "src/commit-subject.ts" },
+                      { path: "src/cli.ts" },
+                    ],
+                    message:
+                      "feat(ai-grouping): harden grouping, prompt, helper, and cli review flow\n\n- Combine planner heuristics, prompt guidance, subject parsing, and confirmation fixes.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?split-grouping-prompts-helper-cli-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "feat(ai-grouping): make clustering dependency-aware",
+          "- Split weak merge groups and order resulting commits safely.",
+        ),
+      },
+      {
+        files: [{ path: "src/ai-prompt-builders.ts" }],
+        message: commitMessage(
+          "refactor(prompts): harden intent-first merge guidance",
+          "- Keep final consolidation centered on one clear why.",
+        ),
+      },
+      {
+        files: [{ path: "src/commit-subject.ts" }],
+        message: commitMessage(
+          "feat(commit-subject): add subject parsing helpers",
+          "- Normalize subject words for downstream planner analysis.",
+        ),
+      },
+      {
+        files: [{ path: "src/cli.ts" }],
+        message: commitMessage(
+          "fix(cli): stop timing out interactive confirmations",
+          "- Keep manual review prompts stable during slower operator flows.",
+        ),
+      },
+    ];
+
+    const groupingFile = makeFile("src/ai-grouping.ts");
+    groupingFile.hunks[0]!.lines = [
+      " import { parseConventionalSubject } from './commit-subject.js'",
+      "+const subject = parseConventionalSubject(message)",
+    ];
+
+    const result = await finalizePlannedGroups(
+      [
+        groupingFile,
+        makeFile("src/ai-prompt-builders.ts"),
+        makeFile("src/commit-subject.ts"),
+        makeFile("src/cli.ts"),
+      ],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual([groups[1], groups[2], groups[3], groups[0]]);
+  });
+
+  test("finalizePlannedGroups reorders enabling helpers before dependent commits", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("dependency-ordering"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?dependency-ordering-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const helperFile = makeFile("src/commit-subject.ts");
+    const dependentFile = makeFile("src/ai-grouping.ts");
+    dependentFile.hunks[0]!.lines = [
+      " import { parseConventionalSubject } from './commit-subject.js'",
+      "+const subject = parseConventionalSubject(message)",
+    ];
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "refactor(ai-grouping): reuse parsed subject metadata",
+          "- Route merge heuristics through the shared subject parser.",
+        ),
+      },
+      {
+        files: [{ path: "src/commit-subject.ts" }],
+        message: commitMessage(
+          "feat(commit-subject): add reusable subject parsing",
+          "- Expose conventional subject parsing for planner heuristics.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [dependentFile, helperFile],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual([groups[1], groups[0]]);
+  });
+
+  test("finalizePlannedGroups reorders helpers when imports live outside changed hunks", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("dependency-ordering-current-file-import"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?dependency-ordering-current-file-import-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    mkdirSync(join(sandboxDir, "src"), { recursive: true });
+    writeFileSync(
+      join(sandboxDir, "src/commit-subject.ts"),
+      [
+        "export function parseConventionalSubject(subject: string) {",
+        "  return { description: subject, scope: '', type: '' };",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(sandboxDir, "src/ai-grouping.ts"),
+      [
+        "import { parseConventionalSubject } from './commit-subject.js';",
+        "",
+        "export function describeSubject(subject: string) {",
+        "  return parseConventionalSubject(subject).description;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const helperFile = makeFile("src/commit-subject.ts");
+    const dependentFile = makeFile("src/ai-grouping.ts");
+    dependentFile.hunks[0]!.lines = [
+      "+const parsedSubject = parseConventionalSubject(subject)",
+      "+return parsedSubject.description || 'empty'",
+    ];
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "refactor(ai-grouping): normalize subject handling",
+          "- Keep planner subject handling consistent across regrouping passes.",
+        ),
+      },
+      {
+        files: [{ path: "src/commit-subject.ts" }],
+        message: commitMessage(
+          "feat(commit-subject): add reusable subject parsing",
+          "- Expose conventional subject parsing for downstream helpers.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [dependentFile, helperFile],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual([groups[1], groups[0]]);
+  });
+
+  test("finalizePlannedGroups preserves helper ordering even when other commits cycle", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("dependency-ordering-cycle-break"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?dependency-ordering-cycle-break-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    mkdirSync(join(sandboxDir, "src"), { recursive: true });
+    writeFileSync(
+      join(sandboxDir, "src/commit-subject.ts"),
+      "export function parseConventionalSubject(subject: string) {\n  return { description: subject, scope: '', type: '' };\n}\n",
+    );
+    writeFileSync(
+      join(sandboxDir, "src/ai-grouping.ts"),
+      "import { parseConventionalSubject } from './commit-subject.js';\nexport function describeSubject(subject: string) {\n  return parseConventionalSubject(subject).description;\n}\n",
+    );
+    writeFileSync(
+      join(sandboxDir, "src/cycle-a.ts"),
+      "import { betaValue } from './cycle-b.js';\nexport const alphaValue = betaValue + 1;\n",
+    );
+    writeFileSync(
+      join(sandboxDir, "src/cycle-b.ts"),
+      "import { alphaValue } from './cycle-a.js';\nexport const betaValue = alphaValue + 1;\n",
+    );
+
+    const dependentFile = makeFile("src/ai-grouping.ts");
+    dependentFile.hunks[0]!.lines = [
+      "+const parsedSubject = parseConventionalSubject(subject)",
+      "+return parsedSubject.description || 'empty'",
+    ];
+    const helperFile = makeFile("src/commit-subject.ts");
+    const cycleAFile = makeFile("src/cycle-a.ts");
+    cycleAFile.hunks[0]!.lines = ["+const nextAlpha = betaValue + 1"];
+    const cycleBFile = makeFile("src/cycle-b.ts");
+    cycleBFile.hunks[0]!.lines = ["+const nextBeta = alphaValue + 1"];
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "refactor(ai-grouping): normalize subject handling",
+          "- Keep planner subject handling consistent across regrouping passes.",
+        ),
+      },
+      {
+        files: [{ path: "src/cycle-a.ts" }],
+        message: commitMessage(
+          "refactor(cycle-a): consume beta value",
+          "- Exercise cycle breaking without discarding valid helper ordering.",
+        ),
+      },
+      {
+        files: [{ path: "src/cycle-b.ts" }],
+        message: commitMessage(
+          "refactor(cycle-b): consume alpha value",
+          "- Exercise cycle breaking without discarding valid helper ordering.",
+        ),
+      },
+      {
+        files: [{ path: "src/commit-subject.ts" }],
+        message: commitMessage(
+          "feat(commit-subject): add reusable subject parsing",
+          "- Expose conventional subject parsing for downstream helpers.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [dependentFile, cycleAFile, cycleBFile, helperFile],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result.indexOf(groups[3])).toBeLessThan(result.indexOf(groups[0]));
+  });
+
+  test("finalizePlannedGroups detects generic relative path dependencies without import syntax assumptions", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("dependency-ordering-generic-relative-path"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?dependency-ordering-generic-relative-path-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const helperFile = makeFile("src/planner-subject.custom");
+    const dependentFile = makeFile("src/ai-grouping.ts");
+    dependentFile.hunks[0]!.lines = [
+      "+planner_subject_source = './planner-subject.custom'",
+      "+const subject = loadPlannerSubject(planner_subject_source)",
+    ];
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "refactor(ai-grouping): load external manifest",
+          "- Read planner state from a shared relative path.",
+        ),
+      },
+      {
+        files: [{ path: "src/planner-subject.custom" }],
+        message: commitMessage(
+          "feat(planner-subject): add backing manifest file",
+          "- Provide a reusable non-code data source for planner state.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [dependentFile, helperFile],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual([groups[1], groups[0]]);
+  });
+
+  test("finalizePlannedGroups resolves arbitrary module suffixes without an extension whitelist", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("dependency-ordering-index-alias"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?dependency-ordering-generic-suffix-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const helperFile = makeFile("src/subject-tools.parser-entry");
+    const dependentFile = makeFile("src/ai-grouping.ts");
+    dependentFile.hunks[0]!.lines = [
+      " export { parsePlannerSubject } from './subject-tools.parser-entry'",
+      "+const subject = parsePlannerSubject(message)",
+    ];
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-grouping.ts" }],
+        message: commitMessage(
+          "refactor(ai-grouping): reuse external parser metadata",
+          "- Route planner heuristics through a shared parsing surface.",
+        ),
+      },
+      {
+        files: [{ path: "src/subject-tools.parser-entry" }],
+        message: commitMessage(
+          "feat(subject-tools): add parser entrypoint",
+          "- Expose parsing logic from a helper module with a non-language suffix.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [dependentFile, helperFile],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual([groups[1], groups[0]]);
+  });
+
+  test("finalizePlannedGroups keeps separate-hunk workflow neighbors split when action and artifact diverge", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("same-file-hunks-reason-split"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { hunks: [0, 1], path: "src/ai.ts" },
+                      { path: "src/ai-client.ts" },
+                      { path: "src/ai-tokens.ts" },
+                    ],
+                    message:
+                      "feat(ai): track stage costs and expose output hooks\n\n- Combine telemetry and planning-cost work into one pipeline commit.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?same-file-hunks-reason-split-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const aiFile = makeFile("src/ai.ts", 2);
+    aiFile.hunks[0]!.lines = [
+      " import { recordStageTokens } from './ai-client.js'",
+      "+recordStageTokens(stage, usage)",
+    ];
+    aiFile.hunks[1]!.lines = ["+estimatePlanningStageTokens(batchCount)"];
+
+    const groups = [
+      {
+        files: [
+          { path: "src/ai-client.ts" },
+          { hunks: [0], path: "src/ai.ts" },
+        ],
+        message: commitMessage(
+          "feat(ai-client): track stage telemetry",
+          "- Record per-stage token usage and output observer events.",
+        ),
+      },
+      {
+        files: [
+          { path: "src/ai-tokens.ts" },
+          { hunks: [1], path: "src/ai.ts" },
+        ],
+        message: commitMessage(
+          "feat(ai-pipeline): estimate planning costs",
+          "- Model multi-pass planning request sizes before execution.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [aiFile, makeFile("src/ai-client.ts"), makeFile("src/ai-tokens.ts")],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toEqual(groups);
+  });
+
+  test("finalizePlannedGroups does not let coordinator files glue cache and planning reasons together", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("coordinator-file-spillover-split"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/ai-cache.ts" },
+                      { path: "src/ai-tokens.ts" },
+                      { hunks: [0, 1], path: "src/ai.ts" },
+                    ],
+                    message:
+                      "feat(ai): align planning cache and token forecasting\n\n- Combine orchestration changes behind one planner pipeline update.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/ai-grouping.js?coordinator-file-spillover-split-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const aiFile = makeFile("src/ai.ts", 2);
+    aiFile.hunks[0]!.lines = [
+      " import { getCachedPlan } from './ai-cache.js'",
+      "+const cachedPlan = getCachedPlan(cacheKey)",
+    ];
+    aiFile.hunks[1]!.lines = [
+      " import { estimatePlanningStageTokens } from './ai-tokens.js'",
+      "+const estimatedTokens = estimatePlanningStageTokens(batchCount)",
+    ];
+
+    const groups = [
+      {
+        files: [{ path: "src/ai-cache.ts" }, { hunks: [0], path: "src/ai.ts" }],
+        message: commitMessage(
+          "feat(ai-cache): cache grouped plans",
+          "- Reuse previously computed planning output before recomputing commits.",
+        ),
+      },
+      {
+        files: [
+          { path: "src/ai-tokens.ts" },
+          { hunks: [1], path: "src/ai.ts" },
+        ],
+        message: commitMessage(
+          "feat(ai-tokens): forecast planning costs",
+          "- Estimate batching overhead before sending planner requests.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [aiFile, makeFile("src/ai-cache.ts"), makeFile("src/ai-tokens.ts")],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toEqual(groups);
   });
 
   test("planCommits does not recurse forever on an oversized single file", async () => {
@@ -929,46 +2239,6 @@ describe("ai coverage", () => {
               message: {
                 content: JSON.stringify([
                   {
-                    files: firstBatchFiles.map((file) => ({ path: file.path })),
-                    message: commitMessage(
-                      "chore(eslint): configure linter scanning pipeline",
-                    ),
-                  },
-                ]),
-              },
-            },
-          ],
-        },
-        {
-          choices: [
-            {
-              message: {
-                content: JSON.stringify([
-                  {
-                    files: secondBatchFiles.map((file) => ({
-                      path: file.path,
-                    })),
-                    message: commitMessage(
-                      "chore(reporting): provision analytics and thresholds",
-                    ),
-                  },
-                  {
-                    files: [{ path: "logo.svg" }],
-                    message: commitMessage(
-                      "style(branding): refresh logo artwork",
-                    ),
-                  },
-                ]),
-              },
-            },
-          ],
-        },
-        {
-          choices: [
-            {
-              message: {
-                content: JSON.stringify([
-                  {
                     files: configFiles.map((file) => ({ path: file.path })),
                     message: commitMessage(
                       "chore(tooling): add quality workflow foundation",
@@ -991,7 +2261,7 @@ describe("ai coverage", () => {
 
     const result = await ai.planCommits(files, formatFileDiff);
 
-    expect(calls.chat).toHaveLength(5);
+    expect(calls.chat).toHaveLength(3);
     expect(result).toHaveLength(2);
     expect(result[0]?.message).toBe(
       commitMessage("chore(tooling): add quality workflow foundation"),

@@ -82,4 +82,23 @@ describe("ai token estimation", () => {
       2 * DEFAULTS.openai.maxTokens,
     );
   });
+
+  test("estimates extra follow-up requests for line-batched planning", () => {
+    const files = Array.from({ length: 8 }, (_, index) =>
+      makeFileDiff(`src/file-${String(index)}.ts`, 50),
+    );
+
+    const estimate = estimatePlanOperationTokens(
+      files,
+      (file) =>
+        [
+          `--- ${file.path}`,
+          `+++ ${file.path}`,
+          ...file.hunks.flatMap((hunk) => [hunk.header, ...hunk.lines]),
+        ].join("\n"),
+      DEFAULTS,
+    );
+
+    expect(estimate.requestCount).toBe(3);
+  });
 });

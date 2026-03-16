@@ -107,6 +107,17 @@ export async function planCommits(
 ): Promise<PlannedCommit[]> {
   const cfg = loadConfig();
   const maxRecursionDepth = 5;
+  const formattedDiffs = files.map((file) => formatFileDiff(file));
+  const planCacheInput = serializePlanCacheInput(
+    files,
+    formattedDiffs,
+    promptContext,
+  );
+  const cachedPlan = getCachedPlan(planCacheInput);
+  if (cachedPlan) {
+    return cachedPlan;
+  }
+
   if (recursionDepth > maxRecursionDepth) {
     throw new ValidationError(
       `Maximum recursion depth exceeded while planning commits. Too many files (${formatScalar(files.length)}) to process safely.`,
@@ -116,13 +127,16 @@ export async function planCommits(
 
   if (files.length === 1 && files[0].hunks.length <= 1) {
     const chunk: DiffChunk = {
-      content: formatFileDiff(files[0]),
+      content: formattedDiffs[0] ?? formatFileDiff(files[0]),
       files: [files[0].path],
       id: 0,
-      lineCount: formatFileDiff(files[0]).split("\n").length,
+      lineCount: (formattedDiffs[0] ?? formatFileDiff(files[0])).split("\n")
+        .length,
     };
     const msg = await generateForChunk(chunk);
-    return [{ files: [{ path: files[0].path }], message: msg }];
+    const singlePlan = [{ files: [{ path: files[0].path }], message: msg }];
+    setCachedPlan(planCacheInput, singlePlan);
+    return singlePlan;
   }
 
   if (files.length > 1 && shouldBatchFiles(files)) {
@@ -134,10 +148,13 @@ export async function planCommits(
             allFiles: promptContext?.allFiles ?? files,
             batchCount: batches.length,
             batchIndex,
+            deferFinalization: true,
           }),
         ),
       );
-      return await finalizePlannedGroups(files, batchResults.flat());
+      const finalized = await finalizePlannedGroups(files, batchResults.flat());
+      setCachedPlan(planCacheInput, finalized);
+      return finalized;
     }
   }
 
@@ -276,5 +293,13 @@ export async function planCommits(
     ];
   }
 
-  return await finalizePlannedGroups(files, groups);
+  if (promptContext?.deferFinalization) {
+    const premerged = premergeBySubject(groups, fileByPath);
+    setCachedPlan(planCacheInput, premerged);
+    return premerged;
+  }
+
+  const finalized = await finalizePlannedGroups(files, groups);
+  setCachedPlan(planCacheInput, finalized);
+  return finalized;
 }
