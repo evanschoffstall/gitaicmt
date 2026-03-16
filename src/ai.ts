@@ -10,7 +10,7 @@ import {
   setCachedMessage,
   setCachedPlan,
 } from "./ai-cache.js";
-import { complete } from "./ai-client.js";
+import { complete, emitAiOutputEvent } from "./ai-client.js";
 import {
   formatLabeledDiff,
   formatScalar,
@@ -115,6 +115,16 @@ export async function planCommits(
   );
   const cachedPlan = getCachedPlan(planCacheInput);
   if (cachedPlan) {
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        cachedCommitCount: cachedPlan.length,
+        cacheKeyFiles: files.length,
+        decision: "plan-cache-hit",
+      }),
+      kind: "cache",
+      stage: "group",
+      transport: "internal",
+    });
     return cachedPlan;
   }
 
@@ -142,6 +152,7 @@ export async function planCommits(
   if (files.length > 1 && shouldBatchFiles(files)) {
     const batches = batchFilesForGrouping(files);
     if (batchingMakesProgress(files, batches)) {
+      const batchStartedAtMs = performance.now();
       const batchResults = await Promise.all(
         batches.map((batch, batchIndex) =>
           planCommits(batch, formatFileDiff, recursionDepth + 1, {
@@ -153,6 +164,20 @@ export async function planCommits(
         ),
       );
       const finalized = await finalizePlannedGroups(files, batchResults.flat());
+      emitAiOutputEvent({
+        content: JSON.stringify({
+          batchCount: batches.length,
+          decision: "batched-plan-finalization",
+          deferredFinalization: true,
+          finalCommitCount: finalized.length,
+          inputFileCount: files.length,
+          intermediateCommitCount: batchResults.flat().length,
+        }),
+        durationMs: performance.now() - batchStartedAtMs,
+        kind: "planner-decision",
+        stage: "group",
+        transport: "internal",
+      });
       setCachedPlan(planCacheInput, finalized);
       return finalized;
     }
@@ -299,7 +324,20 @@ export async function planCommits(
     return premerged;
   }
 
+  const finalizationStartedAtMs = performance.now();
   const finalized = await finalizePlannedGroups(files, groups);
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: "plan-finalization",
+      finalCommitCount: finalized.length,
+      generatedGroupCount: groups.length,
+      inputFileCount: files.length,
+    }),
+    durationMs: performance.now() - finalizationStartedAtMs,
+    kind: "planner-decision",
+    stage: "consolidate",
+    transport: "internal",
+  });
   setCachedPlan(planCacheInput, finalized);
   return finalized;
 }

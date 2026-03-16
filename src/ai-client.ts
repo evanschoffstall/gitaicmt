@@ -8,8 +8,19 @@ let lastApiKey: null | string = null;
 
 export interface AiOutputEvent {
   content: string;
+  durationMs?: number;
+  inputTokens?: number;
+  kind?: AiOutputEventKind;
+  outputTokens?: number;
+  requestCountDelta?: number;
   stage: "unknown" | TokenUsageStage;
+  totalTokens?: number;
+  transport?: AiOutputTransport;
 }
+
+export type AiOutputEventKind = "cache" | "model-output" | "planner-decision";
+
+export type AiOutputTransport = "chat" | "internal" | "responses";
 
 export type TokenUsageStage =
   | "cluster"
@@ -48,6 +59,7 @@ export async function complete(
   const maxTokens = options?.maxTokens ?? cfg.openai.maxTokens;
   const stage = options?.stage;
   const temperature = options?.temperature ?? cfg.openai.temperature;
+  const startedAtMs = performance.now();
 
   const chatPayload = {
     max_completion_tokens: maxTokens,
@@ -61,11 +73,21 @@ export async function complete(
 
   try {
     const res = await client().chat.completions.create(chatPayload, { signal });
-    recordTokenUsage(res, stage);
+    const usage = recordTokenUsage(res, stage);
     const content = res.choices[0]?.message?.content;
     if (typeof content === "string" && content.trim()) {
       const trimmedContent = content.trim();
-      notifyAiOutputObserver(stage, trimmedContent);
+      notifyAiOutputObserver({
+        content: trimmedContent,
+        durationMs: performance.now() - startedAtMs,
+        inputTokens: usage?.inputTokens,
+        kind: "model-output",
+        outputTokens: usage?.outputTokens,
+        requestCountDelta: 1,
+        stage: stage ?? "unknown",
+        totalTokens: usage?.totalTokens,
+        transport: "chat",
+      });
       return trimmedContent;
     }
     throw new OpenAIError("API returned empty or invalid response");
@@ -84,6 +106,7 @@ export async function complete(
     }
 
     try {
+      const fallbackStartedAtMs = performance.now();
       const res = await client().responses.create(
         {
           input: user,
@@ -95,7 +118,7 @@ export async function complete(
         { signal },
       );
 
-      recordTokenUsage(res, stage);
+      const usage = recordTokenUsage(res, stage);
 
       const content = extractResponseText(res);
       if (!content) {
@@ -103,7 +126,17 @@ export async function complete(
           "Responses API returned empty or invalid response",
         );
       }
-      notifyAiOutputObserver(stage, content);
+      notifyAiOutputObserver({
+        content,
+        durationMs: performance.now() - fallbackStartedAtMs,
+        inputTokens: usage?.inputTokens,
+        kind: "model-output",
+        outputTokens: usage?.outputTokens,
+        requestCountDelta: 1,
+        stage: stage ?? "unknown",
+        totalTokens: usage?.totalTokens,
+        transport: "responses",
+      });
       return content;
     } catch (fallbackErr: unknown) {
       if (fallbackErr instanceof Error) {
@@ -121,6 +154,10 @@ export async function complete(
       throw new OpenAIError(`OpenAI API call failed: ${String(fallbackErr)}`);
     }
   }
+}
+
+export function emitAiOutputEvent(event: AiOutputEvent): void {
+  notifyAiOutputObserver(event);
 }
 
 export function getTokenUsageByStage(): Record<
@@ -289,16 +326,13 @@ function isNonChatModelError(err: unknown): boolean {
   );
 }
 
-function notifyAiOutputObserver(
-  stage: TokenUsageStage | undefined,
-  content: string,
-): void {
+function notifyAiOutputObserver(event: AiOutputEvent): void {
   if (!aiOutputObserver) {
     return;
   }
 
   try {
-    aiOutputObserver({ content, stage: stage ?? "unknown" });
+    aiOutputObserver(event);
   } catch {
     // Verbose logging must never interfere with commit generation.
   }
@@ -308,10 +342,13 @@ function readUsageNumber(value: unknown): null | number {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-function recordTokenUsage(raw: unknown, stage?: TokenUsageStage): void {
+function recordTokenUsage(
+  raw: unknown,
+  stage?: TokenUsageStage,
+): null | Omit<TokenUsageSummary, "requestCount"> {
   const usage = extractTokenUsage(raw);
   if (!usage) {
-    return;
+    return null;
   }
 
   currentTokenUsage = {
@@ -322,7 +359,7 @@ function recordTokenUsage(raw: unknown, stage?: TokenUsageStage): void {
   };
 
   if (!stage) {
-    return;
+    return usage;
   }
 
   const stageUsage = currentTokenUsageByStage[stage];
@@ -332,6 +369,8 @@ function recordTokenUsage(raw: unknown, stage?: TokenUsageStage): void {
     requestCount: stageUsage.requestCount + 1,
     totalTokens: stageUsage.totalTokens + usage.totalTokens,
   };
+
+  return usage;
 }
 
 function supportsTemperature(model: string): boolean {

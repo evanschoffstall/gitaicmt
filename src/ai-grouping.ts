@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { posix as pathPosix } from "node:path";
 
-import { complete } from "./ai-client.js";
+import { complete, emitAiOutputEvent } from "./ai-client.js";
 import {
   buildClusterSystemPrompt,
   buildClusterUserPrompt,
@@ -40,6 +40,8 @@ export async function finalizePlannedGroups(
     return groups;
   }
 
+  const startedAtMs = performance.now();
+
   const fileByPath = new Map(allFiles.map((file) => [file.path, file]));
   const fileSignals = buildChangedFileSignals(allFiles);
 
@@ -47,7 +49,20 @@ export async function finalizePlannedGroups(
   const baselineGroups = current;
 
   if (!hasPotentialMergeSignals(current)) {
-    return orderCommitsByDependencies(current, fileSignals);
+    const ordered = orderCommitsByDependencies(current, fileSignals);
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        decision: "skip-consolidation",
+        finalGroupCount: ordered.length,
+        inputGroupCount: groups.length,
+        reason: "no-potential-merge-signals",
+      }),
+      durationMs: performance.now() - startedAtMs,
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+    return ordered;
   }
 
   current = await clusterAndMerge(current, fileByPath);
@@ -81,7 +96,21 @@ export async function finalizePlannedGroups(
     fileSignals,
   );
 
-  return orderCommitsByDependencies(current, fileSignals);
+  const ordered = orderCommitsByDependencies(current, fileSignals);
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: "finalize-planned-groups",
+      finalGroupCount: ordered.length,
+      inputGroupCount: groups.length,
+      premergedGroupCount: baselineGroups.length,
+    }),
+    durationMs: performance.now() - startedAtMs,
+    kind: "planner-decision",
+    stage: "consolidate",
+    transport: "internal",
+  });
+
+  return ordered;
 }
 
 function addChangedPathAlias(
@@ -374,6 +403,7 @@ async function clusterAndMerge(
     hasPotentialMergeSignals(current);
     pass++
   ) {
+    const passStartedAtMs = performance.now();
     const clusters = await callCluster(current);
     if (!clusters) {
       break;
@@ -386,6 +416,20 @@ async function clusterAndMerge(
     if (merged.length >= current.length) {
       break;
     }
+
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        clusterCount: clusters.length,
+        decision: "cluster-pass",
+        inputGroupCount: current.length,
+        mergedGroupCount: merged.length,
+        pass: pass + 1,
+      }),
+      durationMs: performance.now() - passStartedAtMs,
+      kind: "planner-decision",
+      stage: "cluster",
+      transport: "internal",
+    });
 
     current = merged;
   }
@@ -438,6 +482,7 @@ async function consolidateOnce(
   fileByPath: Map<string, FileDiff>,
 ): Promise<null | PlannedCommit[]> {
   try {
+    const startedAtMs = performance.now();
     const sys = buildConsolidationSystemPrompt();
     const usr = buildConsolidationUserPrompt(allFiles, groups);
     const raw = await complete(sys, usr, { stage: "consolidate" });
@@ -451,7 +496,23 @@ async function consolidateOnce(
       return null;
     }
 
-    return harmonizeConsolidatedMessages(groups, consolidated, fileByPath);
+    const harmonized = harmonizeConsolidatedMessages(
+      groups,
+      consolidated,
+      fileByPath,
+    );
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        decision: "consolidation-pass",
+        inputGroupCount: groups.length,
+        outputGroupCount: harmonized.length,
+      }),
+      durationMs: performance.now() - startedAtMs,
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+    return harmonized;
   } catch {
     return null;
   }
@@ -1394,7 +1455,20 @@ function orderCommitsByDependencies(
     return groups;
   }
 
-  return orderedIndexes.map((index) => groups[index]);
+  const ordered = orderedIndexes.map((index) => groups[index]);
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: "dependency-ordering",
+      dependencyEdgeCount: edgeWeights.size,
+      groupCount: groups.length,
+      reordered: orderedIndexes.some((index, position) => index !== position),
+    }),
+    kind: "planner-decision",
+    stage: "consolidate",
+    transport: "internal",
+  });
+
+  return ordered;
 }
 
 /**

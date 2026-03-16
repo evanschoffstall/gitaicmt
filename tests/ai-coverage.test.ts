@@ -325,19 +325,29 @@ describe("ai coverage", () => {
     });
 
     const aiClient = await importFreshAiClient("observer-stage");
-    const events: { content: string; stage: string }[] = [];
-    aiClient.setAiOutputObserver((event) => {
+    const events: {
+      content: string;
+      durationMs?: number;
+      kind?: string;
+      requestCountDelta?: number;
+      stage: string;
+      transport?: string;
+    }[] = [];
+    aiClient.setAiOutputObserver((event: (typeof events)[number]) => {
       events.push(event);
     });
 
     await aiClient.complete("system", "user", { stage: "group" });
 
-    expect(events).toEqual([
-      {
-        content: commitMessage("feat(core): surface stage output"),
-        stage: "group",
-      },
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      content: commitMessage("feat(core): surface stage output"),
+      kind: "model-output",
+      requestCountDelta: 1,
+      stage: "group",
+      transport: "chat",
+    });
+    expect(events[0]?.durationMs).toBeTypeOf("number");
   });
 
   test("complete ignores observer failures and still returns content", async () => {
