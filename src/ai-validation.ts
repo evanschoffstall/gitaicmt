@@ -103,14 +103,16 @@ export function validateAndNormalizeGrouping(
       normalizedFiles.push({ path: entry.path });
     }
 
-    if (normalizedFiles.length === 0) {
+    const mergedFiles = mergeDuplicateFileEntries(normalizedFiles, fileByPath);
+
+    if (mergedFiles.length === 0) {
       throw new ValidationError(
         `Commit group ${formatScalar(i)} has no valid file entries after normalization`,
       );
     }
 
     groups.push({
-      files: normalizedFiles,
+      files: mergedFiles,
       message: validateCommitMessage(group.message),
     });
   }
@@ -151,4 +153,58 @@ function isValidFileEntry(
   return entry.hunks.every(
     (hunk) => typeof hunk === "number" && hunk >= 0 && hunk < file.hunks.length,
   );
+}
+
+/**
+ * Collapse duplicate file entries inside a single AI-produced commit group.
+ */
+function mergeDuplicateFileEntries(
+  files: PlannedCommitFile[],
+  fileByPath: Map<string, FileDiff>,
+): PlannedCommitFile[] {
+  const mergedByPath = new Map<string, null | Set<number>>();
+  const orderedPaths: string[] = [];
+
+  for (const file of files) {
+    if (!mergedByPath.has(file.path)) {
+      orderedPaths.push(file.path);
+      mergedByPath.set(
+        file.path,
+        file.hunks && file.hunks.length > 0 ? new Set(file.hunks) : null,
+      );
+      continue;
+    }
+
+    const existing = mergedByPath.get(file.path);
+    if (existing === null || !file.hunks || file.hunks.length === 0) {
+      mergedByPath.set(file.path, null);
+      continue;
+    }
+    if (existing === undefined) {
+      continue;
+    }
+
+    for (const hunk of file.hunks) {
+      existing.add(hunk);
+    }
+  }
+
+  return orderedPaths.map((path) => {
+    const merged = mergedByPath.get(path);
+    const file = fileByPath.get(path);
+
+    if (
+      !file ||
+      file.hunks.length === 0 ||
+      merged === null ||
+      merged === undefined
+    ) {
+      return { path };
+    }
+
+    return {
+      hunks: [...merged].sort((left, right) => left - right),
+      path,
+    };
+  });
 }
