@@ -100,6 +100,12 @@ describe("CLI", () => {
       const { stderr } = run("help");
       expect(stderr).toContain("--no-token-check");
     });
+
+    test("help mentions --trace", () => {
+      const { stderr } = run("help");
+      expect(stderr).toContain("--trace");
+      expect(stderr).toContain("raw intermediate AI payloads");
+    });
   });
 
   // ───── Init ─────
