@@ -59,6 +59,15 @@ export const MIN_GROUPING_TOKENS = 2048;
 /** Extended timeout for grouping operations (more complex than single commit) */
 export const GROUPING_TIMEOUT_MS = 30_000;
 
+/** Maximum consolidation review passes to reach a stable merged plan */
+export const MAX_CONSOLIDATION_PASSES = 5;
+
+/** Minimum plan size before AI semantic clustering is attempted */
+export const CLUSTERING_THRESHOLD = 10;
+
+/** Maximum rounds of iterative AI clustering before stabilizing */
+export const MAX_CLUSTER_PASSES = 3;
+
 /**
  * Reason: Grouping analyzes multiple files and generates structured output,
  * typically takes 2-3x longer than single commit message generation.

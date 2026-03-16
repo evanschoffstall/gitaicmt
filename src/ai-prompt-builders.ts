@@ -10,20 +10,68 @@ type DiffChunk = import("./diff.js").DiffChunk;
 type DiffStats = import("./diff.js").DiffStats;
 
 type FileDiff = import("./diff.js").FileDiff;
+type PlannedCommit = import("./ai-types.js").PlannedCommit;
+type PlannedCommitFile = import("./ai-types.js").PlannedCommitFile;
+
+const MAX_PREVIEW_FILES_PER_COMMIT = 3;
+const MAX_PREVIEW_HUNKS_PER_FILE = 2;
+const MAX_PREVIEW_LINES_PER_HUNK = 3;
+
+export function buildClusterSystemPrompt(): string {
+  return [
+    "You are grouping git commit messages into semantic clusters.",
+    "Each cluster contains commits that belong to the same overarching change.",
+    "Bias toward the FEWEST clusters: merge aggressively unless changes are genuinely independent.",
+    "",
+    "Rules:",
+    "- ALL style, import-order, formatting, and whitespace-only commits → ONE cluster (two at most).",
+    "- Same file appearing in multiple commits → those commits likely belong in the same cluster.",
+    "- Commits for the same feature across source, tests, docs, config → same cluster.",
+    "- Rename or terminology sweeps across multiple files → same cluster.",
+    "- Commits that together introduce or harden one system (e.g., proxy credentials, legal consent, tooling) → same cluster.",
+    "- Keep genuinely independent features, bug fixes, and major refactors as separate clusters.",
+    "",
+    "Return ONLY valid JSON: an array of arrays of 0-based commit indices.",
+    "Every index from 0 to N-1 must appear exactly once.",
+    "Example for 5 commits: [[0,1,5],[2,8],[3],[4,6,7]] — wrong if N=9. Should be [[0,1],[2,3],[4]].",
+    "Minimal example: [[0,2],[1],[3,4]]",
+  ].join("\n");
+}
+
+export function buildClusterUserPrompt(groups: PlannedCommit[]): string {
+  const lines = groups.map(
+    (g, i) => `${formatScalar(i)}: ${g.message.split("\n")[0]}`,
+  );
+  return [
+    `Cluster these ${formatScalar(groups.length)} commits into semantic groups.`,
+    "Merge commits that are part of the same overarching change.",
+    "",
+    ...lines,
+    "",
+    "Return clusters as JSON array of index arrays: [[...],[...],...]",
+  ].join("\n");
+}
 
 export function buildConsolidationSystemPrompt(): string {
   return [
-    "You are reviewing an AI-generated commit plan and deciding whether adjacent commits should be merged.",
-    "Your job is to merge ONLY adjacent commits that are clearly part of the same overarching change.",
+    "You are reviewing an AI-generated commit plan and deciding which commits should be merged.",
+    "Your job is to reduce fragmentation by merging commits that are clearly part of the same overarching change.",
+    "Keep merging until no further meaningful merge opportunity remains in the returned plan.",
+    "Bias toward the fewest commits that still preserve genuinely independent changes.",
     "",
     "Rules:",
-    "- You MAY merge adjacent commits.",
+    "- You MAY merge any commits, including non-adjacent ones, when they clearly belong together.",
     "- You MUST NOT split commits.",
     "- You MUST NOT drop, duplicate, or invent files/hunks.",
-    "- Preserve commit order except where adjacent commits are merged into one slot.",
+    "- You may reorder commits to bring non-adjacent related work together; otherwise preserve original order.",
     "- Keep independent features, fixes, and isolated refactors separate.",
+    "- Absorb narrow style, import-order, formatting, rename-only, docs, test, config, and helper-script follow-up commits into the neighboring owning feature/refactor when they exist to support that same rollout.",
+    "- Standalone style/import-order/formatting commits should be rare and kept only when they are broad independent sweeps across otherwise unrelated files.",
+    "- Collapse ALL style, import-order, formatting, and whitespace-only sweep commits into as few commits as possible regardless of their position in the plan. Multiple style-sweep commits should reduce to 1-2 commits maximum.",
+    "- If two commits modify different hunks of the SAME file, merge them into one commit unless they are clearly independent features.",
     "- Consolidate fragmented tooling/workflow/config sweeps when they are one cohesive rollout.",
-    "- Consolidate repeated cosmetic/style/refactor cleanup commits only when they form one obvious sweep in the same area.",
+    "- Consolidate package.json, config files, helper scripts, docs, and tests into the same commit when they enable, describe, or verify the same feature or workflow.",
+    "- Do not stop after the first obvious merge if the merged result should also absorb another commit.",
     "- When no merge is warranted, return the plan unchanged.",
     "",
     "Output raw JSON only.",
@@ -33,11 +81,17 @@ export function buildConsolidationSystemPrompt(): string {
 
 export function buildConsolidationUserPrompt(
   allFiles: FileDiff[],
-  groups: import("./ai-types.js").PlannedCommit[],
+  groups: PlannedCommit[],
 ): string {
+  const fileByPath = new Map(allFiles.map((file) => [file.path, file]));
   const parts = [
     `Review ${formatScalar(groups.length)} planned commit(s) covering ${formatScalar(allFiles.length)} changed file(s).`,
-    "Merge adjacent commits only when they clearly belong to the same overarching change.",
+    "Merge any commits that clearly belong to the same overarching change, including non-adjacent ones.",
+    "Prefer the minimum commit count that still keeps truly independent work separate.",
+    "Absorb narrow cleanup-only, import-order, docs, test, config, and helper-script commits into the neighboring owning change when they are part of the same rollout.",
+    "Collapse ALL style/import-order/formatting sweep commits across the plan into 1-2 commits maximum, regardless of their position.",
+    "If multiple commits modify different hunks of the SAME file, merge them unless they cover clearly independent features.",
+    "Return the fully consolidated plan, not just a single merge step.",
     "",
     "Changed files:",
     ...allFiles.map((file) => {
@@ -63,9 +117,14 @@ export function buildConsolidationUserPrompt(
         parts.push(`- ${file.path} [all hunks]`);
       }
     }
+    parts.push("Selected diff preview:");
+    parts.push(...buildConsolidationPreviewLines(group, fileByPath));
     parts.push("");
   }
 
+  parts.push(
+    "If commit 2 and commit 3 should merge, and that merged result should also merge with commit 4, your returned plan must already reflect both merges.",
+  );
   parts.push(
     "Return the final commit plan as JSON using the same file/hunk coverage with merged adjacent commits where warranted.",
   );
@@ -309,6 +368,73 @@ export function buildUserPrompt(chunk: DiffChunk, stats?: DiffStats): string {
   return parts.join("\n");
 }
 
+function buildConsolidationPreviewLines(
+  group: PlannedCommit,
+  fileByPath: Map<string, FileDiff>,
+): string[] {
+  const previewLines: string[] = [];
+  const previewFiles = group.files.slice(0, MAX_PREVIEW_FILES_PER_COMMIT);
+
+  for (const fileRef of previewFiles) {
+    const file = fileByPath.get(fileRef.path);
+    if (!file) {
+      previewLines.push(`- ${fileRef.path}: missing file metadata`);
+      continue;
+    }
+
+    previewLines.push(...buildFilePreviewLines(file, fileRef));
+  }
+
+  const remainingFiles = group.files.length - previewFiles.length;
+  if (remainingFiles > 0) {
+    previewLines.push(
+      `- ... ${formatScalar(remainingFiles)} more file(s) omitted from preview`,
+    );
+  }
+
+  return previewLines;
+}
+
+function buildFilePreviewLines(
+  file: FileDiff,
+  fileRef: PlannedCommitFile,
+): string[] {
+  const lines: string[] = [`- ${file.path}:`];
+  const selectedHunks = getSelectedPreviewHunks(file, fileRef);
+
+  if (selectedHunks.length === 0) {
+    const metadata = (file.metadataLines ?? []).slice(
+      0,
+      MAX_PREVIEW_LINES_PER_HUNK,
+    );
+    if (metadata.length === 0) {
+      lines.push(`  ${file.status} file-level change`);
+      return lines;
+    }
+
+    for (const metadataLine of metadata) {
+      lines.push(`  ${metadataLine}`);
+    }
+    return lines;
+  }
+
+  for (const hunk of selectedHunks) {
+    lines.push(`  ${hunk.header}`);
+    for (const previewLine of getPreviewChangeLines(hunk.lines)) {
+      lines.push(`    ${previewLine}`);
+    }
+  }
+
+  const selectedCount = fileRef.hunks?.length ?? file.hunks.length;
+  if (selectedCount > selectedHunks.length) {
+    lines.push(
+      `  ... ${formatScalar(selectedCount - selectedHunks.length)} more hunk(s) omitted`,
+    );
+  }
+
+  return lines;
+}
+
 function commitFormatInstructions(): string[] {
   const cfg = loadConfig();
   const parts: string[] = [];
@@ -348,6 +474,31 @@ function getAreaKey(path: string): string {
     return segments[0];
   }
   return segments.slice(0, 2).join("/");
+}
+
+function getPreviewChangeLines(lines: string[]): string[] {
+  const changedLines = lines.filter(
+    (line) =>
+      (line.startsWith("+") || line.startsWith("-")) &&
+      !line.startsWith("+++") &&
+      !line.startsWith("---"),
+  );
+
+  if (changedLines.length > 0) {
+    return changedLines.slice(0, MAX_PREVIEW_LINES_PER_HUNK);
+  }
+
+  return lines.slice(0, MAX_PREVIEW_LINES_PER_HUNK);
+}
+
+function getSelectedPreviewHunks(file: FileDiff, fileRef: PlannedCommitFile) {
+  if (fileRef.hunks && fileRef.hunks.length > 0) {
+    return fileRef.hunks
+      .map((hunkIndex) => file.hunks[hunkIndex])
+      .slice(0, MAX_PREVIEW_HUNKS_PER_FILE);
+  }
+
+  return file.hunks.slice(0, MAX_PREVIEW_HUNKS_PER_FILE);
 }
 
 function samplePaths(paths: string[]): string[] {
