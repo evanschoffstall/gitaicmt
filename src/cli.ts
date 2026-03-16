@@ -139,7 +139,7 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
   if (!autoConfirm) {
     logActualTokenUsage(getTokenUsageSummary());
     const confirmed = await promptYesNo(
-      `${BOLD}Commit ${formatCount(mergedGroups.length)} planned commit(s)?${RESET}`,
+      `${BOLD}Proceed with creating ${formatCount(mergedGroups.length)} planned ${mergedGroups.length === 1 ? "commit" : "commits"}?${RESET}`,
     );
     if (!confirmed) {
       log(`${YELLOW}Aborted.${RESET}`);
@@ -725,18 +725,11 @@ async function main() {
   }
 }
 
+// -------- Entry --------
+
 /** Prompt the user for y/n. Re-prompts until a valid answer is given. */
 async function promptYesNo(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-
-  // Add timeout protection (5 minutes max) to prevent indefinite hangs
-  const PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error("User prompt timed out after 5 minutes"));
-    }, PROMPT_TIMEOUT_MS);
-  });
 
   try {
     for (;;) {
@@ -763,7 +756,7 @@ async function promptYesNo(question: string): Promise<boolean> {
         });
       });
 
-      const answer = await Promise.race([answerPromise, timeoutPromise]);
+      const answer = await answerPromise;
       if (answer === "__EOF__") return true;
       const a = answer.trim().toLowerCase();
       if (a === "y" || a === "yes") return true;
