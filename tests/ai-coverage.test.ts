@@ -148,8 +148,13 @@ function makeFile(path: string, hunks = 1): FileDiff {
   };
 }
 
-function makeStats(): DiffStats {
-  return { additions: 3, chunks: 2, deletions: 1, filesChanged: 2 };
+function makeStats(
+  filesChanged = 2,
+  additions = 3,
+  deletions = 1,
+  chunks = 2,
+): DiffStats {
+  return { additions, chunks, deletions, filesChanged };
 }
 
 function validApiKey(tag: string): string {

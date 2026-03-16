@@ -44,12 +44,12 @@ export {
   getTokenUsageSummary,
   resetTokenUsageSummary,
   setAiOutputObserver,
-  validateOpenAIConfiguration,
+  validateOpenAIConfiguration
 } from "./ai-client.js";
 export type { AiOutputEvent } from "./ai-client.js";
 export {
   estimateGenerateOperationTokens,
-  estimatePlanOperationTokens,
+  estimatePlanOperationTokens
 } from "./ai-tokens.js";
 export type { TokenEstimateSummary } from "./ai-tokens.js";
 export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
