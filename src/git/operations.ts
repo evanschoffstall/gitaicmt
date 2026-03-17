@@ -20,6 +20,7 @@ const ANSI_ESCAPE_SEQUENCE = new RegExp(
 const CONTROL_CHARACTER = /\p{Cc}/gu;
 const FORBIDDEN_PATH_CONTROL_CHARACTERS = /\p{Cc}/u;
 const SAFE_LINE_CONTROL_CHARACTERS = new Set(["\t", "\n", "\r"]);
+const CANONICAL_DIFF_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"];
 
 // ============================================================================
 // Repository Validation
@@ -78,7 +79,12 @@ export function commitWithMessage(message: string, cwd?: string): void {
  */
 export function getStagedDiff(cwd?: string): string {
   return execGit(
-    ["diff", "--cached", `--unified=${String(DIFF_CONTEXT_LINES)}`],
+    [
+      "diff",
+      "--cached",
+      ...CANONICAL_DIFF_PREFIX_ARGS,
+      `--unified=${String(DIFF_CONTEXT_LINES)}`,
+    ],
     {
       cwd,
     },
@@ -104,7 +110,13 @@ export function getStagedFiles(cwd?: string): string[] {
  */
 export function getStagedPatch(cwd?: string): string {
   return execGit(
-    ["diff", "--cached", "--binary", `--unified=${String(DIFF_CONTEXT_LINES)}`],
+    [
+      "diff",
+      "--cached",
+      "--binary",
+      ...CANONICAL_DIFF_PREFIX_ARGS,
+      `--unified=${String(DIFF_CONTEXT_LINES)}`,
+    ],
     {
       cwd,
     },

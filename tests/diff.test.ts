@@ -390,6 +390,23 @@ index abc..def 100644
       expect(files[0].hunks[0].countNew).toBe(1);
     });
 
+    test("parses file headers without canonical a/b prefixes", () => {
+      const noPrefix = `diff --git src/index.ts src/index.ts
+index abc1234..def5678 100644
+--- src/index.ts
++++ src/index.ts
+@@ -1 +1 @@
+-old
++new`;
+
+      const files = parseDiff(noPrefix);
+
+      expect(files).toHaveLength(1);
+      expect(files[0].path).toBe("src/index.ts");
+      expect(files[0].oldPath).toBeNull();
+      expect(files[0].hunks).toHaveLength(1);
+    });
+
     test("skips binary file markers", () => {
       const binaryDiff = `diff --git a/image.png b/image.png
 new file mode 100644
@@ -852,6 +869,33 @@ describe("git staging helpers", () => {
     const staged = getStagedFiles(dir);
     expect(staged).toContain("a.txt");
     expect(staged).toContain("b.txt");
+    cleanupDir(dir);
+  });
+
+  test("getStagedDiff forces canonical prefixes even when git disables them", () => {
+    const dir = makeGitDir();
+    writeFileSync(join(dir, "prefixed.txt"), "before\n");
+    execSync("git add prefixed.txt && git commit -m 'add prefixed file'", {
+      cwd: dir,
+      stdio: "pipe",
+    });
+    execSync("git config diff.noprefix true", { cwd: dir, stdio: "pipe" });
+    writeFileSync(join(dir, "prefixed.txt"), "after\n");
+    execSync("git add prefixed.txt", { cwd: dir, stdio: "pipe" });
+
+    const rawDiff = execSync("git diff --cached", {
+      cwd: dir,
+      encoding: "utf-8",
+    }) as string;
+    expect(rawDiff).toContain("diff --git prefixed.txt prefixed.txt");
+
+    const stagedDiff = getStagedDiff(dir);
+    expect(stagedDiff).toContain("diff --git a/prefixed.txt b/prefixed.txt");
+
+    const parsed = parseDiff(stagedDiff);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].path).toBe("prefixed.txt");
+
     cleanupDir(dir);
   });
 

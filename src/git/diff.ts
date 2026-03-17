@@ -60,7 +60,7 @@ function buildDisplayHeaderLines(file: FileDiff): string[] {
 // Parser
 // ============================================================================
 
-const FILE_HEADER = /^diff --git a\/(.+) b\/(.+)$/;
+const FILE_HEADER = /^diff --git (.+) (.+)$/;
 const HUNK_HEADER = /^@@ -([0-9,]+) \+([0-9,]+) @@/;
 const STATUS_PREFIXES = [
   "new file",
@@ -225,10 +225,6 @@ export function formatSelectedFileDiff(
   return parts.join("\n");
 }
 
-// ============================================================================
-// Formatting
-// ============================================================================
-
 /**
  * Calculate summary statistics for a set of files and chunks
  * @param files - Array of file diffs
@@ -243,6 +239,10 @@ export function getStats(files: FileDiff[], chunks: DiffChunk[]): DiffStats {
     filesChanged: files.length,
   };
 }
+
+// ============================================================================
+// Formatting
+// ============================================================================
 
 /**
  * Parse a raw git diff into structured FileDiff objects
@@ -275,11 +275,10 @@ export function parseDiff(raw: string): FileDiff[] {
   for (const line of lines) {
     if (!line) continue; // Skip empty lines
 
-    const fMatch = FILE_HEADER.exec(line);
-    if (fMatch) {
+    const parsedHeader = parseFileHeader(line);
+    if (parsedHeader) {
       flushCurrent();
-      const oldP = fMatch[1];
-      const newP = fMatch[2];
+      const { newPath: newP, oldPath: oldP } = parsedHeader;
       if (!oldP || !newP) continue;
       current = {
         additions: 0,
@@ -369,6 +368,25 @@ export function parseDiff(raw: string): FileDiff[] {
   }
   flushCurrent();
   return files;
+}
+
+/**
+ * Parse a git diff file header, accepting either canonical a/b prefixes or no
+ * prefixes when callers provide raw git output.
+ */
+function parseFileHeader(line: string): null | { newPath: string; oldPath: string } {
+  const match = FILE_HEADER.exec(line);
+  if (!match) {
+    return null;
+  }
+
+  let [, oldPath, newPath] = match;
+  if (oldPath.startsWith("a/") && newPath.startsWith("b/")) {
+    oldPath = oldPath.slice(2);
+    newPath = newPath.slice(2);
+  }
+
+  return { newPath, oldPath };
 }
 
 // ============================================================================
