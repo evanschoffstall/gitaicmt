@@ -9,6 +9,7 @@ import {
   formatScalar,
   validateCommitMessage,
 } from "../commit-messages/formatting.js";
+import { formatSelectedFileDiff } from "../git/diff.js";
 import {
   batchFilesForGrouping,
   batchingMakesProgress,
@@ -277,17 +278,10 @@ export async function planCommits(
             );
           }
           if (missedFile.hunks) {
-            const selectedHunks = missedFile.hunks.map(
-              (index) => file.hunks[index],
+            return formatSelectedFileDiff(
+              file,
+              missedFile.hunks.map((index) => file.hunks[index]),
             );
-            const parts = [
-              `--- ${file.oldPath ?? file.path}`,
-              `+++ ${file.path}`,
-            ];
-            for (const hunk of selectedHunks) {
-              parts.push(hunk.header, ...hunk.lines);
-            }
-            return parts.join("\n");
           }
           return formatFileDiff(file);
         })

@@ -48,6 +48,14 @@ export interface FileDiff {
   status: "added" | "deleted" | "modified" | "renamed";
 }
 
+function buildDisplayHeaderLines(file: FileDiff): string[] {
+  return [
+    `--- ${file.oldPath ?? file.path}`,
+    `+++ ${file.path}`,
+    ...(file.metadataLines ?? []),
+  ];
+}
+
 // ============================================================================
 // Parser
 // ============================================================================
@@ -134,8 +142,8 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
       } else if (cfg.analysis.groupByHunk) {
         // Split large files by hunk
         for (const hunk of file.hunks) {
-          const hText = [hunk.header, ...hunk.lines].join("\n");
-          const hLc = hunk.lines.length + 1;
+          const hText = formatSelectedFileDiff(file, [hunk]);
+          const hLc = hText.split("\n").length;
           chunks.push({
             content: hText,
             files: [file.path],
@@ -195,10 +203,24 @@ export function chunkDiffs(files: FileDiff[]): DiffChunk[] {
  * @returns Formatted diff text ready for display
  */
 export function formatFileDiff(f: FileDiff): string {
-  const parts: string[] = [`--- ${f.oldPath ?? f.path}`, `+++ ${f.path}`];
-  for (const h of f.hunks) {
-    parts.push(h.header);
-    parts.push(...h.lines);
+  return formatSelectedFileDiff(f);
+}
+
+/**
+ * Format a FileDiff or selected hunks into displayable unified diff text.
+ * Includes file metadata lines so prompts retain rename-only and mode-change context.
+ * @param file - The file diff to format
+ * @param hunks - Optional subset of hunks to include
+ * @returns Formatted diff text ready for display or prompting
+ */
+export function formatSelectedFileDiff(
+  file: FileDiff,
+  hunks?: DiffHunk[],
+): string {
+  const parts = buildDisplayHeaderLines(file);
+  for (const hunk of hunks ?? file.hunks) {
+    parts.push(hunk.header);
+    parts.push(...hunk.lines);
   }
   return parts.join("\n");
 }

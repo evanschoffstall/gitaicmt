@@ -1,5 +1,6 @@
 import { resetConfigCache } from "../src/application/config.js";
 import { resetAiCache } from "../src/commit-planning/result-cache.js";
+import { formatFileDiff } from "../src/git/diff.js";
 
 const { beforeEach, describe, expect, test } = await import("bun:test");
 
@@ -462,6 +463,32 @@ describe("grouping user prompt", () => {
     expect(prompt).not.toContain("Project/workstream cues from paths:");
     expect(prompt).not.toContain("Inferred workstream cues:");
     expect(prompt).not.toContain("Project cues:");
+  });
+
+  test("keeps rename-only metadata in FULL DIFFS for file-level changes", async () => {
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const file: FileDiff = {
+      additions: 0,
+      deletions: 0,
+      hunks: [],
+      metadataLines: [
+        "similarity index 100%",
+        "rename from old.txt",
+        "rename to new.txt",
+      ],
+      oldPath: "old.txt",
+      path: "new.txt",
+      status: "renamed",
+    };
+
+    const prompt = buildGroupingUserPrompt([file], formatFileDiff);
+
+    expect(prompt).toContain("FULL DIFFS");
+    expect(prompt).toContain("similarity index 100%");
+    expect(prompt).toContain("rename from old.txt");
+    expect(prompt).toContain("rename to new.txt");
+    expect(prompt).not.toContain("--- old.txt");
+    expect(prompt).not.toContain("+++ new.txt");
   });
 });
 

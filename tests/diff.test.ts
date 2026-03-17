@@ -24,6 +24,7 @@ import {
 } from "../src/git/operations.js";
 
 const { beforeEach, describe, expect, test } = await import("bun:test");
+const originalCwd = process.cwd();
 
 function commitMessage(subject: string, ...bullets: string[]): string {
   const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
@@ -183,6 +184,7 @@ rename to new.txt`;
 
 beforeEach(() => {
   resetConfigCache();
+  process.chdir(originalCwd);
 });
 
 describe("parseDiff", () => {
@@ -519,6 +521,51 @@ describe("chunkDiffs", () => {
         expect(c.lineCount).toBeGreaterThan(0);
       }
     });
+
+    test("hunk-split chunks keep file metadata when groupByHunk is enabled", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-chunk-"));
+      try {
+        process.chdir(dir);
+        writeFileSync(
+          join(dir, "gitaicmt.config.json"),
+          JSON.stringify({
+            analysis: { chunkSize: 50, groupByFile: true, groupByHunk: true },
+          }),
+        );
+        resetConfigCache();
+
+        const files: FileDiff[] = [
+          {
+            additions: 60,
+            deletions: 0,
+            hunks: [
+              {
+                countNew: 60,
+                countOld: 0,
+                header: "@@ -1,0 +1,60 @@",
+                lines: Array.from({ length: 60 }, (_, index) => `+line ${index}`),
+                startNew: 1,
+                startOld: 1,
+              },
+            ],
+            metadataLines: ["old mode 100644", "new mode 100755"],
+            oldPath: null,
+            path: "app.sh",
+            status: "modified",
+          },
+        ];
+        const chunks = chunkDiffs(files);
+
+        expect(chunks).toHaveLength(1);
+        expect(chunks[0]?.content).toContain("old mode 100644");
+        expect(chunks[0]?.content).toContain("new mode 100755");
+        expect(chunks[0]?.content).toContain("@@ -1,0 +1,60 @@");
+      } finally {
+        process.chdir(originalCwd);
+        resetConfigCache();
+        rmSync(dir, { recursive: true });
+      }
+    });
   });
 });
 
@@ -585,6 +632,28 @@ describe("formatFileDiff", () => {
     const text = formatFileDiff(files[0]);
     expect(text).toContain("--- old-name.ts");
     expect(text).toContain("+++ new-name.ts");
+  });
+
+  test("includes rename-only metadata lines", () => {
+    const files = parseDiff(RENAME_ONLY_DIFF);
+    const text = formatFileDiff(files[0]);
+
+    expect(text).toContain("--- old.txt");
+    expect(text).toContain("+++ new.txt");
+    expect(text).toContain("similarity index 100%");
+    expect(text).toContain("rename from old.txt");
+    expect(text).toContain("rename to new.txt");
+  });
+
+  test("includes file metadata alongside content hunks", () => {
+    const files = parseDiff(MODE_AND_CONTENT_DIFF);
+    const text = formatFileDiff(files[0]);
+
+    expect(text).toContain("--- app.sh");
+    expect(text).toContain("+++ app.sh");
+    expect(text).toContain("old mode 100644");
+    expect(text).toContain("new mode 100755");
+    expect(text).toContain("+echo changed");
   });
 });
 

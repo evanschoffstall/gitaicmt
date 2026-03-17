@@ -13,6 +13,7 @@ export function formatLabeledDiff(
   const parts: string[] = [
     `--- ${file.oldPath ?? file.path}`,
     `+++ ${file.path}`,
+    ...(file.metadataLines ?? []),
   ];
   for (let i = 0; i < file.hunks.length; i++) {
     const hunk = file.hunks[i];

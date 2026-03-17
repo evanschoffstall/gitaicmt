@@ -48,11 +48,12 @@ export function shouldBatchFiles(files: FileDiff[]): boolean {
 }
 
 function estimateFilePromptLines(file: FileDiff): number {
+  const metadataLineCount = file.metadataLines?.length ?? 0;
   const hunkLines = file.hunks.reduce(
     (total, hunk) => total + hunk.lines.length + 1,
     0,
   );
-  const diffHeaderLines = 3;
+  const diffHeaderLines = 3 + metadataLineCount;
   const referenceLines = file.hunks.length === 0 ? 1 : file.hunks.length + 1;
   return diffHeaderLines + referenceLines + hunkLines;
 }
