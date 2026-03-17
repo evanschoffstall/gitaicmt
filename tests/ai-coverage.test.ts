@@ -2002,6 +2002,46 @@ describe("ai coverage", () => {
     ]);
   });
 
+  test("planCommits emits a planner decision event when grouping falls back", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("grouping-fallback-event"), model: "gpt-4o-mini" },
+    });
+    installOpenAiMock({
+      chatQueue: [
+        { choices: [{ message: { content: "not valid json" } }] },
+        {
+          choices: [
+            {
+              message: {
+                content: commitMessage("chore(core): fallback grouping"),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const ai = await importFreshAi("grouping-fallback-event");
+    const events: {
+      content: string;
+      kind?: string;
+      stage: string;
+      transport?: string;
+    }[] = [];
+    ai.setAiOutputObserver((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+
+    await ai.planCommits([makeFile("src/a.ts"), makeFile("src/b.ts")], formatFileDiff);
+
+    expect(events.some((event) => {
+      if (event.kind !== "planner-decision" || event.stage !== "group") {
+        return false;
+      }
+
+      return event.content.includes('"decision":"grouping-fallback"');
+    })).toBe(true);
+  });
+
   test("planCommits falls back when grouping response is suspiciously large", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("too-many-groups"), model: "gpt-4o-mini" },

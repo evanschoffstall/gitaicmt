@@ -115,46 +115,57 @@ export async function finalizePlannedGroups(
 }
 
 async function callCluster(groups: PlannedCommit[]): Promise<null | number[][]> {
-  try {
-    const raw = await complete(buildClusterSystemPrompt(), buildClusterUserPrompt(groups), {
-      stage: "cluster",
-    });
-    const cleaned = raw
-      .replace(/^```(?:json)?\s*/m, "")
-      .replace(/\s*```$/m, "");
-    const parsed = JSON.parse(cleaned) as unknown;
-
-    if (!Array.isArray(parsed)) {
-      return null;
-    }
-
-    const seen = new Set<number>();
-    for (const cluster of parsed) {
-      if (!Array.isArray(cluster)) {
-        return null;
-      }
-      for (const index of cluster) {
-        if (typeof index !== "number" || index < 0 || index >= groups.length) {
-          return null;
-        }
-        if (seen.has(index)) {
-          return null;
-        }
-        seen.add(index);
-      }
-    }
-
-    const clusters = parsed as number[][];
-    for (let index = 0; index < groups.length; index++) {
-      if (!seen.has(index)) {
-        clusters.push([index]);
-      }
-    }
-
-    return clusters.some((cluster) => cluster.length > 1) ? clusters : null;
-  } catch {
+  const result = await completePlannerStage(
+    buildClusterUserPrompt(groups),
+    "cluster",
+    buildClusterSystemPrompt(),
+    groups.length,
+  );
+  if (result === null) {
     return null;
   }
+  const parsed = result.parsed;
+
+  if (!Array.isArray(parsed)) {
+    emitPlannerFallbackEvent("cluster-fallback", "invalid-cluster-shape", "cluster", {
+      inputGroupCount: groups.length,
+    });
+    return null;
+  }
+
+  const seen = new Set<number>();
+  for (const cluster of parsed) {
+    if (!Array.isArray(cluster)) {
+      emitPlannerFallbackEvent("cluster-fallback", "invalid-cluster-entry", "cluster", {
+        inputGroupCount: groups.length,
+      });
+      return null;
+    }
+    for (const index of cluster) {
+      if (typeof index !== "number" || index < 0 || index >= groups.length) {
+        emitPlannerFallbackEvent("cluster-fallback", "cluster-index-out-of-range", "cluster", {
+          inputGroupCount: groups.length,
+        });
+        return null;
+      }
+      if (seen.has(index)) {
+        emitPlannerFallbackEvent("cluster-fallback", "duplicate-cluster-index", "cluster", {
+          inputGroupCount: groups.length,
+        });
+        return null;
+      }
+      seen.add(index);
+    }
+  }
+
+  const clusters = parsed as number[][];
+  for (let index = 0; index < groups.length; index++) {
+    if (!seen.has(index)) {
+      clusters.push([index]);
+    }
+  }
+
+  return clusters.some((cluster) => cluster.length > 1) ? clusters : null;
 }
 
 async function clusterAndMerge(
@@ -204,48 +215,133 @@ async function clusterAndMerge(
   return current;
 }
 
+async function completePlannerStage(
+  input: string,
+  stage: "cluster" | "consolidate",
+  system: string,
+  inputGroupCount: number,
+): Promise<null | { parsed: unknown }> {
+  let raw: string;
+  try {
+    raw = await complete(system, input, { stage });
+  } catch (error: unknown) {
+    emitPlannerFallbackEvent(
+      `${stage === "cluster" ? "cluster" : "consolidation"}-fallback`,
+      `${stage === "cluster" ? "cluster" : "consolidation"}-call-failed`,
+      stage,
+      {
+        error: describeError(error),
+        inputGroupCount,
+      },
+    );
+    return null;
+  }
+
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/m, "")
+    .replace(/\s*```$/m, "");
+
+  try {
+    return { parsed: JSON.parse(cleaned) as unknown };
+  } catch (error: unknown) {
+    emitPlannerFallbackEvent(
+      `${stage === "cluster" ? "cluster" : "consolidation"}-fallback`,
+      `invalid-${stage === "cluster" ? "cluster" : "consolidation"}-json`,
+      stage,
+      {
+        error: describeError(error),
+        inputGroupCount,
+      },
+    );
+    return null;
+  }
+}
+
 async function consolidateOnce(
   allFiles: FileDiff[],
   groups: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
 ): Promise<null | PlannedCommit[]> {
-  try {
-    const startedAtMs = performance.now();
-    const raw = await complete(
-      buildConsolidationSystemPrompt(),
-      buildConsolidationUserPrompt(allFiles, groups),
-      { stage: "consolidate" },
-    );
-    const cleaned = raw
-      .replace(/^```(?:json)?\s*/m, "")
-      .replace(/\s*```$/m, "");
-    const parsed = JSON.parse(cleaned) as unknown;
-    const consolidated = validateAndNormalizeGrouping(parsed, fileByPath);
-
-    if (!hasMatchingCoverage(groups, consolidated, fileByPath)) {
-      return null;
-    }
-
-    const harmonized = harmonizeConsolidatedMessages(
-      groups,
-      consolidated,
-      fileByPath,
-    );
-    emitAiOutputEvent({
-      content: JSON.stringify({
-        decision: "consolidation-pass",
-        inputGroupCount: groups.length,
-        outputGroupCount: harmonized.length,
-      }),
-      durationMs: performance.now() - startedAtMs,
-      kind: "planner-decision",
-      stage: "consolidate",
-      transport: "internal",
-    });
-    return harmonized;
-  } catch {
+  const startedAtMs = performance.now();
+  const result = await completePlannerStage(
+    buildConsolidationUserPrompt(allFiles, groups),
+    "consolidate",
+    buildConsolidationSystemPrompt(),
+    groups.length,
+  );
+  if (result === null) {
     return null;
   }
+  const parsed = result.parsed;
+
+  let consolidated: PlannedCommit[];
+  try {
+    consolidated = validateAndNormalizeGrouping(parsed, fileByPath);
+  } catch (error: unknown) {
+    emitPlannerFallbackEvent(
+      "consolidation-fallback",
+      "invalid-consolidation-response",
+      "consolidate",
+      {
+        error: describeError(error),
+        inputGroupCount: groups.length,
+      },
+    );
+    return null;
+  }
+
+  if (!hasMatchingCoverage(groups, consolidated, fileByPath)) {
+    emitPlannerFallbackEvent(
+      "consolidation-fallback",
+      "coverage-mismatch",
+      "consolidate",
+      {
+        inputGroupCount: groups.length,
+        outputGroupCount: consolidated.length,
+      },
+    );
+    return null;
+  }
+
+  const harmonized = harmonizeConsolidatedMessages(
+    groups,
+    consolidated,
+    fileByPath,
+  );
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: "consolidation-pass",
+      inputGroupCount: groups.length,
+      outputGroupCount: harmonized.length,
+    }),
+    durationMs: performance.now() - startedAtMs,
+    kind: "planner-decision",
+    stage: "consolidate",
+    transport: "internal",
+  });
+  return harmonized;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function emitPlannerFallbackEvent(
+  decision: string,
+  reason: string,
+  stage: "cluster" | "consolidate",
+  extra: Record<string, number | string>,
+): void {
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision,
+      reason,
+      ...extra,
+    }),
+    kind: "planner-decision",
+    stage,
+    transport: "internal",
+  });
 }
 
 function harmonizeConsolidatedMessages(

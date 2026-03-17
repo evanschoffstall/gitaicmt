@@ -296,7 +296,23 @@ export async function planCommits(
       const missedMsg = await generateForChunk(missedChunk);
       groups.push({ files: missedFiles, message: missedMsg });
     }
-  } catch {
+  } catch (error: unknown) {
+    if (!(error instanceof ValidationError)) {
+      throw error;
+    }
+
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        decision: "grouping-fallback",
+        error: error.message,
+        inputFileCount: files.length,
+        reason: "invalid-grouping-response",
+      }),
+      kind: "planner-decision",
+      stage: "group",
+      transport: "internal",
+    });
+
     const allContent = files
       .map((file) => formatLabeledDiff(file, formatFileDiff))
       .join("\n");
