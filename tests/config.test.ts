@@ -605,7 +605,7 @@ describe("config", () => {
       rmSync(tmp, { recursive: true });
     });
 
-    test("malformed user config is silently ignored", () => {
+    test("malformed user config fails fast with a config error", () => {
       const tmp = makeTmpDir();
       const xdgDir = join(tmp, "xdg");
       const userDir = join(xdgDir, "gitaicmt");
@@ -620,12 +620,22 @@ describe("config", () => {
         JSON.stringify({ openai: { model: "local-ok" } }),
       );
 
-      const cfg = loadConfig(localDir);
-      expect(cfg.openai.model).toBe("local-ok");
-      // Defaults preserved since bad user config was skipped
-      expect(cfg.openai.maxTokens).toBe(512);
+      expect(() => loadConfig(localDir)).toThrow(
+        `Invalid JSON in configuration file: ${join(userDir, "config.json")}`,
+      );
 
       rmSync(tmp, { recursive: true });
+    });
+
+    test("rejects non-object config roots", () => {
+      const dir = makeTmpDir();
+      writeFileSync(join(dir, "gitaicmt.config.json"), JSON.stringify([1, 2]));
+
+      expect(() => loadConfig(dir)).toThrow(
+        `Configuration file must contain a JSON object: ${join(dir, "gitaicmt.config.json")}`,
+      );
+
+      rmSync(dir, { recursive: true });
     });
   });
 });

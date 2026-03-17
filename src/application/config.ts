@@ -134,15 +134,25 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
   );
 }
 
-/* ── Read a JSON config file (returns null on missing / bad JSON) */
+/* ── Read a JSON config file (returns null on missing, throws on invalid) */
 
 function readJsonConfig(path: string): null | Record<string, unknown> {
   if (!existsSync(path)) return null;
+
+  let parsed: unknown;
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+    parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
   } catch {
-    return null;
+    throw new ConfigError(`Invalid JSON in configuration file: ${path}`);
   }
+
+  if (!isPlainObject(parsed)) {
+    throw new ConfigError(
+      `Configuration file must contain a JSON object: ${path}`,
+    );
+  }
+
+  return parsed;
 }
 
 /* ── loadConfig ───────────────────────────────────────────────── */
