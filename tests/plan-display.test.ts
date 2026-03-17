@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { formatPlanBodyLine, wrapDisplayFileLines } from "../src/plan-display.js";
+import {
+  formatPlanBodyLine,
+  wrapDisplayFileLines,
+} from "../src/cli/commit-plan-display.js";
 
 describe("plan display formatting", () => {
   test("keeps bullet continuation lines aligned under the bullet text", () => {
@@ -31,15 +34,15 @@ describe("plan display formatting", () => {
     expect(
       wrapDisplayFileLines(
         [
-          "src/terminal-ui.ts",
-          "src/verbose-output.ts",
-          "src/cli.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
+          "src/cli/terminal-output-ui.ts",
+          "src/cli/verbose-output.ts",
+          "src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
         ],
         72,
       ),
     ).toEqual([
-      "Files: src/terminal-ui.ts, src/verbose-output.ts,",
-      "       src/cli.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
+      "Files: src/cli/terminal-output-ui.ts, src/cli/verbose-output.ts,",
+      "       src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
     ]);
   });
 });

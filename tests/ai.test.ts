@@ -1,12 +1,12 @@
-import { resetAiCache } from "../src/ai-cache.js";
-import { resetConfigCache } from "../src/config.js";
+import { resetConfigCache } from "../src/application/config.js";
+import { resetAiCache } from "../src/commit-planning/result-cache.js";
 
 const { beforeEach, describe, expect, test } = await import("bun:test");
 
-type DiffChunk = import("../src/diff.js").DiffChunk;
-type DiffHunk = import("../src/diff.js").DiffHunk;
-type DiffStats = import("../src/diff.js").DiffStats;
-type FileDiff = import("../src/diff.js").FileDiff;
+type DiffChunk = import("../src/git/diff.js").DiffChunk;
+type DiffHunk = import("../src/git/diff.js").DiffHunk;
+type DiffStats = import("../src/git/diff.js").DiffStats;
+type FileDiff = import("../src/git/diff.js").FileDiff;
 
 // ═══════════════════════════════════════════════════════════════
 // Mock OpenAI — we don't call the real API in tests
@@ -75,7 +75,7 @@ describe("ai module", () => {
 
   describe("PlannedCommit interface", () => {
     test("can create a valid PlannedCommit object", async () => {
-      const ai = await import("../src/ai.js");
+      const ai = await import("../src/commit-planning/orchestration.js");
       // Verify module exports the expected functions
       expect(typeof ai.planCommits).toBe("function");
       expect(typeof ai.generateForChunk).toBe("function");
@@ -95,7 +95,7 @@ describe("ai module", () => {
 
   describe("generateForChunks", () => {
     test("returns fallback for empty chunks", async () => {
-      const { generateForChunks } = await import("../src/ai.js");
+      const { generateForChunks } = await import("../src/commit-planning/orchestration.js");
       const stats = makeStats(0, 0, 0, 0);
       const result = await generateForChunks([], stats);
       expect(result).toBe(
@@ -111,7 +111,7 @@ describe("ai module", () => {
 
   describe("planCommits", () => {
     test("is exported as a function", async () => {
-      const { planCommits } = await import("../src/ai.js");
+      const { planCommits } = await import("../src/commit-planning/orchestration.js");
       expect(typeof planCommits).toBe("function");
     });
   });
@@ -120,7 +120,7 @@ describe("ai module", () => {
 
   describe("generateForChunk", () => {
     test("is exported as a function", async () => {
-      const { generateForChunk } = await import("../src/ai.js");
+      const { generateForChunk } = await import("../src/commit-planning/orchestration.js");
       expect(typeof generateForChunk).toBe("function");
     });
   });
@@ -134,7 +134,7 @@ describe("ai module - mock API tests", () => {
   test("generateForChunks merges multiple chunks", async () => {
     // We test the logic path — with mocked completions
     // The important thing is that it calls the API and returns a string
-    const { generateForChunks } = await import("../src/ai.js");
+    const { generateForChunks } = await import("../src/commit-planning/orchestration.js");
 
     // Single chunk should go through generateForChunk
     const chunk = makeChunk(0, ["file.ts"], "+hello world");
@@ -153,7 +153,7 @@ describe("ai module - mock API tests", () => {
   });
 
   test("planCommits handles single file without grouping API call", async () => {
-    const { planCommits } = await import("../src/ai.js");
+    const { planCommits } = await import("../src/commit-planning/orchestration.js");
     const file = makeFileDiff("src/app.ts", 5, 2);
     const formatFn = (f: FileDiff) =>
       `--- ${f.path}\n+++ ${f.path}\n${f.hunks[0].lines.join("\n")}`;
@@ -170,7 +170,7 @@ describe("ai module - mock API tests", () => {
   });
 
   test("planCommits with multiple files attempts grouping", async () => {
-    const { planCommits } = await import("../src/ai.js");
+    const { planCommits } = await import("../src/commit-planning/orchestration.js");
     const files = [
       makeFileDiff("src/a.ts", 3, 1),
       makeFileDiff("src/b.ts", 5, 0),
@@ -249,20 +249,20 @@ function makeMultiHunkFileDiff(
 
 describe("grouping system prompt", () => {
   test("describes cross-file hunk wiring as non-optional", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("THIS IS NOT OPTIONAL");
   });
 
   test("instructs AI to scan hunk map before reading diffs", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("STEP 1");
     expect(prompt).toContain("HUNK REFERENCE MAP");
   });
 
   test("includes concrete cross-file linking examples (type in A, used in B)", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("EXAMPLE 1");
     expect(prompt).toContain("EXAMPLE 2");
@@ -272,7 +272,7 @@ describe("grouping system prompt", () => {
   });
 
   test("examples show JSON with per-file hunks arrays", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain('"hunks"');
     expect(prompt).toContain('"path"');
@@ -280,13 +280,13 @@ describe("grouping system prompt", () => {
   });
 
   test("explains that every hunk must appear in exactly one commit", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("exactly one commit");
   });
 
   test("instructs linked hunks from different files to go in same commit", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     // STEP 2 wiring section
     expect(prompt).toContain("STEP 2");
@@ -294,27 +294,27 @@ describe("grouping system prompt", () => {
   });
 
   test("instructs unrelated hunks in same file to go in different commits", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("different commits");
   });
 
   test("shows wrong vs right example for hunk precision", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("WRONG");
     expect(prompt).toContain("RIGHT");
   });
 
   test("states any combination of files and hunks is valid", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("ANY COMBINATION IS VALID");
     expect(prompt).toContain("NO restriction");
   });
 
   test("includes final checklist before output", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/ai.js");
+    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("FINAL CHECKLIST");
   });
@@ -328,7 +328,7 @@ describe("grouping user prompt", () => {
     f.hunks.map((h) => h.header + "\n" + h.lines.join("\n")).join("\n");
 
   test("includes HUNK REFERENCE MAP section", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/parser.ts", [
       { header: "@@ -1,3 +1,5 @@", lines: ["+const x = 1;"] },
       { header: "@@ -20,2 +22,4 @@", lines: ["+const y = 2;"] },
@@ -338,11 +338,11 @@ describe("grouping user prompt", () => {
   });
 
   test("lists each hunk with its index in the reference map", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/handler.ts", [
       {
         header: "@@ -5,3 +5,6 @@",
-        lines: ["+import {ParseError} from './parser'"],
+        lines: ["+import {ParseError} from './parser.js'"],
       },
       {
         header: "@@ -40,2 +43,5 @@",
@@ -357,7 +357,7 @@ describe("grouping user prompt", () => {
   });
 
   test("reference map lists multiple files each with their hunks", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
     const fileA = makeMultiHunkFileDiff("src/errors.ts", [
       {
         header: "@@ -1,2 +1,5 @@",
@@ -367,7 +367,7 @@ describe("grouping user prompt", () => {
     const fileB = makeMultiHunkFileDiff("src/parser.ts", [
       {
         header: "@@ -1,1 +1,2 @@",
-        lines: ["+import { ParseError } from './errors'"],
+        lines: ["+import { ParseError } from './errors.js'"],
       },
       {
         header: "@@ -30,4 +31,7 @@",
@@ -384,7 +384,7 @@ describe("grouping user prompt", () => {
   });
 
   test("labels hunks in FULL DIFFS section too", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/models.ts", [
       { header: "@@ -1,3 +1,4 @@", lines: ["+createdAt: Date"] },
       { header: "@@ -50,2 +51,3 @@", lines: ["-oldField: string"] },
@@ -398,7 +398,7 @@ describe("grouping user prompt", () => {
   });
 
   test("uses a stable file legend without heuristic categories", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
     const srcFile = makeMultiHunkFileDiff("src/app.ts", [
       { header: "@@ -1,1 +1,2 @@", lines: ["+const x = 1;"] },
     ]);
@@ -415,7 +415,7 @@ describe("grouping user prompt", () => {
   });
 
   test("strips repeated file headers from diff bodies once files are aliased", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/models.ts", [
       { header: "@@ -1,3 +1,4 @@", lines: ["+createdAt: Date"] },
     ]);
@@ -428,7 +428,7 @@ describe("grouping user prompt", () => {
   });
 
   test("includes overall changeset context for batched prompts", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
     const batchFile = makeFileDiff("src/app.ts", 1, 0);
     const siblingFile = makeFileDiff("tests/app.test.ts", 1, 0);
     const rootFile = makeFileDiff("package.json", 1, 0);
@@ -449,9 +449,9 @@ describe("grouping user prompt", () => {
   });
 
   test("does not inject project cue summaries into grouping prompts", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/ai.js");
-    const cacheFile = makeFileDiff("src/ai-cache.ts", 1, 0);
-    const tokensFile = makeFileDiff("src/ai-tokens.ts", 1, 0);
+    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const cacheFile = makeFileDiff("src/commit-planning/result-cache.ts", 1, 0);
+    const tokensFile = makeFileDiff("src/commit-planning/token-estimation.ts", 1, 0);
     const coverageFile = makeFileDiff("tests/ai-coverage.test.ts", 1, 0);
 
     const prompt = buildGroupingUserPrompt(
@@ -468,11 +468,11 @@ describe("grouping user prompt", () => {
 describe("consolidation user prompt", () => {
   test("includes selected diff previews for grouped files", async () => {
     const { buildConsolidationUserPrompt } =
-      await import("../src/ai-prompt-builders.js");
+      await import("../src/commit-planning/prompt-builders/index.js");
     const fileA = makeMultiHunkFileDiff("src/app.ts", [
       {
         header: "@@ -1,3 +1,5 @@",
-        lines: ["+import { helper } from './helper'", "+const x = helper()"],
+        lines: ["+import { helper } from './helper.js'", "+const x = helper()"],
       },
       {
         header: "@@ -20,2 +22,4 @@",
@@ -502,14 +502,14 @@ describe("consolidation user prompt", () => {
 
     expect(prompt).toContain("Selected diff preview:");
     expect(prompt).toContain("@@ -1,3 +1,5 @@");
-    expect(prompt).toContain("+import { helper } from './helper'");
+    expect(prompt).toContain("+import { helper } from './helper.js'");
     expect(prompt).toContain("+it('uses helper', () => {})");
     expect(prompt).toContain("F1 = src/app.ts");
   });
 
   test("omits diff previews for low-ambiguity commits", async () => {
     const { buildConsolidationUserPrompt } =
-      await import("../src/ai-prompt-builders.js");
+      await import("../src/commit-planning/prompt-builders/index.js");
     const featureFile = makeMultiHunkFileDiff("src/auth.ts", [
       {
         header: "@@ -1,1 +1,3 @@",
@@ -545,12 +545,12 @@ describe("consolidation user prompt", () => {
 
   test("prefers absorbing narrow support commits into the owning change", async () => {
     const { buildConsolidationSystemPrompt, buildConsolidationUserPrompt } =
-      await import("../src/ai-prompt-builders.js");
+      await import("../src/commit-planning/prompt-builders/index.js");
     const fileA = makeMultiHunkFileDiff("src/signup.ts", [
       {
         header: "@@ -1,2 +1,5 @@",
         lines: [
-          "+import { LEGAL_CONSENT_VERSION } from './legal'",
+          "+import { LEGAL_CONSENT_VERSION } from './legal.js'",
           "+body.acceptedLegalVersion = LEGAL_CONSENT_VERSION",
         ],
       },
@@ -604,7 +604,7 @@ describe("consolidation user prompt", () => {
 
   test("allows non-adjacent merges and collapses style sweep commits", async () => {
     const { buildConsolidationSystemPrompt, buildConsolidationUserPrompt } =
-      await import("../src/ai-prompt-builders.js");
+      await import("../src/commit-planning/prompt-builders/index.js");
 
     const systemPrompt = buildConsolidationSystemPrompt();
 
@@ -661,7 +661,7 @@ describe("consolidation user prompt", () => {
 describe("cluster prompts", () => {
   test("buildClusterSystemPrompt instructs collapsing style sweeps into one cluster", async () => {
     const { buildClusterSystemPrompt } =
-      await import("../src/ai-prompt-builders.js");
+      await import("../src/commit-planning/prompt-builders/index.js");
     const prompt = buildClusterSystemPrompt();
     expect(prompt).toContain("style, import-order, formatting");
     expect(prompt).toContain("ONE cluster");
@@ -670,7 +670,7 @@ describe("cluster prompts", () => {
 
   test("buildClusterUserPrompt lists all commit subjects by index", async () => {
     const { buildClusterUserPrompt } =
-      await import("../src/ai-prompt-builders.js");
+      await import("../src/commit-planning/prompt-builders/index.js");
     const groups = [
       {
         files: [{ path: "src/a.ts" }],
@@ -698,7 +698,7 @@ describe("cluster prompts", () => {
 
 describe("deterministic pre-merge", () => {
   test("parseSubjectWords extracts type and significant words", async () => {
-    const { parseSubjectWords } = await import("../src/ai-grouping.js");
+    const { parseSubjectWords } = await import("../src/commit-planning/grouping/index.js");
     const result = parseSubjectWords(
       "style(dashboard): normalize import ordering and spacing",
     );
@@ -712,14 +712,14 @@ describe("deterministic pre-merge", () => {
   });
 
   test("parseSubjectWords handles messages without conventional prefix", async () => {
-    const { parseSubjectWords } = await import("../src/ai-grouping.js");
+    const { parseSubjectWords } = await import("../src/commit-planning/grouping/index.js");
     const result = parseSubjectWords("some random message");
     expect(result.type).toBe("");
     expect(result.words.size).toBeGreaterThan(0);
   });
 
   test("wordsRelated matches inflected forms via prefix", async () => {
-    const { wordsRelated } = await import("../src/ai-grouping.js");
+    const { wordsRelated } = await import("../src/commit-planning/grouping/index.js");
     expect(wordsRelated("import", "imports")).toBe(true);
     expect(wordsRelated("order", "ordering")).toBe(true);
     expect(wordsRelated("format", "formatting")).toBe(true);
@@ -732,7 +732,7 @@ describe("deterministic pre-merge", () => {
 
   test("hasHighWordOverlap detects matching style descriptions", async () => {
     const { hasHighWordOverlap, parseSubjectWords } =
-      await import("../src/ai-grouping.js");
+      await import("../src/commit-planning/grouping/index.js");
     const a = parseSubjectWords(
       "style(dashboard): normalize import ordering and spacing",
     );
@@ -744,14 +744,14 @@ describe("deterministic pre-merge", () => {
 
   test("hasHighWordOverlap rejects unrelated descriptions", async () => {
     const { hasHighWordOverlap, parseSubjectWords } =
-      await import("../src/ai-grouping.js");
+      await import("../src/commit-planning/grouping/index.js");
     const a = parseSubjectWords("feat(auth): add login endpoint");
     const b = parseSubjectWords("feat(legal): add legal document framework");
     expect(hasHighWordOverlap(a.words, b.words)).toBe(false);
   });
 
   test("premergeBySubject merges style commits with similar descriptions", async () => {
-    const { premergeBySubject } = await import("../src/ai-grouping.js");
+    const { premergeBySubject } = await import("../src/commit-planning/grouping/index.js");
     const fileByPath = new Map([
       ["src/a.ts", makeFileDiff("src/a.ts", 1, 0)],
       ["src/b.ts", makeFileDiff("src/b.ts", 1, 0)],
@@ -786,7 +786,7 @@ describe("deterministic pre-merge", () => {
   });
 
   test("premergeBySubject uses transitive closure", async () => {
-    const { premergeBySubject } = await import("../src/ai-grouping.js");
+    const { premergeBySubject } = await import("../src/commit-planning/grouping/index.js");
     const fileByPath = new Map([
       ["a.ts", makeFileDiff("a.ts", 1, 0)],
       ["b.ts", makeFileDiff("b.ts", 1, 0)],
@@ -814,7 +814,7 @@ describe("deterministic pre-merge", () => {
   });
 
   test("premergeBySubject does not merge different types", async () => {
-    const { premergeBySubject } = await import("../src/ai-grouping.js");
+    const { premergeBySubject } = await import("../src/commit-planning/grouping/index.js");
     const fileByPath = new Map([
       ["a.ts", makeFileDiff("a.ts", 1, 0)],
       ["b.ts", makeFileDiff("b.ts", 1, 0)],
@@ -854,7 +854,7 @@ describe("planCommits - cross-file hunk validation", () => {
     const fileB = makeMultiHunkFileDiff("src/parser.ts", [
       {
         header: "@@ -1,1 +1,2 @@",
-        lines: ["+import { ParseError } from './errors'"],
+        lines: ["+import { ParseError } from './errors.js'"],
       },
       {
         header: "@@ -30,3 +31,6 @@",
@@ -882,7 +882,7 @@ describe("planCommits - cross-file hunk validation", () => {
     // planCommits would produce if the AI returned this JSON.
     // Instead, test by verifying the response shape is accepted by validation logic
     // indirectly — by checking planCommits either succeeds or fails with network error.
-    const { planCommits } = await import("../src/ai.js");
+    const { planCommits } = await import("../src/commit-planning/orchestration.js");
     try {
       await planCommits([fileA, fileB], formatFn);
     } catch (e: unknown) {
@@ -916,7 +916,7 @@ describe("planCommits - cross-file hunk validation", () => {
   });
 
   test("planCommits single file 1 hunk skips grouping", async () => {
-    const { planCommits } = await import("../src/ai.js");
+    const { planCommits } = await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/tiny.ts", [
       { header: "@@ -1,1 +1,2 @@", lines: ["+const x = 1;"] },
     ]);

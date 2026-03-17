@@ -1,5 +1,5 @@
 /**
- * Tests for stageGroupFiles (src/staging.ts) and the full commit pipeline.
+ * Tests for stageGroupFiles (src/cli/commit-group-staging.ts) and the full commit pipeline.
  *
  * These are the tests that would have caught the two bugs that shipped:
  *   Bug 1: stageGroupFiles ignored hunks and staged whole files
@@ -15,8 +15,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resetConfigCache } from "../src/config.js";
-import { parseDiff } from "../src/diff.js";
+import { resetConfigCache } from "../src/application/config.js";
+import { stageGroupFiles } from "../src/cli/commit-group-staging.js";
+import { mergeCommitsByFile } from "../src/commit-planning/commit-plan-merge.js";
+import { parseDiff } from "../src/git/diff.js";
 import {
   commitWithMessage,
   getStagedDiff,
@@ -24,14 +26,12 @@ import {
   hasStagedChanges,
   resetStaging,
   restoreStagedPatch,
-} from "../src/git.js";
-import { mergeCommitsByFile } from "../src/merge.js";
-import { stageGroupFiles } from "../src/staging.js";
+} from "../src/git/operations.js";
 
 const { afterEach, beforeEach, describe, expect, test } =
   await import("bun:test");
 
-type PlannedCommit = import("../src/ai.js").PlannedCommit;
+type PlannedCommit = import("../src/commit-planning/orchestration.js").PlannedCommit;
 
 function commitMessage(subject: string, ...bullets: string[]): string {
   const body = bullets.length > 0 ? bullets : ["- Summarize the change."];

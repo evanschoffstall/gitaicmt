@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 
-import { loadConfig } from "./config.js";
-import { ConfigError, OpenAIError, OpenAITimeoutError } from "./errors.js";
+import { loadConfig } from "../application/config.js";
+import { ConfigError, OpenAIError, OpenAITimeoutError } from "../application/errors.js";
 
 let cachedClient: null | OpenAI = null;
 let lastApiKey: null | string = null;

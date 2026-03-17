@@ -1,22 +1,21 @@
+import { loadConfig } from "../application/config.js";
 import {
-  batchFilesForGrouping,
-  batchingMakesProgress,
-  shouldBatchFiles,
-} from "./ai-batching.js";
-import {
-  getCachedMessage,
-  getCachedPlan,
-  serializePlanCacheInput,
-  setCachedMessage,
-  setCachedPlan,
-} from "./ai-cache.js";
-import { complete, emitAiOutputEvent } from "./ai-client.js";
+  DEFAULT_EMPTY_COMMIT_MESSAGE,
+  GROUPING_TIMEOUT_MS,
+} from "../application/constants.js";
+import { ValidationError } from "../application/errors.js";
 import {
   formatLabeledDiff,
   formatScalar,
   validateCommitMessage,
-} from "./ai-format.js";
-import { finalizePlannedGroups, premergeBySubject } from "./ai-grouping.js";
+} from "../commit-messages/formatting.js";
+import {
+  batchFilesForGrouping,
+  batchingMakesProgress,
+  shouldBatchFiles,
+} from "./file-batching.js";
+import { finalizePlannedGroups, premergeBySubject } from "./grouping/index.js";
+import { complete, emitAiOutputEvent } from "./openai-client.js";
 import {
   buildGroupingSystemPrompt,
   buildGroupingUserPrompt,
@@ -24,20 +23,21 @@ import {
   buildSystemPrompt,
   buildUserPrompt,
   type GroupingPromptContext,
-} from "./ai-prompt-builders.js";
-import { getGroupingResponseTokenBudget } from "./ai-tokens.js";
-import { type PlannedCommit, type PlannedCommitFile } from "./ai-types.js";
-import { validateAndNormalizeGrouping } from "./ai-validation.js";
-import { loadConfig } from "./config.js";
+} from "./prompt-builders/index.js";
+import { validateAndNormalizeGrouping } from "./response-validation.js";
 import {
-  DEFAULT_EMPTY_COMMIT_MESSAGE,
-  GROUPING_TIMEOUT_MS,
-} from "./constants.js";
-import { ValidationError } from "./errors.js";
+  getCachedMessage,
+  getCachedPlan,
+  serializePlanCacheInput,
+  setCachedMessage,
+  setCachedPlan,
+} from "./result-cache.js";
+import { getGroupingResponseTokenBudget } from "./token-estimation.js";
+import { type PlannedCommit, type PlannedCommitFile } from "./types.js";
 
-type DiffChunk = import("./diff.js").DiffChunk;
-type DiffStats = import("./diff.js").DiffStats;
-type FileDiff = import("./diff.js").FileDiff;
+type DiffChunk = import("../git/diff.js").DiffChunk;
+type DiffStats = import("../git/diff.js").DiffStats;
+type FileDiff = import("../git/diff.js").FileDiff;
 
 export {
   getTokenUsageByStage,
@@ -45,13 +45,13 @@ export {
   resetTokenUsageSummary,
   setAiOutputObserver,
   validateOpenAIConfiguration
-} from "./ai-client.js";
-export type { AiOutputEvent } from "./ai-client.js";
+} from "./openai-client.js";
+export type { AiOutputEvent } from "./openai-client.js";
 export {
   estimateGenerateOperationTokens,
   estimatePlanOperationTokens
-} from "./ai-tokens.js";
-export type { TokenEstimateSummary } from "./ai-tokens.js";
+} from "./token-estimation.js";
+export type { TokenEstimateSummary } from "./token-estimation.js";
 export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
 export type { PlannedCommit, PlannedCommitFile };
 

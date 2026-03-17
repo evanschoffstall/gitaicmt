@@ -1,5 +1,5 @@
-import { type PlannedCommitFile } from "./ai.js";
-import { type FileDiff } from "./diff.js";
+import { type PlannedCommitFile } from "../commit-planning/orchestration.js";
+import { type FileDiff } from "../git/diff.js";
 
 export function formatCommitFile(
   file: PlannedCommitFile,

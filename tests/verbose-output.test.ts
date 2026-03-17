@@ -1,4 +1,4 @@
-import { formatVerboseAiOutputLines } from "../src/verbose-output.js";
+import { formatVerboseAiOutputLines } from "../src/cli/verbose-output.js";
 
 const { describe, expect, test } = await import("bun:test");
 
@@ -80,7 +80,7 @@ describe("verbose-output", () => {
 
   test("formats trace mode with raw intermediate payload text", () => {
     const raw =
-      '[{"files":[{"path":"src/ai.ts","hunks":[0,1,2,3,4]}],"message":"feat: raw payload"}]';
+      '[{"files":[{"path":"src/commit-planning/orchestration.ts","hunks":[0,1,2,3,4]}],"message":"feat: raw payload"}]';
     const lines = formatVerboseAiOutputLines(
       {
         content: raw,
@@ -103,21 +103,22 @@ describe("verbose-output", () => {
     expect(lines.some((line) => line.includes("in"))).toBe(true);
     expect(lines.some((line) => line.includes("444 · out: 111 · tok: 555"))).toBe(true);
     expect(
-      lines.some((line) => line.includes('"hunks": [0, 1, 2, 3, 4]')),
+      lines.some((line) => line.includes('"hunks": [0, 1,')),
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('{ "path": "src/ai.ts", "hunks": [0, 1, 2, 3, 4] }'),
+        line.includes('{ "path": "src/commit-planning/orchestration.ts", "hunks": [0, 1,'),
       ),
     ).toBe(true);
+    expect(lines.some((line) => line.includes('4] }],'))).toBe(true);
   });
 
   test("wraps long trace values with continuation aligned to the value column", () => {
     const raw = JSON.stringify([
       {
         files: [
-          { hunks: [0, 1, 2, 4, 5, 8, 9, 10, 13, 14], path: "src/cli.ts" },
-          { path: "src/verbose-output.ts" },
+          { hunks: [0, 1, 2, 4, 5, 8, 9, 10, 13, 14], path: "src/cli/command-line-interface.ts" },
+          { path: "src/cli/verbose-output.ts" },
         ],
         message:
           "feat(cli): add structured verbose and trace AI output modes\n\n- Introduce output modes (off/summary/trace) and wire an AI output observer so model stage payloads can be rendered as readable terminal blocks.",
@@ -146,19 +147,19 @@ describe("verbose-output", () => {
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('             { "path": "src/cli.ts", "hunks": [0, 1, 2, 4, 5, 8, 9, 10, 13,'),
+        line.includes('             { "path": "src/cli/command-line-interface.ts", "hunks": [0, 1,'),
       ),
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('             14] },'),
+        line.includes('             2, 4, 5, 8, 9, 10, 13, 14] },'),
       ),
     ).toBe(true);
   });
 
   test("wraps narrow trace file entries while keeping continuation aligned", () => {
     const raw =
-      '[{"files":[{"path":"src/cli.ts","hunks":[0,1,2,4,5,6,7,8,9,12,13]}],"message":"feat: raw payload"}]';
+      '[{"files":[{"path":"src/cli/command-line-interface.ts","hunks":[0,1,2,4,5,6,7,8,9,12,13]}],"message":"feat: raw payload"}]';
     const lines = formatVerboseAiOutputLines(
       {
         content: raw,
@@ -169,12 +170,12 @@ describe("verbose-output", () => {
 
     expect(
       lines.some((line) =>
-        line.includes('             { "path": "src/cli.ts", "hunks": [0, 1, 2, 4,'),
+        line.includes('             { "path": "src/cli/command-line-interface.ts",'),
       ),
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('             5, 6, 7, 8, 9, 12, 13] }'),
+        line.includes('             "hunks": [0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13] }'),
       ),
     ).toBe(true);
   });

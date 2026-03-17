@@ -9,17 +9,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { fileRefsOverlap, mergeCommitsByFile } from "../src/merge.js";
+import { fileRefsOverlap, mergeCommitsByFile } from "../src/commit-planning/commit-plan-merge.js";
 
 const { describe, expect, test } = await import("bun:test");
 
-type PlannedCommit = import("../src/ai.js").PlannedCommit;
+type PlannedCommit = import("../src/commit-planning/orchestration.js").PlannedCommit;
 
 // ═══════════════════════════════════════════════════════════════
 // CLI integration tests — spawns the actual CLI binary
 // ═══════════════════════════════════════════════════════════════
 
-const CLI = join(import.meta.dir, "..", "dist", "cli.js");
+const CLI = join(import.meta.dir, "..", "dist", "command-line-interface.js");
 
 function run(
   args: string,
@@ -519,7 +519,7 @@ describe("CLI", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// Unit tests for merge helpers (src/merge.ts)
+// Unit tests for merge helpers (src/commit-planning/commit-plan-merge.ts)
 // ═══════════════════════════════════════════════════════════════
 
 describe("fileRefsOverlap", () => {

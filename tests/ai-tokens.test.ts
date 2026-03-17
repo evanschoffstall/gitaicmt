@@ -1,12 +1,12 @@
-import type { DiffChunk, FileDiff } from "../src/diff.js";
+import type { DiffChunk, FileDiff } from "../src/git/diff.js";
 
 const { describe, expect, test } = await import("bun:test");
 const {
   estimateGenerateOperationTokens,
   estimatePlanOperationTokens,
   estimateTextTokens,
-} = await import("../src/ai-tokens.js");
-const { DEFAULTS } = await import("../src/config.js");
+} = await import("../src/commit-planning/token-estimation.js");
+const { DEFAULTS } = await import("../src/application/config.js");
 
 function makeFileDiff(path: string, hunkCount = 1): FileDiff {
   return {

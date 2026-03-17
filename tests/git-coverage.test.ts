@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { GitCommandError, InvalidPathError } from "../src/errors.js";
+import { GitCommandError, InvalidPathError } from "../src/application/errors.js";
 import {
   commitWithMessage,
   getStagedDiff,
@@ -12,7 +12,7 @@ import {
   stageAll,
   stageFiles,
   stagePatch,
-} from "../src/git.js";
+} from "../src/git/operations.js";
 
 const { describe, expect, test } = await import("bun:test");
 

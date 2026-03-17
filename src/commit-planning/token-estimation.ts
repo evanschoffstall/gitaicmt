@@ -1,8 +1,16 @@
+import { type Config } from "../application/config.js";
+import {
+    CLUSTERING_THRESHOLD,
+    GROUPING_BASE_TOKENS,
+    MIN_COMMIT_MESSAGE_TOKENS,
+    MIN_GROUPING_TOKENS,
+    TOKENS_PER_FILE,
+} from "../application/constants.js";
 import {
     batchFilesForGrouping,
     batchingMakesProgress,
     shouldBatchFiles,
-} from "./ai-batching.js";
+} from "./file-batching.js";
 import {
     buildClusterSystemPrompt,
     buildClusterUserPrompt,
@@ -14,20 +22,12 @@ import {
     buildSystemPrompt,
     buildUserPrompt,
     type GroupingPromptContext,
-} from "./ai-prompt-builders.js";
-import { type Config } from "./config.js";
-import {
-    CLUSTERING_THRESHOLD,
-    GROUPING_BASE_TOKENS,
-    MIN_COMMIT_MESSAGE_TOKENS,
-    MIN_GROUPING_TOKENS,
-    TOKENS_PER_FILE,
-} from "./constants.js";
+} from "./prompt-builders/index.js";
 
-type DiffChunk = import("./diff.js").DiffChunk;
-type DiffStats = import("./diff.js").DiffStats;
-type FileDiff = import("./diff.js").FileDiff;
-type PlannedCommit = import("./ai-types.js").PlannedCommit;
+type DiffChunk = import("../git/diff.js").DiffChunk;
+type DiffStats = import("../git/diff.js").DiffStats;
+type FileDiff = import("../git/diff.js").FileDiff;
+type PlannedCommit = import("./types.js").PlannedCommit;
 
 const REQUEST_OVERHEAD_TOKENS = 24;
 const CHARS_PER_TOKEN = 4;

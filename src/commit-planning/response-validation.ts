@@ -1,9 +1,9 @@
-import { formatScalar, validateCommitMessage } from "./ai-format.js";
-import { type PlannedCommit, type PlannedCommitFile } from "./ai-types.js";
-import { MAX_COMMIT_GROUPS, MAX_COMMIT_MESSAGE_LENGTH } from "./constants.js";
-import { ValidationError } from "./errors.js";
+import { MAX_COMMIT_GROUPS, MAX_COMMIT_MESSAGE_LENGTH } from "../application/constants.js";
+import { ValidationError } from "../application/errors.js";
+import { formatScalar, validateCommitMessage } from "../commit-messages/formatting.js";
+import { type PlannedCommit, type PlannedCommitFile } from "./types.js";
 
-type FileDiff = import("./diff.js").FileDiff;
+type FileDiff = import("../git/diff.js").FileDiff;
 
 export function validateAndNormalizeGrouping(
   raw: unknown,

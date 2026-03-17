@@ -1,4 +1,4 @@
-import { withThinkingIndicator } from "../src/terminal-ui.js";
+import { withThinkingIndicator } from "../src/cli/terminal-output-ui.js";
 
 interface SignalSource {
   off(event: StopSignal, listener: (signal: StopSignal) => void): void;

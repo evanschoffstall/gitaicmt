@@ -1,4 +1,4 @@
-import type { PlannedCommit, PlannedCommitFile } from "./ai.js";
+import type { PlannedCommit, PlannedCommitFile } from "./orchestration.js";
 
 /**
  * Detect whether two PlannedCommitFile references for the SAME path overlap.

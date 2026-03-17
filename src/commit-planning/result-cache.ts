@@ -1,11 +1,11 @@
 import { createHash } from "crypto";
 
-import { loadConfig } from "./config.js";
-import { CACHE_MAX_SIZE } from "./constants.js";
+import { loadConfig } from "../application/config.js";
+import { CACHE_MAX_SIZE } from "../application/constants.js";
 
 type GroupingPromptContext =
-  import("./ai-prompt-builders.js").GroupingPromptContext;
-type PlannedCommit = import("./ai-types.js").PlannedCommit;
+  import("./prompt-builders/index.js").GroupingPromptContext;
+type PlannedCommit = import("./types.js").PlannedCommit;
 
 const cache = new Map<string, { msg: string; ts: number }>();
 const planCache = new Map<string, { plan: PlannedCommit[]; ts: number }>();

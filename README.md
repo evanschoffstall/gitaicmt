@@ -155,10 +155,11 @@ gitaicmt init
 ```
 gitaicmt/
 ├── src/
-│   ├── cli.ts      # CLI entry point & command routing
-│   ├── ai.ts       # OpenAI integration & prompt building
-│   ├── config.ts   # Config loading, merging & defaults
-│   └── diff.ts     # Git diff parsing, chunking & staging
+│   ├── application/               # Config, constants, schemas, and runtime errors
+│   ├── cli/                       # CLI entry point, staging, plan display, and terminal UI
+│   ├── commit-messages/           # Commit message formatting and subject parsing helpers
+│   ├── commit-planning/           # AI orchestration, prompts, grouping, caching, and planning logic
+│   └── git/                       # Git diff parsing and command execution
 ├── tests/
 │   ├── ai.test.ts
 │   ├── cli.test.ts

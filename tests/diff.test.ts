@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resetConfigCache } from "../src/config.js";
+import { resetConfigCache } from "../src/application/config.js";
 import {
   buildPatch,
   chunkDiffs,
@@ -11,7 +11,7 @@ import {
   formatFileDiff,
   getStats,
   parseDiff,
-} from "../src/diff.js";
+} from "../src/git/diff.js";
 import {
   commitWithMessage,
   getStagedDiff,
@@ -21,7 +21,7 @@ import {
   stageAll,
   stageFiles,
   stagePatch,
-} from "../src/git.js";
+} from "../src/git/operations.js";
 
 const { beforeEach, describe, expect, test } = await import("bun:test");
 
@@ -39,8 +39,8 @@ index abc1234..def5678 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -1,5 +1,6 @@
- import { foo } from "./foo";
-+import { bar } from "./bar";
+ import { foo } from "./foo.js";
++import { bar } from "./bar.js";
  
  export function main() {
 -  foo();
@@ -968,7 +968,7 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
     fileAMod[25] = "a26_unrelated"; // hunk 1 — unrelated
     writeFileSync(join(dir, "a.ts"), fileAMod.join("\n") + "\n");
     // Modify file B (whole file, linked to file A hunk 0)
-    writeFileSync(join(dir, "b.ts"), "import { a1_feature } from './a'\n");
+    writeFileSync(join(dir, "b.ts"), "import { a1_feature } from './a.js'\n");
 
     // Parse file A's diff to get hunks
     const rawDiffA = execSync("git diff a.ts", {

@@ -2,8 +2,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { type Config, ConfigSchema } from "./config-schema.js";
 import { ConfigError } from "./errors.js";
-import { type Config, ConfigSchema } from "./schemas.js";
 
 // Re-export Config type for external use
 export type { Config };

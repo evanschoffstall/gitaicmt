@@ -1,13 +1,13 @@
 /**
  * Hunk-level file staging helpers.
  *
- * Extracted from cli.ts so tests can import this module without triggering
- * cli.ts's unconditional `main()` invocation.
+ * Extracted from command-line-interface.ts so tests can import this module
+ * without triggering command-line-interface.ts's unconditional `main()` invocation.
  */
-import { buildPatch, type FileDiff } from "./diff.js";
-import { stageFiles, stagePatch } from "./git.js";
+import { buildPatch, type FileDiff } from "../git/diff.js";
+import { stageFiles, stagePatch } from "../git/operations.js";
 
-type PlannedCommitFile = import("./ai.js").PlannedCommitFile;
+type PlannedCommitFile = import("../commit-planning/orchestration.js").PlannedCommitFile;
 
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";

@@ -2,6 +2,8 @@
 
 import { createInterface } from "node:readline";
 
+import { initConfig, loadConfig } from "../application/config.js";
+import { mergeCommitsByFile } from "../commit-planning/commit-plan-merge.js";
 import {
   type AiOutputEvent,
   estimateGenerateOperationTokens,
@@ -15,15 +17,14 @@ import {
   setAiOutputObserver,
   type TokenEstimateSummary,
   validateOpenAIConfiguration,
-} from "./ai.js";
-import { initConfig, loadConfig } from "./config.js";
+} from "../commit-planning/orchestration.js";
 import {
   chunkDiffs,
   type FileDiff,
   formatFileDiff,
   getStats,
   parseDiff,
-} from "./diff.js";
+} from "../git/diff.js";
 import {
   commitWithMessage,
   getStagedDiff,
@@ -33,17 +34,16 @@ import {
   resetStaging,
   restoreStagedPatch,
   stageAll,
-} from "./git.js";
-import { mergeCommitsByFile } from "./merge.js";
+} from "../git/operations.js";
+import { stageGroupFiles } from "./commit-group-staging.js";
 import {
   formatCommitFile,
   formatPlanBodyLine,
   wrapDisplayFileLines,
   wrapDisplayText,
-} from "./plan-display.js";
-import { stageGroupFiles } from "./staging.js";
-import { resolveTerminalColumns } from "./terminal-geometry.js";
-import { withThinkingIndicator, writeTerminalLines } from "./terminal-ui.js";
+} from "./commit-plan-display.js";
+import { resolveTerminalColumns } from "./terminal-columns.js";
+import { withThinkingIndicator, writeTerminalLines } from "./terminal-output-ui.js";
 import { formatVerboseAiOutputLines } from "./verbose-output.js";
 
 // -------- Helpers --------

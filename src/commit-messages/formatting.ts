@@ -1,6 +1,6 @@
-import { ValidationError } from "./errors.js";
+import { ValidationError } from "../application/errors.js";
 
-type FileDiff = import("./diff.js").FileDiff;
+type FileDiff = import("../git/diff.js").FileDiff;
 
 export function formatLabeledDiff(
   file: FileDiff,

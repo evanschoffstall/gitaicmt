@@ -4,7 +4,7 @@
  * All git command execution has been moved to git.ts
  */
 
-import { loadConfig } from "./config.js";
+import { loadConfig } from "../application/config.js";
 
 // ============================================================================
 // Type Definitions

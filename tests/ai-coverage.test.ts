@@ -2,17 +2,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resetAiCache } from "../src/ai-cache.js";
-import { DEFAULTS, resetConfigCache } from "../src/config.js";
+import { DEFAULTS, resetConfigCache } from "../src/application/config.js";
 import {
     OpenAIError,
     OpenAITimeoutError,
     ValidationError,
-} from "../src/errors.js";
+} from "../src/application/errors.js";
+import { resetAiCache } from "../src/commit-planning/result-cache.js";
 
-type DiffChunk = import("../src/diff.js").DiffChunk;
-type DiffStats = import("../src/diff.js").DiffStats;
-type FileDiff = import("../src/diff.js").FileDiff;
+type DiffChunk = import("../src/git/diff.js").DiffChunk;
+type DiffStats = import("../src/git/diff.js").DiffStats;
+type FileDiff = import("../src/git/diff.js").FileDiff;
 
 const { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } =
   await import("bun:test");
@@ -71,13 +71,13 @@ function formatFileDiff(file: FileDiff): string {
 
 async function importFreshAi(tag: string) {
   return import(
-    new URL(`../src/ai.js?${tag}-${Math.random()}`, import.meta.url).href
+    new URL(`../src/commit-planning/orchestration.js?${tag}-${Math.random()}`, import.meta.url).href
   );
 }
 
 async function importFreshAiClient(tag: string) {
   return import(
-    new URL(`../src/ai-client.js?${tag}-${Math.random()}`, import.meta.url).href
+    new URL(`../src/commit-planning/openai-client.js?${tag}-${Math.random()}`, import.meta.url).href
   );
 }
 
@@ -472,7 +472,7 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("responses-fallback");
 
     const result = await ai.generateForChunk(
-      makeChunk(1, ["src/ai.ts"], "+fallback"),
+      makeChunk(1, ["src/commit-planning/orchestration.ts"], "+fallback"),
     );
 
     expect(result).toBe(commitMessage("fix(ai): use responses fallback"));
@@ -498,7 +498,7 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("timeout");
 
     await expect(
-      ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+timeout")),
+      ai.generateForChunk(makeChunk(1, ["src/commit-planning/orchestration.ts"], "+timeout")),
     ).rejects.toBeInstanceOf(OpenAITimeoutError);
   });
 
@@ -512,7 +512,7 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("empty-chat");
 
     await expect(
-      ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+empty")),
+      ai.generateForChunk(makeChunk(1, ["src/commit-planning/orchestration.ts"], "+empty")),
     ).rejects.toBeInstanceOf(OpenAIError);
   });
 
@@ -528,7 +528,7 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("subject-only");
 
     await expect(
-      ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+body required")),
+      ai.generateForChunk(makeChunk(1, ["src/commit-planning/orchestration.ts"], "+body required")),
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
@@ -537,7 +537,7 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("missing-key");
 
     await expect(
-      ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+missing-key")),
+      ai.generateForChunk(makeChunk(1, ["src/commit-planning/orchestration.ts"], "+missing-key")),
     ).rejects.toThrow("No OpenAI API key");
   });
 
@@ -548,7 +548,7 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("bad-key");
 
     await expect(
-      ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+bad-key")),
+      ai.generateForChunk(makeChunk(1, ["src/commit-planning/orchestration.ts"], "+bad-key")),
     ).rejects.toThrow("Invalid OpenAI API key format");
   });
 
@@ -559,7 +559,7 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("bad-model");
 
     await expect(
-      ai.generateForChunk(makeChunk(1, ["src/ai.ts"], "+bad-model")),
+      ai.generateForChunk(makeChunk(1, ["src/commit-planning/orchestration.ts"], "+bad-model")),
     ).rejects.toThrow("Invalid characters in OpenAI model name");
   });
 
@@ -655,7 +655,7 @@ describe("ai coverage", () => {
       openai: { apiKey: validApiKey("merge-tone"), model: "gpt-4o-mini" },
     });
     await importFreshAi("merge-tone");
-    const { buildMergePrompt } = await import("../src/ai-prompt-builders.js");
+    const { buildMergePrompt } = await import("../src/commit-planning/prompt-builders/index.js");
 
     const prompt = buildMergePrompt(
       [
@@ -748,7 +748,7 @@ describe("ai coverage", () => {
     const calls = installOpenAiMock({ chatQueue: [] });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?postprocess-gate-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?postprocess-gate-${Math.random()}`,
         import.meta.url,
       ).href
     );
@@ -787,7 +787,7 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-cache.ts" },
+                      { path: "src/commit-planning/result-cache.ts" },
                       { path: "tests/ai-coverage.test.ts" },
                     ],
                     message:
@@ -802,7 +802,7 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?support-subject-merge-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?support-subject-merge-${Math.random()}`,
         import.meta.url,
       ).href
     );
@@ -814,13 +814,13 @@ describe("ai coverage", () => {
           "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
       },
       {
-        files: [{ path: "src/ai-cache.ts" }],
+        files: [{ path: "src/commit-planning/result-cache.ts" }],
         message:
           "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
       },
     ];
     const allFiles = [
-      makeFile("src/ai-cache.ts"),
+      makeFile("src/commit-planning/result-cache.ts"),
       makeFile("tests/ai-coverage.test.ts"),
     ];
 
@@ -852,9 +852,9 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { hunks: [0, 1], path: "src/ai.ts" },
-                      { hunks: [3], path: "src/ai.ts" },
-                      { path: "src/cli.ts" },
+                      { hunks: [0, 1], path: "src/commit-planning/orchestration.ts" },
+                      { hunks: [3], path: "src/commit-planning/orchestration.ts" },
+                      { path: "src/cli/command-line-interface.ts" },
                     ],
                     message:
                       "feat(ai): consolidate duplicate file entries\n\n- Keep one file entry per path after consolidation.",
@@ -868,36 +868,36 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?consolidated-duplicate-files-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?consolidated-duplicate-files-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
     const groups = [
       {
-        files: [{ hunks: [0, 1], path: "src/ai.ts" }],
+        files: [{ hunks: [0, 1], path: "src/commit-planning/orchestration.ts" }],
         message: commitMessage(
           "feat(ai): normalize stage metrics",
           "- Keep stage metric handling consistent across planner outputs.",
         ),
       },
       {
-        files: [{ hunks: [3], path: "src/ai.ts" }, { path: "src/cli.ts" }],
+        files: [{ hunks: [3], path: "src/commit-planning/orchestration.ts" }, { path: "src/cli/command-line-interface.ts" }],
         message: commitMessage(
           "feat(ai): normalize stage metrics output",
           "- Align CLI rendering with the normalized stage metric shape.",
         ),
       },
     ];
-    const allFiles = [makeFile("src/ai.ts", 5), makeFile("src/cli.ts")];
+    const allFiles = [makeFile("src/commit-planning/orchestration.ts", 5), makeFile("src/cli/command-line-interface.ts")];
 
     const result = await finalizePlannedGroups(allFiles, groups);
 
     expect(calls.chat).toHaveLength(0);
     expect(result).toHaveLength(1);
     expect(result[0]?.files).toEqual([
-      { hunks: [0, 1, 3], path: "src/ai.ts" },
-      { path: "src/cli.ts" },
+      { hunks: [0, 1, 3], path: "src/commit-planning/orchestration.ts" },
+      { path: "src/cli/command-line-interface.ts" },
     ]);
   });
 
@@ -917,8 +917,8 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-grouping.ts" },
-                      { path: "src/ai-prompt-builders.ts" },
+                      { path: "src/commit-planning/grouping/index.ts" },
+                      { path: "src/commit-planning/prompt-builders/index.ts" },
                       { path: "tests/ai.test.ts" },
                     ],
                     message:
@@ -933,21 +933,21 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?split-disconnected-consolidation-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?split-disconnected-consolidation-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
     const groups = [
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "refactor(ai-grouping): tighten merge-signal gating",
+          "refactor(planned-commit-grouping): tighten merge-signal gating",
           "- Limit consolidation to commits with strong merge evidence.",
         ),
       },
       {
-        files: [{ path: "src/ai-prompt-builders.ts" }],
+        files: [{ path: "src/commit-planning/prompt-builders/index.ts" }],
         message: commitMessage(
           "refactor(prompts): clarify consolidation guidance",
           "- Keep the prompt focused on one clear why per commit.",
@@ -962,8 +962,8 @@ describe("ai coverage", () => {
       },
     ];
     const allFiles = [
-      makeFile("src/ai-grouping.ts"),
-      makeFile("src/ai-prompt-builders.ts"),
+      makeFile("src/commit-planning/grouping/index.ts"),
+      makeFile("src/commit-planning/prompt-builders/index.ts"),
       makeFile("tests/ai.test.ts"),
     ];
 
@@ -973,7 +973,7 @@ describe("ai coverage", () => {
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual(groups[0]);
     expect(result[1]?.files).toEqual([
-      { path: "src/ai-prompt-builders.ts" },
+      { path: "src/commit-planning/prompt-builders/index.ts" },
       { path: "tests/ai.test.ts" },
     ]);
     expect(result[1]?.message).toContain(
@@ -1000,10 +1000,10 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-client.ts" },
-                      { path: "src/ai.ts" },
-                      { path: "src/cli.ts" },
-                      { path: "src/verbose-output.ts" },
+                      { path: "src/commit-planning/openai-client.ts" },
+                      { path: "src/commit-planning/orchestration.ts" },
+                      { path: "src/cli/command-line-interface.ts" },
+                      { path: "src/cli/verbose-output.ts" },
                       { path: "tests/verbose-output.test.ts" },
                     ],
                     message:
@@ -1018,14 +1018,14 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?split-runtime-from-cli-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?split-runtime-from-cli-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
     const groups = [
       {
-        files: [{ path: "src/ai-client.ts" }, { path: "src/ai.ts" }],
+        files: [{ path: "src/commit-planning/openai-client.ts" }, { path: "src/commit-planning/orchestration.ts" }],
         message: commitMessage(
           "feat(ai-client): track stage-level token usage",
           "- Record stage attribution and AI output events.",
@@ -1033,8 +1033,8 @@ describe("ai coverage", () => {
       },
       {
         files: [
-          { path: "src/cli.ts" },
-          { path: "src/verbose-output.ts" },
+          { path: "src/cli/command-line-interface.ts" },
+          { path: "src/cli/verbose-output.ts" },
           { path: "tests/verbose-output.test.ts" },
         ],
         message: commitMessage(
@@ -1044,18 +1044,18 @@ describe("ai coverage", () => {
       },
     ];
 
-    const cliFile = makeFile("src/cli.ts");
+    const cliFile = makeFile("src/cli/command-line-interface.ts");
     cliFile.hunks[0]!.lines = [
-      " import { setAiOutputObserver } from './ai.js'",
+      " import { setAiOutputObserver } from './ai-commit-orchestration.js'",
       "+setAiOutputObserver(logVerboseAiOutput)",
     ];
 
     const result = await finalizePlannedGroups(
       [
-        makeFile("src/ai-client.ts"),
-        makeFile("src/ai.ts"),
+        makeFile("src/commit-planning/openai-client.ts"),
+        makeFile("src/commit-planning/orchestration.ts"),
         cliFile,
-        makeFile("src/verbose-output.ts"),
+        makeFile("src/cli/verbose-output.ts"),
         makeFile("tests/verbose-output.test.ts"),
       ],
       groups,
@@ -1081,9 +1081,9 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-cache.ts" },
-                      { path: "src/ai-client.ts" },
-                      { path: "src/ai.ts" },
+                      { path: "src/commit-planning/result-cache.ts" },
+                      { path: "src/commit-planning/openai-client.ts" },
+                      { path: "src/commit-planning/orchestration.ts" },
                       { path: "tests/ai-coverage.test.ts" },
                     ],
                     message:
@@ -1098,7 +1098,7 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?split-cache-from-telemetry-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?split-cache-from-telemetry-${Math.random()}`,
         import.meta.url,
       ).href
     );
@@ -1106,7 +1106,7 @@ describe("ai coverage", () => {
     const groups = [
       {
         files: [
-          { path: "src/ai-cache.ts" },
+          { path: "src/commit-planning/result-cache.ts" },
           { path: "tests/ai-coverage.test.ts" },
         ],
         message: commitMessage(
@@ -1115,7 +1115,7 @@ describe("ai coverage", () => {
         ),
       },
       {
-        files: [{ path: "src/ai-client.ts" }, { path: "src/ai.ts" }],
+        files: [{ path: "src/commit-planning/openai-client.ts" }, { path: "src/commit-planning/orchestration.ts" }],
         message: commitMessage(
           "feat(ai-client): track stage-level token usage",
           "- Surface per-stage telemetry and AI output events.",
@@ -1123,16 +1123,16 @@ describe("ai coverage", () => {
       },
     ];
 
-    const aiFile = makeFile("src/ai.ts");
+    const aiFile = makeFile("src/commit-planning/orchestration.ts");
     aiFile.hunks[0]!.lines = [
-      " import { getPlanCache, setPlanCache } from './ai-cache.js'",
+      " import { getPlanCache, setPlanCache } from './ai-result-cache.js'",
       "+setPlanCache(cacheKey, result)",
     ];
 
     const result = await finalizePlannedGroups(
       [
-        makeFile("src/ai-cache.ts"),
-        makeFile("src/ai-client.ts"),
+        makeFile("src/commit-planning/result-cache.ts"),
+        makeFile("src/commit-planning/openai-client.ts"),
         aiFile,
         makeFile("tests/ai-coverage.test.ts"),
       ],
@@ -1159,9 +1159,9 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-cache.ts" },
-                      { hunks: [0], path: "src/ai.ts" },
-                      { path: "src/ai-grouping.ts" },
+                      { path: "src/commit-planning/result-cache.ts" },
+                      { hunks: [0], path: "src/commit-planning/orchestration.ts" },
+                      { path: "src/commit-planning/grouping/index.ts" },
                       { path: "tests/ai-coverage.test.ts" },
                     ],
                     message:
@@ -1176,29 +1176,29 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?split-broad-coverage-from-mixed-cache-runtime-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?split-broad-coverage-from-mixed-cache-runtime-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
-    const aiFile = makeFile("src/ai.ts");
+    const aiFile = makeFile("src/commit-planning/orchestration.ts");
     aiFile.hunks[0]!.lines = [
-      " import { getCachedPlan } from './ai-cache.js'",
+      " import { getCachedPlan } from './ai-result-cache.js'",
       "+const cachedPlan = getCachedPlan(cacheKey)",
     ];
 
     const groups = [
       {
-        files: [{ path: "src/ai-cache.ts" }, { hunks: [0], path: "src/ai.ts" }],
+        files: [{ path: "src/commit-planning/result-cache.ts" }, { hunks: [0], path: "src/commit-planning/orchestration.ts" }],
         message: commitMessage(
           "feat(ai-cache): cache planned outputs",
           "- Reuse serialized planning results before recomputing batch output.",
         ),
       },
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "feat(ai-grouping): preserve dependency order",
+          "feat(planned-commit-grouping): preserve dependency order",
           "- Keep helper commits ahead of their first consumers.",
         ),
       },
@@ -1213,9 +1213,9 @@ describe("ai coverage", () => {
 
     const result = await finalizePlannedGroups(
       [
-        makeFile("src/ai-cache.ts"),
+        makeFile("src/commit-planning/result-cache.ts"),
         aiFile,
-        makeFile("src/ai-grouping.ts"),
+        makeFile("src/commit-planning/grouping/index.ts"),
         makeFile("tests/ai-coverage.test.ts"),
       ],
       groups,
@@ -1227,8 +1227,8 @@ describe("ai coverage", () => {
         const paths = new Set(group.files.map((file: { path: string }) => file.path));
         return (
           paths.has("tests/ai-coverage.test.ts") &&
-          paths.has("src/ai-cache.ts") &&
-          paths.has("src/ai.ts")
+          paths.has("src/commit-planning/result-cache.ts") &&
+          paths.has("src/commit-planning/orchestration.ts")
         );
       }),
     ).toBe(false);
@@ -1250,10 +1250,10 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-cache.ts" },
-                      { path: "src/ai-tokens.ts" },
-                      { path: "src/ai-validation.ts" },
-                      { path: "src/ai.ts" },
+                      { path: "src/commit-planning/result-cache.ts" },
+                      { path: "src/commit-planning/token-estimation.ts" },
+                      { path: "src/commit-planning/response-validation.ts" },
+                      { path: "src/commit-planning/orchestration.ts" },
                     ],
                     message:
                       "feat(planning): estimate and cache multi-pass workflows\n\n- Combine caching, estimation, and validation hardening for planning.",
@@ -1267,28 +1267,28 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?split-cache-estimate-validate-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?split-cache-estimate-validate-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
     const groups = [
       {
-        files: [{ path: "src/ai-cache.ts" }],
+        files: [{ path: "src/commit-planning/result-cache.ts" }],
         message: commitMessage(
           "feat(ai-cache): cache commit plans",
           "- Reuse equivalent planning runs from persisted plan outputs.",
         ),
       },
       {
-        files: [{ path: "src/ai-tokens.ts" }, { path: "src/ai.ts" }],
+        files: [{ path: "src/commit-planning/token-estimation.ts" }, { path: "src/commit-planning/orchestration.ts" }],
         message: commitMessage(
           "feat(planning): estimate multi-pass planning costs",
           "- Predict grouping and consolidation follow-up request sizes.",
         ),
       },
       {
-        files: [{ path: "src/ai-validation.ts" }],
+        files: [{ path: "src/commit-planning/response-validation.ts" }],
         message: commitMessage(
           "fix(ai-validation): dedupe repeated file entries",
           "- Keep normalized plan coverage deterministic and structurally valid.",
@@ -1298,10 +1298,10 @@ describe("ai coverage", () => {
 
     const result = await finalizePlannedGroups(
       [
-        makeFile("src/ai-cache.ts"),
-        makeFile("src/ai-tokens.ts"),
-        makeFile("src/ai-validation.ts"),
-        makeFile("src/ai.ts"),
+        makeFile("src/commit-planning/result-cache.ts"),
+        makeFile("src/commit-planning/token-estimation.ts"),
+        makeFile("src/commit-planning/response-validation.ts"),
+        makeFile("src/commit-planning/orchestration.ts"),
       ],
       groups,
     );
@@ -1326,13 +1326,13 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-grouping.ts" },
-                      { path: "src/ai-prompt-builders.ts" },
-                      { path: "src/commit-subject.ts" },
-                      { path: "src/cli.ts" },
+                      { path: "src/commit-planning/grouping/index.ts" },
+                      { path: "src/commit-planning/prompt-builders/index.ts" },
+                      { path: "src/commit-messages/subject-parser.ts" },
+                      { path: "src/cli/command-line-interface.ts" },
                     ],
                     message:
-                      "feat(ai-grouping): harden grouping, prompt, helper, and cli review flow\n\n- Combine planner heuristics, prompt guidance, subject parsing, and confirmation fixes.",
+                      "feat(planned-commit-grouping): harden grouping, prompt, helper, and cli review flow\n\n- Combine planner heuristics, prompt guidance, subject parsing, and confirmation fixes.",
                   },
                 ]),
               },
@@ -1343,35 +1343,35 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?split-grouping-prompts-helper-cli-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?split-grouping-prompts-helper-cli-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
     const groups = [
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "feat(ai-grouping): make clustering dependency-aware",
+          "feat(planned-commit-grouping): make clustering dependency-aware",
           "- Split weak merge groups and order resulting commits safely.",
         ),
       },
       {
-        files: [{ path: "src/ai-prompt-builders.ts" }],
+        files: [{ path: "src/commit-planning/prompt-builders/index.ts" }],
         message: commitMessage(
           "refactor(prompts): harden intent-first merge guidance",
           "- Keep final consolidation centered on one clear why.",
         ),
       },
       {
-        files: [{ path: "src/commit-subject.ts" }],
+        files: [{ path: "src/commit-messages/subject-parser.ts" }],
         message: commitMessage(
-          "feat(commit-subject): add subject parsing helpers",
+          "feat(subject-parser): add subject parsing helpers",
           "- Normalize subject words for downstream planner analysis.",
         ),
       },
       {
-        files: [{ path: "src/cli.ts" }],
+        files: [{ path: "src/cli/command-line-interface.ts" }],
         message: commitMessage(
           "fix(cli): stop timing out interactive confirmations",
           "- Keep manual review prompts stable during slower operator flows.",
@@ -1379,18 +1379,18 @@ describe("ai coverage", () => {
       },
     ];
 
-    const groupingFile = makeFile("src/ai-grouping.ts");
+    const groupingFile = makeFile("src/commit-planning/grouping/index.ts");
     groupingFile.hunks[0]!.lines = [
-      " import { parseConventionalSubject } from './commit-subject.js'",
+      " import { parseConventionalSubject } from '../../commit-messages/subject-parser.js'",
       "+const subject = parseConventionalSubject(message)",
     ];
 
     const result = await finalizePlannedGroups(
       [
         groupingFile,
-        makeFile("src/ai-prompt-builders.ts"),
-        makeFile("src/commit-subject.ts"),
-        makeFile("src/cli.ts"),
+        makeFile("src/commit-planning/prompt-builders/index.ts"),
+        makeFile("src/commit-messages/subject-parser.ts"),
+        makeFile("src/cli/command-line-interface.ts"),
       ],
       groups,
     );
@@ -1409,30 +1409,30 @@ describe("ai coverage", () => {
     const calls = installOpenAiMock({ chatQueue: [] });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?dependency-ordering-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?dependency-ordering-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
-    const helperFile = makeFile("src/commit-subject.ts");
-    const dependentFile = makeFile("src/ai-grouping.ts");
+    const helperFile = makeFile("src/commit-messages/subject-parser.ts");
+    const dependentFile = makeFile("src/commit-planning/grouping/index.ts");
     dependentFile.hunks[0]!.lines = [
-      " import { parseConventionalSubject } from './commit-subject.js'",
+      " import { parseConventionalSubject } from '../../commit-messages/subject-parser.js'",
       "+const subject = parseConventionalSubject(message)",
     ];
 
     const groups = [
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "refactor(ai-grouping): reuse parsed subject metadata",
+          "refactor(planned-commit-grouping): reuse parsed subject metadata",
           "- Route merge heuristics through the shared subject parser.",
         ),
       },
       {
-        files: [{ path: "src/commit-subject.ts" }],
+        files: [{ path: "src/commit-messages/subject-parser.ts" }],
         message: commitMessage(
-          "feat(commit-subject): add reusable subject parsing",
+          "feat(subject-parser): add reusable subject parsing",
           "- Expose conventional subject parsing for planner heuristics.",
         ),
       },
@@ -1457,14 +1457,15 @@ describe("ai coverage", () => {
     const calls = installOpenAiMock({ chatQueue: [] });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?dependency-ordering-current-file-import-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?dependency-ordering-current-file-import-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
-    mkdirSync(join(sandboxDir, "src"), { recursive: true });
+    mkdirSync(join(sandboxDir, "src/commit-planning/grouping"), { recursive: true });
+    mkdirSync(join(sandboxDir, "src/commit-messages"), { recursive: true });
     writeFileSync(
-      join(sandboxDir, "src/commit-subject.ts"),
+      join(sandboxDir, "src/commit-messages/subject-parser.ts"),
       [
         "export function parseConventionalSubject(subject: string) {",
         "  return { description: subject, scope: '', type: '' };",
@@ -1473,9 +1474,9 @@ describe("ai coverage", () => {
       ].join("\n"),
     );
     writeFileSync(
-      join(sandboxDir, "src/ai-grouping.ts"),
+      join(sandboxDir, "src/commit-planning/grouping/index.ts"),
       [
-        "import { parseConventionalSubject } from './commit-subject.js';",
+        "import { parseConventionalSubject } from '../../commit-messages/subject-parser.js';",
         "",
         "export function describeSubject(subject: string) {",
         "  return parseConventionalSubject(subject).description;",
@@ -1484,8 +1485,8 @@ describe("ai coverage", () => {
       ].join("\n"),
     );
 
-    const helperFile = makeFile("src/commit-subject.ts");
-    const dependentFile = makeFile("src/ai-grouping.ts");
+    const helperFile = makeFile("src/commit-messages/subject-parser.ts");
+    const dependentFile = makeFile("src/commit-planning/grouping/index.ts");
     dependentFile.hunks[0]!.lines = [
       "+const parsedSubject = parseConventionalSubject(subject)",
       "+return parsedSubject.description || 'empty'",
@@ -1493,16 +1494,16 @@ describe("ai coverage", () => {
 
     const groups = [
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "refactor(ai-grouping): normalize subject handling",
+          "refactor(planned-commit-grouping): normalize subject handling",
           "- Keep planner subject handling consistent across regrouping passes.",
         ),
       },
       {
-        files: [{ path: "src/commit-subject.ts" }],
+        files: [{ path: "src/commit-messages/subject-parser.ts" }],
         message: commitMessage(
-          "feat(commit-subject): add reusable subject parsing",
+          "feat(subject-parser): add reusable subject parsing",
           "- Expose conventional subject parsing for downstream helpers.",
         ),
       },
@@ -1527,19 +1528,20 @@ describe("ai coverage", () => {
     const calls = installOpenAiMock({ chatQueue: [] });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?dependency-ordering-cycle-break-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?dependency-ordering-cycle-break-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
-    mkdirSync(join(sandboxDir, "src"), { recursive: true });
+    mkdirSync(join(sandboxDir, "src/commit-planning/grouping"), { recursive: true });
+    mkdirSync(join(sandboxDir, "src/commit-messages"), { recursive: true });
     writeFileSync(
-      join(sandboxDir, "src/commit-subject.ts"),
+      join(sandboxDir, "src/commit-messages/subject-parser.ts"),
       "export function parseConventionalSubject(subject: string) {\n  return { description: subject, scope: '', type: '' };\n}\n",
     );
     writeFileSync(
-      join(sandboxDir, "src/ai-grouping.ts"),
-      "import { parseConventionalSubject } from './commit-subject.js';\nexport function describeSubject(subject: string) {\n  return parseConventionalSubject(subject).description;\n}\n",
+      join(sandboxDir, "src/commit-planning/grouping/index.ts"),
+      "import { parseConventionalSubject } from '../../commit-messages/subject-parser.js';\nexport function describeSubject(subject: string) {\n  return parseConventionalSubject(subject).description;\n}\n",
     );
     writeFileSync(
       join(sandboxDir, "src/cycle-a.ts"),
@@ -1550,12 +1552,12 @@ describe("ai coverage", () => {
       "import { alphaValue } from './cycle-a.js';\nexport const betaValue = alphaValue + 1;\n",
     );
 
-    const dependentFile = makeFile("src/ai-grouping.ts");
+    const dependentFile = makeFile("src/commit-planning/grouping/index.ts");
     dependentFile.hunks[0]!.lines = [
       "+const parsedSubject = parseConventionalSubject(subject)",
       "+return parsedSubject.description || 'empty'",
     ];
-    const helperFile = makeFile("src/commit-subject.ts");
+    const helperFile = makeFile("src/commit-messages/subject-parser.ts");
     const cycleAFile = makeFile("src/cycle-a.ts");
     cycleAFile.hunks[0]!.lines = ["+const nextAlpha = betaValue + 1"];
     const cycleBFile = makeFile("src/cycle-b.ts");
@@ -1563,9 +1565,9 @@ describe("ai coverage", () => {
 
     const groups = [
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "refactor(ai-grouping): normalize subject handling",
+          "refactor(planned-commit-grouping): normalize subject handling",
           "- Keep planner subject handling consistent across regrouping passes.",
         ),
       },
@@ -1584,9 +1586,9 @@ describe("ai coverage", () => {
         ),
       },
       {
-        files: [{ path: "src/commit-subject.ts" }],
+        files: [{ path: "src/commit-messages/subject-parser.ts" }],
         message: commitMessage(
-          "feat(commit-subject): add reusable subject parsing",
+          "feat(subject-parser): add reusable subject parsing",
           "- Expose conventional subject parsing for downstream helpers.",
         ),
       },
@@ -1611,23 +1613,23 @@ describe("ai coverage", () => {
     const calls = installOpenAiMock({ chatQueue: [] });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?dependency-ordering-generic-relative-path-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?dependency-ordering-generic-relative-path-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
     const helperFile = makeFile("src/planner-subject.custom");
-    const dependentFile = makeFile("src/ai-grouping.ts");
+    const dependentFile = makeFile("src/commit-planning/grouping/index.ts");
     dependentFile.hunks[0]!.lines = [
-      "+planner_subject_source = './planner-subject.custom'",
+      "+planner_subject_source = '../../planner-subject.custom'",
       "+const subject = loadPlannerSubject(planner_subject_source)",
     ];
 
     const groups = [
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "refactor(ai-grouping): load external manifest",
+          "refactor(planned-commit-grouping): load external manifest",
           "- Read planner state from a shared relative path.",
         ),
       },
@@ -1659,23 +1661,23 @@ describe("ai coverage", () => {
     const calls = installOpenAiMock({ chatQueue: [] });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?dependency-ordering-generic-suffix-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?dependency-ordering-generic-suffix-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
     const helperFile = makeFile("src/subject-tools.parser-entry");
-    const dependentFile = makeFile("src/ai-grouping.ts");
+    const dependentFile = makeFile("src/commit-planning/grouping/index.ts");
     dependentFile.hunks[0]!.lines = [
-      " export { parsePlannerSubject } from './subject-tools.parser-entry'",
+      " export { parsePlannerSubject } from '../../subject-tools.parser-entry.js'",
       "+const subject = parsePlannerSubject(message)",
     ];
 
     const groups = [
       {
-        files: [{ path: "src/ai-grouping.ts" }],
+        files: [{ path: "src/commit-planning/grouping/index.ts" }],
         message: commitMessage(
-          "refactor(ai-grouping): reuse external parser metadata",
+          "refactor(planned-commit-grouping): reuse external parser metadata",
           "- Route planner heuristics through a shared parsing surface.",
         ),
       },
@@ -1713,9 +1715,9 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { hunks: [0, 1], path: "src/ai.ts" },
-                      { path: "src/ai-client.ts" },
-                      { path: "src/ai-tokens.ts" },
+                      { hunks: [0, 1], path: "src/commit-planning/orchestration.ts" },
+                      { path: "src/commit-planning/openai-client.ts" },
+                      { path: "src/commit-planning/token-estimation.ts" },
                     ],
                     message:
                       "feat(ai): track stage costs and expose output hooks\n\n- Combine telemetry and planning-cost work into one pipeline commit.",
@@ -1729,14 +1731,14 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?same-file-hunks-reason-split-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?same-file-hunks-reason-split-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
-    const aiFile = makeFile("src/ai.ts", 2);
+    const aiFile = makeFile("src/commit-planning/orchestration.ts", 2);
     aiFile.hunks[0]!.lines = [
-      " import { recordStageTokens } from './ai-client.js'",
+      " import { recordStageTokens } from './openai-client.js'",
       "+recordStageTokens(stage, usage)",
     ];
     aiFile.hunks[1]!.lines = ["+estimatePlanningStageTokens(batchCount)"];
@@ -1744,8 +1746,8 @@ describe("ai coverage", () => {
     const groups = [
       {
         files: [
-          { path: "src/ai-client.ts" },
-          { hunks: [0], path: "src/ai.ts" },
+          { path: "src/commit-planning/openai-client.ts" },
+          { hunks: [0], path: "src/commit-planning/orchestration.ts" },
         ],
         message: commitMessage(
           "feat(ai-client): track stage telemetry",
@@ -1754,8 +1756,8 @@ describe("ai coverage", () => {
       },
       {
         files: [
-          { path: "src/ai-tokens.ts" },
-          { hunks: [1], path: "src/ai.ts" },
+          { path: "src/commit-planning/token-estimation.ts" },
+          { hunks: [1], path: "src/commit-planning/orchestration.ts" },
         ],
         message: commitMessage(
           "feat(ai-pipeline): estimate planning costs",
@@ -1765,7 +1767,7 @@ describe("ai coverage", () => {
     ];
 
     const result = await finalizePlannedGroups(
-      [aiFile, makeFile("src/ai-client.ts"), makeFile("src/ai-tokens.ts")],
+      [aiFile, makeFile("src/commit-planning/openai-client.ts"), makeFile("src/commit-planning/token-estimation.ts")],
       groups,
     );
 
@@ -1789,9 +1791,9 @@ describe("ai coverage", () => {
                 content: JSON.stringify([
                   {
                     files: [
-                      { path: "src/ai-cache.ts" },
-                      { path: "src/ai-tokens.ts" },
-                      { hunks: [0, 1], path: "src/ai.ts" },
+                      { path: "src/commit-planning/result-cache.ts" },
+                      { path: "src/commit-planning/token-estimation.ts" },
+                      { hunks: [0, 1], path: "src/commit-planning/orchestration.ts" },
                     ],
                     message:
                       "feat(ai): align planning cache and token forecasting\n\n- Combine orchestration changes behind one planner pipeline update.",
@@ -1805,24 +1807,24 @@ describe("ai coverage", () => {
     });
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?coordinator-file-spillover-split-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?coordinator-file-spillover-split-${Math.random()}`,
         import.meta.url,
       ).href
     );
 
-    const aiFile = makeFile("src/ai.ts", 2);
+    const aiFile = makeFile("src/commit-planning/orchestration.ts", 2);
     aiFile.hunks[0]!.lines = [
-      " import { getCachedPlan } from './ai-cache.js'",
+      " import { getCachedPlan } from './ai-result-cache.js'",
       "+const cachedPlan = getCachedPlan(cacheKey)",
     ];
     aiFile.hunks[1]!.lines = [
-      " import { estimatePlanningStageTokens } from './ai-tokens.js'",
+      " import { estimatePlanningStageTokens } from './ai-token-estimation.js'",
       "+const estimatedTokens = estimatePlanningStageTokens(batchCount)",
     ];
 
     const groups = [
       {
-        files: [{ path: "src/ai-cache.ts" }, { hunks: [0], path: "src/ai.ts" }],
+        files: [{ path: "src/commit-planning/result-cache.ts" }, { hunks: [0], path: "src/commit-planning/orchestration.ts" }],
         message: commitMessage(
           "feat(ai-cache): cache grouped plans",
           "- Reuse previously computed planning output before recomputing commits.",
@@ -1830,8 +1832,8 @@ describe("ai coverage", () => {
       },
       {
         files: [
-          { path: "src/ai-tokens.ts" },
-          { hunks: [1], path: "src/ai.ts" },
+          { path: "src/commit-planning/token-estimation.ts" },
+          { hunks: [1], path: "src/commit-planning/orchestration.ts" },
         ],
         message: commitMessage(
           "feat(ai-tokens): forecast planning costs",
@@ -1841,7 +1843,7 @@ describe("ai coverage", () => {
     ];
 
     const result = await finalizePlannedGroups(
-      [aiFile, makeFile("src/ai-cache.ts"), makeFile("src/ai-tokens.ts")],
+      [aiFile, makeFile("src/commit-planning/result-cache.ts"), makeFile("src/commit-planning/token-estimation.ts")],
       groups,
     );
 
@@ -2056,7 +2058,7 @@ describe("ai coverage", () => {
       makeFile("tests/ai-coverage.test.ts"),
       makeFile("tests/git-coverage.test.ts"),
       makeFile("README.md"),
-      makeFile("src/ai.ts"),
+      makeFile("src/commit-planning/orchestration.ts"),
     ];
     const grouping = [
       {
@@ -3813,7 +3815,7 @@ describe("planCommits - librerss 43-commit regression", () => {
     // Import grouping module fresh so it picks up the mocked openai module.
     const { finalizePlannedGroups } = await import(
       new URL(
-        `../src/ai-grouping.js?librerss-regression-${Math.random()}`,
+        `../src/commit-planning/grouping/index.js?librerss-regression-${Math.random()}`,
         import.meta.url,
       ).href
     );
@@ -3840,7 +3842,7 @@ describe("planCommits - librerss 43-commit regression", () => {
   });
 
   test("premergeBySubject collapses all 8 style sweep commits to 1 group", async () => {
-    const { premergeBySubject } = await import("../src/ai-grouping.js");
+    const { premergeBySubject } = await import("../src/commit-planning/grouping/index.js");
 
     // The exact 43 subjects from the real librerss run, each with a
     // placeholder file so fileByPath stays consistent.
