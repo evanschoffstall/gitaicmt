@@ -192,6 +192,18 @@ describe("config", () => {
 
       rmSync(dir, { recursive: true });
     });
+
+    test("throws when an override changes a field to the wrong type", () => {
+      const dir = makeTmpDir();
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ analysis: { chunkSize: "fast" } }),
+      );
+
+      expect(() => loadConfig(dir)).toThrow(/chunkSize|expected number/u);
+
+      rmSync(dir, { recursive: true });
+    });
   });
 
   // ───── Env override ─────
@@ -275,6 +287,28 @@ describe("config", () => {
       expect(cfg.openai.model).toBe("fresh");
 
       rmSync(dir, { recursive: true });
+    });
+
+    test("loadConfig caches independently per working directory", () => {
+      const firstDir = makeTmpDir();
+      const secondDir = makeTmpDir();
+      writeFileSync(
+        join(firstDir, "gitaicmt.config.json"),
+        JSON.stringify({ openai: { model: "first-dir-model" } }),
+      );
+      writeFileSync(
+        join(secondDir, "gitaicmt.config.json"),
+        JSON.stringify({ openai: { model: "second-dir-model" } }),
+      );
+
+      const firstConfig = loadConfig(firstDir);
+      const secondConfig = loadConfig(secondDir);
+
+      expect(firstConfig.openai.model).toBe("first-dir-model");
+      expect(secondConfig.openai.model).toBe("second-dir-model");
+
+      rmSync(firstDir, { recursive: true });
+      rmSync(secondDir, { recursive: true });
     });
   });
 

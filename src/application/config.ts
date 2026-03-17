@@ -62,102 +62,14 @@ export const DEFAULTS: Config = {
 };
 
 const LOCAL_CONFIG_NAMES = ["gitaicmt.config.json", ".gitaicmt.json"];
-
-/* ── Path helpers ─────────────────────────────────────────────── */
+const configCache = new Map<string, Config>();
 
 /** System-wide config (Linux/macOS: /etc) */
 export function globalConfigPath(): string {
   return "/etc/gitaicmt/config.json";
 }
 
-/** Per-user config (XDG_CONFIG_HOME or ~/.config) */
-export function userConfigPath(): string {
-  const xdg = process.env.XDG_CONFIG_HOME;
-  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".config");
-  return join(base, "gitaicmt", "config.json");
-}
-
-function deepMerge<T extends Record<string, unknown>>(
-  base: T,
-  override: Record<string, unknown>,
-): T {
-  const out: Record<string, unknown> = { ...base };
-  for (const key of Object.keys(override)) {
-    const bv = (base as Record<string, unknown>)[key];
-    const ov = override[key];
-    // Only merge if both values are plain objects
-    if (isPlainObject(bv) && isPlainObject(ov)) {
-      out[key] = deepMerge(bv, ov);
-    } else {
-      // Type-check to prevent mismatches that would break config schema
-      if (bv !== undefined && ov !== null && ov !== undefined) {
-        const baseType = typeof bv;
-        const overrideType = typeof ov;
-        const baseIsArray = Array.isArray(bv);
-        const overrideIsArray = Array.isArray(ov);
-
-        // Check for type mismatches
-        if (baseIsArray !== overrideIsArray) {
-          // Skip: array/non-array mismatch
-          continue;
-        }
-
-        if (!baseIsArray && baseType !== overrideType) {
-          // Skip: primitive type mismatch (number/string, string/boolean, etc.)
-          continue;
-        }
-      }
-      out[key] = ov;
-    }
-  }
-  return out as T;
-}
-
-/* ── Deep merge ───────────────────────────────────────────────── */
-
-/** Find a local (project-level) config in `cwd` */
-function findLocalConfig(cwd: string): null | string {
-  for (const name of LOCAL_CONFIG_NAMES) {
-    const p = resolve(cwd, name);
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
-/** Check if value is a plain object (not array, null, or built-in) */
-function isPlainObject(val: unknown): val is Record<string, unknown> {
-  return (
-    val !== null &&
-    typeof val === "object" &&
-    !Array.isArray(val) &&
-    Object.getPrototypeOf(val) === Object.prototype
-  );
-}
-
-/* ── Read a JSON config file (returns null on missing, throws on invalid) */
-
-function readJsonConfig(path: string): null | Record<string, unknown> {
-  if (!existsSync(path)) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-  } catch {
-    throw new ConfigError(`Invalid JSON in configuration file: ${path}`);
-  }
-
-  if (!isPlainObject(parsed)) {
-    throw new ConfigError(
-      `Configuration file must contain a JSON object: ${path}`,
-    );
-  }
-
-  return parsed;
-}
-
-/* ── loadConfig ───────────────────────────────────────────────── */
-
-let _cached: Config | null = null;
+/* ── Path helpers ─────────────────────────────────────────────── */
 
 export function initConfig(cwd?: string): string {
   const dir = cwd ?? process.cwd();
@@ -174,8 +86,11 @@ export function initConfig(cwd?: string): string {
  * @throws {ConfigError} If configuration is invalid
  */
 export function loadConfig(cwd?: string): Config {
-  if (_cached) return _cached;
-  const dir = cwd ?? process.cwd();
+  const dir = resolve(cwd ?? process.cwd());
+  const cached = configCache.get(dir);
+  if (cached) {
+    return cached;
+  }
 
   let merged: Record<string, unknown> = {
     ...(DEFAULTS as unknown as Record<string, unknown>),
@@ -203,14 +118,13 @@ export function loadConfig(cwd?: string): Config {
   }
 
   // 4. Env override for API key (HIGHEST priority - overrides all configs)
-  if (process.env.OPENAI_API_KEY) {
-    (merged.openai as Record<string, unknown>).apiKey =
-      process.env.OPENAI_API_KEY;
-  }
+  merged = applyEnvironmentOverrides(merged);
 
   // 5. Validate with Zod schema
   try {
-    _cached = ConfigSchema.parse(merged);
+    const parsedConfig = ConfigSchema.parse(merged);
+    configCache.set(dir, parsedConfig);
+    return parsedConfig;
   } catch (err: unknown) {
     if (err && typeof err === "object" && "errors" in err) {
       const zodErr = err as {
@@ -223,10 +137,95 @@ export function loadConfig(cwd?: string): Config {
     }
     throw new ConfigError(`Configuration validation failed: ${String(err)}`);
   }
-
-  return _cached;
 }
 
 export function resetConfigCache(): void {
-  _cached = null;
+  configCache.clear();
+}
+
+/* ── Deep merge ───────────────────────────────────────────────── */
+
+/** Per-user config (XDG_CONFIG_HOME or ~/.config) */
+export function userConfigPath(): string {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".config");
+  return join(base, "gitaicmt", "config.json");
+}
+
+/**
+ * Apply environment-derived overrides without assuming prior config shape.
+ */
+function applyEnvironmentOverrides(
+  merged: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!process.env.OPENAI_API_KEY) {
+    return merged;
+  }
+
+  return {
+    ...merged,
+    openai: {
+      ...(isPlainObject(merged.openai) ? merged.openai : {}),
+      apiKey: process.env.OPENAI_API_KEY,
+    },
+  };
+}
+
+/* ── Read a JSON config file (returns null on missing, throws on invalid) */
+
+function deepMerge<T extends Record<string, unknown>>(
+  base: T,
+  override: Record<string, unknown>,
+): T {
+  const out: Record<string, unknown> = { ...base };
+  for (const key of Object.keys(override)) {
+    const bv = (base as Record<string, unknown>)[key];
+    const ov = override[key];
+    if (isPlainObject(bv) && isPlainObject(ov)) {
+      out[key] = deepMerge(bv, ov);
+    } else {
+      out[key] = ov;
+    }
+  }
+  return out as T;
+}
+
+/* ── loadConfig ───────────────────────────────────────────────── */
+
+/** Find a local (project-level) config in `cwd` */
+function findLocalConfig(cwd: string): null | string {
+  for (const name of LOCAL_CONFIG_NAMES) {
+    const p = resolve(cwd, name);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** Check if value is a plain object (not array, null, or built-in) */
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return (
+    val !== null &&
+    typeof val === "object" &&
+    !Array.isArray(val) &&
+    Object.getPrototypeOf(val) === Object.prototype
+  );
+}
+
+function readJsonConfig(path: string): null | Record<string, unknown> {
+  if (!existsSync(path)) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+  } catch {
+    throw new ConfigError(`Invalid JSON in configuration file: ${path}`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new ConfigError(
+      `Configuration file must contain a JSON object: ${path}`,
+    );
+  }
+
+  return parsed;
 }
