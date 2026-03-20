@@ -1,6 +1,10 @@
 import { emitAiOutputEvent } from "../openai-client.js";
 import { type FileChangeSignals, type PlannedCommit } from "./grouping-types.js";
-import { countSharedSubjectWords, parseSubjectWords } from "./subject-analysis.js";
+import {
+  countSharedSubjectWords,
+  isSupportLikeType,
+  parseSubjectWords,
+} from "./subject-analysis.js";
 
 export {
   getCommonActionWords,
@@ -11,6 +15,11 @@ export {
   getSharedIntentScore,
 } from "./intent-scoring.js";
 
+interface CommitOrderingProfile {
+  hasImplementationFiles: boolean;
+  priorityBucket: number;
+}
+
 /** Scores whether one planned commit should run before another. */
 export function getCommitDependencyScore(
   dependent: PlannedCommit,
@@ -19,6 +28,10 @@ export function getCommitDependencyScore(
 ): number {
   let score = 0;
   const dependencyPaths = new Set(dependency.files.map((file) => file.path));
+  const dependencyHasImplementationFiles = dependency.files.some(
+    (file) => !isTestLikePath(file.path),
+  );
+  const dependencyImplementationPathWords = new Set<string>();
   const dependencyProvidedSymbols = new Set<string>();
   const dependencyPathWords = new Set<string>();
   const dependencySubject = parseSubjectWords(
@@ -39,6 +52,9 @@ export function getCommitDependencyScore(
     }
     for (const word of signals.pathWords) {
       dependencyPathWords.add(word);
+      if (!isTestLikePath(file.path)) {
+        dependencyImplementationPathWords.add(word);
+      }
     }
   }
 
@@ -50,13 +66,24 @@ export function getCommitDependencyScore(
 
     for (const importedPath of signals.importedPaths) {
       if (dependencyPaths.has(importedPath)) {
-        score += 6;
+        score +=
+          isTestLikePath(file.path) && dependencyHasImplementationFiles ? 8 : 6;
       }
     }
 
     for (const symbol of signals.referencedSymbols) {
       if (dependencyProvidedSymbols.has(symbol)) {
         score += 4;
+      }
+    }
+
+    if (isTestLikePath(file.path) && dependencyHasImplementationFiles) {
+      const sharedValidatedPathWordCount = countSharedSubjectWords(
+        signals.pathWords,
+        dependencyImplementationPathWords,
+      );
+      if (sharedValidatedPathWordCount > 0) {
+        score += Math.min(sharedValidatedPathWordCount + 2, 4);
       }
     }
   }
@@ -98,6 +125,7 @@ export function orderCommitsByDependencies(
     return groups;
   }
 
+  const orderingProfiles = groups.map(buildCommitOrderingProfile);
   const edges = new Map<number, Set<number>>();
   const edgeWeights = new Map<string, number>();
   const indegree = groups.map(() => 0);
@@ -142,7 +170,10 @@ export function orderCommitsByDependencies(
   const queue = indegree
     .map((degree, index) => ({ degree, index }))
     .filter((entry) => entry.degree === 0)
-    .map((entry) => entry.index);
+    .map((entry) => entry.index)
+    .sort((left, right) =>
+      compareReadyIndexes(left, right, orderingProfiles, edges, edgeWeights),
+    );
   const orderedIndexes: number[] = [];
   const remainingIndexes = new Set(groups.map((_, index) => index));
 
@@ -151,6 +182,7 @@ export function orderCommitsByDependencies(
       queue.shift() ??
       chooseDependencyOrderIndex(
         remainingIndexes,
+        orderingProfiles,
         indegree,
         edges,
         edgeWeights,
@@ -173,6 +205,9 @@ export function orderCommitsByDependencies(
       indegree[nextIndex]--;
       if (indegree[nextIndex] === 0) {
         queue.push(nextIndex);
+        queue.sort((left, right) =>
+          compareReadyIndexes(left, right, orderingProfiles, edges, edgeWeights),
+        );
       }
     }
   }
@@ -197,8 +232,30 @@ export function orderCommitsByDependencies(
   return ordered;
 }
 
+function buildCommitOrderingProfile(
+  group: PlannedCommit,
+): CommitOrderingProfile {
+  const subject = parseSubjectWords(group.message.split("\n")[0] ?? "");
+  const hasImplementationFiles = group.files.some(
+    (file) => !isTestLikePath(file.path),
+  );
+  const hasOnlyTestFiles = group.files.every((file) => isTestLikePath(file.path));
+  const supportLike = isSupportLikeType(subject.type);
+
+  return {
+    hasImplementationFiles,
+    priorityBucket:
+      hasOnlyTestFiles || (supportLike && !hasImplementationFiles)
+        ? 2
+        : supportLike
+          ? 1
+          : 0,
+  };
+}
+
 function chooseDependencyOrderIndex(
   remainingIndexes: Set<number>,
+  orderingProfiles: CommitOrderingProfile[],
   indegree: number[],
   edges: Map<number, Set<number>>,
   edgeWeights: Map<string, number>,
@@ -245,10 +302,64 @@ function chooseDependencyOrderIndex(
     if (outgoingWeight > selectedOutgoingWeight) {
       selectedIndex = index;
       selectedOutgoingWeight = outgoingWeight;
+      continue;
+    }
+    if (outgoingWeight < selectedOutgoingWeight) {
+      continue;
+    }
+
+    if (
+      selectedIndex === undefined ||
+      compareCommitOrderingProfile(
+        orderingProfiles[index],
+        orderingProfiles[selectedIndex],
+      ) < 0
+    ) {
+      selectedIndex = index;
     }
   }
 
   return selectedIndex;
+}
+
+function compareCommitOrderingProfile(
+  left: CommitOrderingProfile,
+  right: CommitOrderingProfile,
+): number {
+  if (left.priorityBucket !== right.priorityBucket) {
+    return left.priorityBucket - right.priorityBucket;
+  }
+
+  if (left.hasImplementationFiles !== right.hasImplementationFiles) {
+    return left.hasImplementationFiles ? -1 : 1;
+  }
+
+  return 0;
+}
+
+function compareReadyIndexes(
+  left: number,
+  right: number,
+  orderingProfiles: CommitOrderingProfile[],
+  edges: Map<number, Set<number>>,
+  edgeWeights: Map<string, number>,
+): number {
+  const profileComparison = compareCommitOrderingProfile(
+    orderingProfiles[left],
+    orderingProfiles[right],
+  );
+  if (profileComparison !== 0) {
+    return profileComparison;
+  }
+
+  const outgoingWeightDifference =
+    getOutgoingDependencyWeight(left, new Set([left, right]), edges, edgeWeights) -
+    getOutgoingDependencyWeight(right, new Set([left, right]), edges, edgeWeights);
+  if (outgoingWeightDifference !== 0) {
+    return outgoingWeightDifference > 0 ? -1 : 1;
+  }
+
+  return left - right;
 }
 
 function getIncomingDependencyWeight(
@@ -283,4 +394,12 @@ function getOutgoingDependencyWeight(
   }
 
   return weight;
+}
+
+function isTestLikePath(path: string): boolean {
+  return (
+    path.startsWith("tests/") ||
+    path.startsWith("test/") ||
+    /(?:^|\/)[^.]+\.(?:spec|test)\.[^.]+$/u.test(path)
+  );
 }

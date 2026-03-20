@@ -106,6 +106,10 @@ export async function planCommits(
   recursionDepth = 0,
   promptContext?: GroupingPromptContext,
 ): Promise<PlannedCommit[]> {
+  if (files.length === 0) {
+    throw new ValidationError("Cannot plan commits for an empty file set");
+  }
+
   const cfg = loadConfig();
   const maxRecursionDepth = 5;
   const formattedDiffs = files.map((file) => formatFileDiff(file));
@@ -220,9 +224,14 @@ export async function planCommits(
 
     groups = validateAndNormalizeGrouping(parsed, fileByPath);
 
+    // Track file-level assignment separately from hunk assignment so zero-hunk
+    // entries such as mode-only and rename-only changes do not get duplicated
+    // into a synthetic "missed files" commit.
+    const assignedFiles = new Set<string>();
     const assignedHunks = new Map<string, Set<number>>();
     for (const group of groups) {
       for (const fileRef of group.files) {
+        assignedFiles.add(fileRef.path);
         let assigned = assignedHunks.get(fileRef.path);
         if (!assigned) {
           assigned = new Set<number>();
@@ -248,9 +257,17 @@ export async function planCommits(
 
     const missedFiles: PlannedCommitFile[] = [];
     for (const file of files) {
+      if (!assignedFiles.has(file.path)) {
+        missedFiles.push({ path: file.path });
+        continue;
+      }
+
+      if (file.hunks.length === 0) {
+        continue;
+      }
+
       const assigned = assignedHunks.get(file.path);
       if (!assigned || assigned.size === 0) {
-        missedFiles.push({ path: file.path });
         continue;
       }
       if (assigned.size >= file.hunks.length) {

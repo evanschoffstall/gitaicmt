@@ -1,8 +1,14 @@
+import { loadConfig } from "../../application/config.js";
 import {
   CLUSTERING_THRESHOLD,
+  GROUPING_TIMEOUT_MS,
   MAX_CLUSTER_PASSES,
   MAX_CONSOLIDATION_PASSES,
 } from "../../application/constants.js";
+import {
+  OpenAIError,
+  OpenAITimeoutError,
+} from "../../application/errors.js";
 import { complete, emitAiOutputEvent } from "../openai-client.js";
 import {
   buildClusterSystemPrompt,
@@ -34,6 +40,9 @@ import {
   parseSubjectWords,
 } from "./subject-analysis.js";
 import { premergeBySubject } from "./subject-premerge.js";
+
+const MAX_PLANNER_CALL_ATTEMPTS = 2;
+const MIN_CONSOLIDATION_TAIL_GROUP_COUNT = 5;
 
 /** Finalizes batched planner output into stable, coverage-safe commit groups. */
 export async function finalizePlannedGroups(
@@ -69,6 +78,7 @@ export async function finalizePlannedGroups(
   }
 
   current = await clusterAndMerge(current, fileByPath);
+  let previousReduction = Number.POSITIVE_INFINITY;
 
   for (
     let pass = 0;
@@ -78,15 +88,40 @@ export async function finalizePlannedGroups(
     if (!hasPotentialMergeSignals(current)) {
       break;
     }
+    if (
+      current.length <= MIN_CONSOLIDATION_TAIL_GROUP_COUNT &&
+      previousReduction <= 1 &&
+      hasMostlyImplementationTail(current)
+    ) {
+      emitAiOutputEvent({
+        content: JSON.stringify({
+          decision: "consolidation-stop",
+          inputGroupCount: current.length,
+          previousReduction,
+          reason: "diminishing-returns",
+        }),
+        durationMs: performance.now() - startedAtMs,
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      });
+      break;
+    }
 
     const previousLength = current.length;
-    const consolidated = await consolidateOnce(allFiles, current, fileByPath);
+    const consolidated = await consolidateOnce(
+      allFiles,
+      current,
+      fileByPath,
+      fileSignals,
+    );
     if (!consolidated) {
       break;
     }
 
+    previousReduction = previousLength - consolidated.length;
     current = consolidated;
-    if (consolidated.length >= previousLength || consolidated.length <= 2) {
+    if (previousReduction <= 0 || consolidated.length <= 2) {
       break;
     }
   }
@@ -98,6 +133,18 @@ export async function finalizePlannedGroups(
     fileSignals,
   );
 
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: "repartition-after-consolidation",
+      outputGroupCount: current.length,
+      premergedGroupCount: baselineGroups.length,
+    }),
+    durationMs: performance.now() - startedAtMs,
+    kind: "planner-decision",
+    stage: "consolidate",
+    transport: "internal",
+  });
+
   const ordered = orderCommitsByDependencies(current, fileSignals);
   emitAiOutputEvent({
     content: JSON.stringify({
@@ -105,6 +152,7 @@ export async function finalizePlannedGroups(
       finalGroupCount: ordered.length,
       inputGroupCount: groups.length,
       premergedGroupCount: baselineGroups.length,
+      repartitionedGroupCount: current.length,
     }),
     durationMs: performance.now() - startedAtMs,
     kind: "planner-decision",
@@ -222,19 +270,42 @@ async function completePlannerStage(
   system: string,
   inputGroupCount: number,
 ): Promise<null | { parsed: unknown }> {
-  let raw: string;
-  try {
-    raw = await complete(system, input, { stage });
-  } catch (error: unknown) {
-    emitPlannerFallbackEvent(
-      `${stage === "cluster" ? "cluster" : "consolidation"}-fallback`,
-      `${stage === "cluster" ? "cluster" : "consolidation"}-call-failed`,
-      stage,
-      {
-        error: describeError(error),
-        inputGroupCount,
-      },
-    );
+  let raw: null | string = null;
+
+  for (let attempt = 0; attempt < MAX_PLANNER_CALL_ATTEMPTS; attempt++) {
+    try {
+      raw = await complete(system, input, {
+        stage,
+        timeoutMs: getPlannerReviewTimeoutMs(),
+      });
+      break;
+    } catch (error: unknown) {
+      const failedAttemptCount = attempt + 1;
+      if (
+        failedAttemptCount < MAX_PLANNER_CALL_ATTEMPTS &&
+        isRetryablePlannerError(error)
+      ) {
+        emitPlannerRetryEvent(stage, inputGroupCount, failedAttemptCount, error);
+        continue;
+      }
+
+      emitPlannerFallbackEvent(
+        `${stage === "cluster" ? "cluster" : "consolidation"}-fallback`,
+        failedAttemptCount > 1
+          ? "retry-exhausted-call-failed"
+          : `${stage === "cluster" ? "cluster" : "consolidation"}-call-failed`,
+        stage,
+        {
+          attemptCount: failedAttemptCount,
+          error: describeError(error),
+          inputGroupCount,
+        },
+      );
+      return null;
+    }
+  }
+
+  if (raw === null) {
     return null;
   }
 
@@ -262,6 +333,7 @@ async function consolidateOnce(
   allFiles: FileDiff[],
   groups: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
+  fileSignals: Map<string, FileChangeSignals>,
 ): Promise<null | PlannedCommit[]> {
   const startedAtMs = performance.now();
   const result = await completePlannerStage(
@@ -309,6 +381,30 @@ async function consolidateOnce(
     consolidated,
     fileByPath,
   );
+  const repartitioned = splitWeakConsolidations(
+    groups,
+    harmonized,
+    fileByPath,
+    fileSignals,
+  );
+
+  if (shouldRejectUnstableConsolidation(groups, harmonized, repartitioned)) {
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        decision: "consolidation-stop",
+        inputGroupCount: groups.length,
+        outputGroupCount: harmonized.length,
+        reason: "semantic-repartition-would-undo-merge",
+        repartitionedGroupCount: repartitioned.length,
+      }),
+      durationMs: performance.now() - startedAtMs,
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+    return null;
+  }
+
   emitAiOutputEvent({
     content: JSON.stringify({
       decision: "consolidation-pass",
@@ -343,6 +439,33 @@ function emitPlannerFallbackEvent(
     stage,
     transport: "internal",
   });
+}
+
+function emitPlannerRetryEvent(
+  stage: "cluster" | "consolidate",
+  inputGroupCount: number,
+  failedAttemptCount: number,
+  error: unknown,
+): void {
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: `${stage === "cluster" ? "cluster" : "consolidation"}-retry-scheduled`,
+      error: describeError(error),
+      failedAttemptCount,
+      inputGroupCount,
+      maxAttemptCount: MAX_PLANNER_CALL_ATTEMPTS,
+      nextAction: "retry",
+      reason: "transient-call-failure",
+    }),
+    kind: "planner-decision",
+    stage,
+    transport: "internal",
+  });
+}
+
+function getPlannerReviewTimeoutMs(): number {
+  const cfg = loadConfig();
+  return Math.max(cfg.performance.timeoutMs, GROUPING_TIMEOUT_MS);
 }
 
 function harmonizeConsolidatedMessages(
@@ -383,4 +506,53 @@ function harmonizeConsolidatedMessages(
       ]),
     };
   });
+}
+
+function hasMostlyImplementationTail(groups: PlannedCommit[]): boolean {
+  let supportLikeGroupCount = 0;
+
+  for (const group of groups) {
+    const subject = parseSubjectWords(group.message.split("\n")[0] ?? "");
+    if (isSupportLikeType(subject.type)) {
+      supportLikeGroupCount++;
+    }
+  }
+
+  return supportLikeGroupCount <= 1;
+}
+
+function isRetryablePlannerError(error: unknown): boolean {
+  if (error instanceof OpenAITimeoutError) {
+    return true;
+  }
+
+  if (error instanceof OpenAIError) {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("aborted") ||
+      message.includes("timeout") ||
+      message.includes("timed out")
+    );
+  }
+
+  return false;
+}
+
+function shouldRejectUnstableConsolidation(
+  inputGroups: PlannedCommit[],
+  consolidatedGroups: PlannedCommit[],
+  repartitionedGroups: PlannedCommit[],
+): boolean {
+  if (inputGroups.length < 4) {
+    return false;
+  }
+
+  const consolidatedReduction = inputGroups.length - consolidatedGroups.length;
+  const effectiveReduction = inputGroups.length - repartitionedGroups.length;
+
+  return (
+    consolidatedReduction >= 2 &&
+    repartitionedGroups.length > consolidatedGroups.length &&
+    effectiveReduction <= 1
+  );
 }
