@@ -3,7 +3,6 @@
 import { createInterface } from "node:readline";
 
 import { initConfig, loadConfig } from "../application/config.js";
-import { mergeCommitsByFile } from "../commit-planning/commit-plan-merge.js";
 import {
   type AiOutputEvent,
   estimateGenerateOperationTokens,
@@ -18,6 +17,7 @@ import {
   type TokenEstimateSummary,
   validateOpenAIConfiguration,
 } from "../commit-planning/orchestration.js";
+import { resolveOverlappingCommits } from "../commit-planning/overlap-resolution.js";
 import {
   chunkDiffs,
   type FileDiff,
@@ -29,6 +29,7 @@ import {
   commitWithMessage,
   getStagedDiff,
   getStagedPatch,
+  hasCommitHistory,
   hasStagedChanges,
   isGitRepository,
   resetStaging,
@@ -42,6 +43,11 @@ import {
   wrapDisplayFileLines,
   wrapDisplayText,
 } from "./commit-plan-display.js";
+import {
+  createPlannerNoticeState,
+  getPlannerFallbackNotice,
+  recordPlannerNotice,
+} from "./planner-notices.js";
 import { resolveTerminalColumns } from "./terminal-columns.js";
 import { withThinkingIndicator, writeTerminalLines } from "./terminal-output-ui.js";
 import { formatVerboseAiOutputLines } from "./verbose-output.js";
@@ -68,13 +74,23 @@ let verboseStageCounts: Record<string, number> = Object.create(null) as Record<
   number
 >;
 
+interface CommitPlanAnalysis {
+  elapsed: string;
+  files: FileDiff[];
+  groups: { files: PlannedCommitFile[]; message: string }[];
+  plannerFallbackNotice: null | string;
+}
+
 interface TokenCheckOptions {
   skipPrompt: boolean;
 }
 
+const plannerNoticeState = createPlannerNoticeState();
+
 async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
   const t0 = performance.now();
   ensureStaged();
+  plannerNoticeState.usedFallbackFinalization = false;
 
   const raw = getStagedDiff();
   if (!raw.trim()) die("Staged diff is empty.");
@@ -104,7 +120,8 @@ async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
     planCommits(files, formatFileDiff),
   );
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-  return { elapsed, files, groups };
+  const plannerFallbackNotice = getPlannerFallbackNotice(plannerNoticeState);
+  return { elapsed, files, groups, plannerFallbackNotice } satisfies CommitPlanAnalysis;
 }
 
 /** Analyze, split, and execute multiple commits */
@@ -119,11 +136,11 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
     return;
   }
 
-  const { elapsed, files, groups } = analysis;
+  const { files, groups } = analysis;
 
-  logPlannedCommits(groups, elapsed);
+  logCommitPlanAnalysis(analysis);
 
-  const mergedGroups = mergeCommitsByFile(groups);
+  const mergedGroups = resolveOverlappingCommits(groups);
   if (mergedGroups.length < groups.length) {
     const dropped = groups.length - mergedGroups.length;
     log(
@@ -367,9 +384,9 @@ async function cmdPlan(skipTokenCheck: boolean) {
     return;
   }
 
-  const { elapsed, files, groups } = analysis;
+  const { files, groups } = analysis;
 
-  logPlannedCommits(groups, elapsed);
+  logCommitPlanAnalysis(analysis);
 
   const fileMap = new Map(files.map((f) => [f.path, f]));
   displayPlan(groups, fileMap);
@@ -483,24 +500,19 @@ function ensureStaged(): void {
     );
   }
 
+  if (!hasCommitHistory()) {
+    die(
+      "Git repository has no commits yet. Create an initial commit first:\n  git commit --allow-empty -m 'Initial commit'",
+    );
+  }
+
   try {
     if (hasStagedChanges()) return;
   } catch (err: unknown) {
-    // Git command failed - provide helpful error
     if (err instanceof Error) {
-      const msg = err.message.toLowerCase();
-      if (
-        msg.includes("does not have any commits yet") ||
-        msg.includes("no commits")
-      ) {
-        die(
-          "Git repository has no commits yet. Create an initial commit first:\n  git commit --allow-empty -m 'Initial commit'",
-        );
-      }
-      // Re-throw with original message if not a known case
       die(err.message);
     }
-    throw err; // Re-throw unexpected errors
+    throw err;
   }
 
   log(`${DIM}No staged changes detected, auto-staging all changes...${RESET}`);
@@ -540,7 +552,7 @@ function formatStageUsageLabel(stage: string): string {
 }
 
 function formatTokenWarning(tokenWarningThreshold: number): string {
-  return `Estimated token usage exceeds threshold (${formatCount(tokenWarningThreshold)}).`;
+  return `Estimated token usage may exceed threshold (${formatCount(tokenWarningThreshold)}).`;
 }
 
 function isHighTokenEstimate(
@@ -582,6 +594,15 @@ function logActualTokenUsage(usage: {
 
   if (stageLines.length > 0) {
     verbose(`Token stages: ${stageLines.join(", ")}`);
+  }
+}
+
+function logCommitPlanAnalysis(analysis: CommitPlanAnalysis): void {
+  logPlannedCommits(analysis.groups, analysis.elapsed);
+
+  if (analysis.plannerFallbackNotice) {
+    log(`${YELLOW}${analysis.plannerFallbackNotice}${RESET}`);
+    log("");
   }
 }
 
@@ -631,7 +652,7 @@ function logTokenEstimate(
   }
 
   log(
-    `${DIM}estimated tokens: ~${formatCount(estimate.totalTokens)} total across ${formatCount(estimate.requestCount)} request(s), peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`,
+    `${DIM}estimated tokens: ~${formatCount(estimate.totalTokens)} across about ${formatCount(estimate.requestCount)} request(s), estimated peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`,
   );
 
   if (
@@ -677,7 +698,7 @@ async function main() {
   outputMode = hasTraceFlag ? "trace" : hasVerboseFlag ? "summary" : "off";
   verboseMode = outputMode !== "off";
   verboseStageCounts = Object.create(null) as Record<string, number>;
-  setAiOutputObserver(outputMode === "off" ? null : logVerboseAiOutput);
+  setAiOutputObserver(observeAiOutput);
 
   // Version flag takes precedence
   if (hasVersionFlag) {
@@ -722,6 +743,14 @@ async function main() {
       break;
     default:
       die(`Unknown command: ${cmd}. Run 'gitaicmt help' for usage.`);
+  }
+}
+
+function observeAiOutput(event: AiOutputEvent): void {
+  recordPlannerNotice(plannerNoticeState, event);
+
+  if (outputMode !== "off") {
+    logVerboseAiOutput(event);
   }
 }
 

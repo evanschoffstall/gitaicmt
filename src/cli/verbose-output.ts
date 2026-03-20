@@ -1,9 +1,10 @@
 import type { AiOutputEvent } from "../commit-planning/orchestration.js";
 
 import {
-  buildStageTitle,
+  buildEventTitle,
   formatEventStatLines,
   formatTraceBlock,
+  getEventFrameSeverity,
   styleTraceFooter,
   styleTraceHeader,
   styleTraceRail,
@@ -50,7 +51,7 @@ export function formatVerboseAiOutputLines(
 
   return formatGenericBlock(
     event,
-    buildStageTitle(event.stage, sequence),
+    buildEventTitle(event, parsed, sequence),
     normalizeGenericContent(event.content, parsed),
     maxWidth,
   );
@@ -104,14 +105,16 @@ function formatCommitPlanBlock(
   maxWidth: number,
   sequence?: number,
 ): string[] {
+  const severity = getEventFrameSeverity(event, commits);
   const commitLabel =
     commits.length === 1 ? "candidate commit" : "candidate commits";
   const lines = [
     styleTraceHeader(
-      `╭── ${buildStageTitle(event.stage, sequence)} · ${String(commits.length)} ${commitLabel}`,
+      `╭── ${buildEventTitle(event, commits, sequence)} · ${String(commits.length)} ${commitLabel}`,
+      severity,
     ),
   ];
-  lines.push(...formatEventStatLines(event, maxWidth));
+  lines.push(...formatEventStatLines(event, maxWidth, severity));
 
   for (let index = 0; index < commits.length; index++) {
     const commit = commits[index];
@@ -123,13 +126,13 @@ function formatCommitPlanBlock(
         maxWidth - 2,
         "│ ",
         "│    ",
-      ).map(styleTraceRail),
+      ).map((line) => styleTraceRail(line, severity)),
       ...wrapLine(
         `coverage: ${String(commit.files.length)} file(s) · ${formatCommitFiles(commit.files)}`,
         maxWidth - 4,
         "│   ",
         "│         ",
-      ).map(styleTraceRail),
+      ).map((line) => styleTraceRail(line, severity)),
     );
 
     const bullets = collectBodyBullets(commit.message);
@@ -137,7 +140,7 @@ function formatCommitPlanBlock(
     for (const bullet of previewBullets) {
       lines.push(
         ...wrapLine(bullet, maxWidth - 6, "│   - ", "│     ").map(
-          styleTraceRail,
+          (line) => styleTraceRail(line, severity),
         ),
       );
     }
@@ -145,16 +148,17 @@ function formatCommitPlanBlock(
       lines.push(
         styleTraceRail(
           `│   - ... ${String(bullets.length - previewBullets.length)} more detail line(s)`,
+          severity,
         ),
       );
     }
 
     if (index < commits.length - 1) {
-      lines.push(styleTraceRail("│"));
+      lines.push(styleTraceRail("│", severity));
     }
   }
 
-  lines.push(styleTraceFooter("╰──"));
+  lines.push(styleTraceFooter("╰──", severity));
   return lines;
 }
 
@@ -164,22 +168,28 @@ function formatGenericBlock(
   content: string,
   maxWidth: number,
 ): string[] {
+  const severity = getEventFrameSeverity(event, parseJson(event.content));
   const trimmedContent = content.trim();
-  const lines = [styleTraceHeader(`╭── ${title}`)];
-  lines.push(...formatEventStatLines(event, maxWidth));
+  const lines = [styleTraceHeader(`╭── ${title}`, severity)];
+  lines.push(...formatEventStatLines(event, maxWidth, severity));
 
   if (trimmedContent.length === 0) {
-    lines.push(styleTraceRail("│ (empty)"), styleTraceFooter("╰──"));
+    lines.push(
+      styleTraceRail("│ (empty)", severity),
+      styleTraceFooter("╰──", severity),
+    );
     return lines;
   }
 
   for (const rawLine of trimmedContent.split("\n")) {
     lines.push(
-      ...wrapLine(rawLine, maxWidth - 2, "│ ", "│ ").map(styleTraceRail),
+      ...wrapLine(rawLine, maxWidth - 2, "│ ", "│ ").map((line) =>
+        styleTraceRail(line, severity),
+      ),
     );
   }
 
-  lines.push(styleTraceFooter("╰──"));
+  lines.push(styleTraceFooter("╰──", severity));
   return lines;
 }
 

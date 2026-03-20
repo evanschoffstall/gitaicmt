@@ -9,7 +9,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { fileRefsOverlap, mergeCommitsByFile } from "../src/commit-planning/commit-plan-merge.js";
+import {
+  plannedCommitFilesOverlap,
+  resolveOverlappingCommits,
+} from "../src/commit-planning/overlap-resolution.js";
 
 const { describe, expect, test } = await import("bun:test");
 
@@ -19,7 +22,7 @@ type PlannedCommit = import("../src/commit-planning/orchestration.js").PlannedCo
 // CLI integration tests — spawns the actual CLI binary
 // ═══════════════════════════════════════════════════════════════
 
-const CLI = join(import.meta.dir, "..", "dist", "command-line-interface.js");
+const CLI = join(import.meta.dir, "..", "dist", "cli", "command-line-interface.js");
 
 function run(
   args: string,
@@ -213,6 +216,25 @@ describe("CLI", () => {
 
       rmSync(dir, { recursive: true });
     });
+
+    test("'gen' fails with initial commit guidance when HEAD does not exist yet", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nohead-"));
+      execSync(
+        'git init && git config user.email "test@test.com" && git config user.name "Test User"',
+        {
+          cwd: dir,
+          stdio: "pipe",
+        },
+      );
+      writeFileSync(join(dir, "draft.txt"), "hello\n");
+
+      const { exitCode, stderr } = run("gen", { cwd: dir });
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Git repository has no commits yet");
+      expect(stderr).toContain("git commit --allow-empty -m 'Initial commit'");
+
+      rmSync(dir, { recursive: true });
+    });
   });
 
   // ───── Command aliases ─────
@@ -322,7 +344,7 @@ describe("CLI", () => {
       });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("estimated tokens:");
-      expect(stderr).toContain("Estimated token usage exceeds threshold (1).");
+      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
       expect(stderr).toContain("No OpenAI API key");
 
       rmSync(dir, { recursive: true });
@@ -351,10 +373,10 @@ describe("CLI", () => {
         input: "n\n",
       });
       expect(exitCode).toBe(0);
-      expect(stderr).toContain("Estimated token usage exceeds threshold (1).");
+      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
       expect(stderr).toContain("\x1b[1mContinue?\x1b[0m");
       expect(
-        stderr.match(/Estimated token usage exceeds threshold \(1\)/g),
+        stderr.match(/Estimated token usage may exceed threshold \(1\)/g),
       ).toHaveLength(1);
       expect(stderr).toContain("Aborted.");
       expect(stderr).not.toContain("No OpenAI API key");
@@ -384,9 +406,9 @@ describe("CLI", () => {
         },
       });
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("Estimated token usage exceeds threshold (1).");
+      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
       expect(stderr).not.toContain(
-        "Estimated token usage exceeds threshold (1). Continue",
+        "Estimated token usage may exceed threshold (1). Continue",
       );
       expect(stderr).toContain("No OpenAI API key");
 
@@ -422,9 +444,9 @@ describe("CLI", () => {
         },
       });
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("Estimated token usage exceeds threshold (1).");
+      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
       expect(stderr).not.toContain(
-        "Estimated token usage exceeds threshold (1). Continue",
+        "Estimated token usage may exceed threshold (1). Continue",
       );
       expect(stderr).toContain("No OpenAI API key");
 
@@ -454,10 +476,10 @@ describe("CLI", () => {
         input: "n\n",
       });
       expect(exitCode).toBe(0);
-      expect(stderr).toContain("Estimated token usage exceeds threshold (1).");
+      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
       expect(stderr).toContain("\x1b[1mContinue?\x1b[0m");
       expect(
-        stderr.match(/Estimated token usage exceeds threshold \(1\)/g),
+        stderr.match(/Estimated token usage may exceed threshold \(1\)/g),
       ).toHaveLength(1);
       expect(stderr).toContain("Aborted.");
       expect(stderr).not.toContain("No OpenAI API key");
@@ -519,29 +541,37 @@ describe("CLI", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// Unit tests for merge helpers (src/commit-planning/commit-plan-merge.ts)
+// Unit tests for overlap resolution helpers (src/commit-planning/overlap-resolution.ts)
 // ═══════════════════════════════════════════════════════════════
 
-describe("fileRefsOverlap", () => {
+describe("plannedCommitFilesOverlap", () => {
   test("whole-file vs whole-file → overlaps", () => {
-    expect(fileRefsOverlap({ path: "a.ts" }, { path: "a.ts" })).toBe(true);
+    expect(
+      plannedCommitFilesOverlap({ path: "a.ts" }, { path: "a.ts" }),
+    ).toBe(true);
   });
 
   test("whole-file vs hunked → overlaps", () => {
     expect(
-      fileRefsOverlap({ path: "a.ts" }, { hunks: [0], path: "a.ts" }),
+      plannedCommitFilesOverlap(
+        { path: "a.ts" },
+        { hunks: [0], path: "a.ts" },
+      ),
     ).toBe(true);
   });
 
   test("hunked vs whole-file → overlaps", () => {
     expect(
-      fileRefsOverlap({ hunks: [1], path: "a.ts" }, { path: "a.ts" }),
+      plannedCommitFilesOverlap(
+        { hunks: [1], path: "a.ts" },
+        { path: "a.ts" },
+      ),
     ).toBe(true);
   });
 
   test("same hunk → overlaps", () => {
     expect(
-      fileRefsOverlap(
+      plannedCommitFilesOverlap(
         { hunks: [0, 1], path: "a.ts" },
         { hunks: [1], path: "a.ts" },
       ),
@@ -550,7 +580,7 @@ describe("fileRefsOverlap", () => {
 
   test("disjoint hunks → no overlap", () => {
     expect(
-      fileRefsOverlap(
+      plannedCommitFilesOverlap(
         { hunks: [0], path: "a.ts" },
         { hunks: [1], path: "a.ts" },
       ),
@@ -559,7 +589,7 @@ describe("fileRefsOverlap", () => {
 
   test("disjoint multi-hunk → no overlap", () => {
     expect(
-      fileRefsOverlap(
+      plannedCommitFilesOverlap(
         { hunks: [0, 2], path: "a.ts" },
         { hunks: [1, 3], path: "a.ts" },
       ),
@@ -567,7 +597,7 @@ describe("fileRefsOverlap", () => {
   });
 });
 
-describe("mergeCommitsByFile", () => {
+describe("resolveOverlappingCommits", () => {
   function commit(
     msg: string,
     ...files: PlannedCommit["files"]
@@ -580,7 +610,7 @@ describe("mergeCommitsByFile", () => {
       commit("feat: A", { path: "a.ts" }),
       commit("feat: B", { path: "b.ts" }),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     expect(result).toHaveLength(2);
     expect(result[0].message).toBe("feat: A");
     expect(result[1].message).toBe("feat: B");
@@ -591,7 +621,7 @@ describe("mergeCommitsByFile", () => {
       commit("feat: A", { path: "a.ts" }),
       commit("fix: A2", { path: "a.ts" }),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     // Second commit is fully covered by first → dropped
     expect(result).toHaveLength(1);
     expect(result[0].message).toBe("feat: A");
@@ -602,7 +632,7 @@ describe("mergeCommitsByFile", () => {
       commit("feat: A", { hunks: [0], path: "a.ts" }),
       commit("feat: B", { hunks: [0], path: "a.ts" }),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     expect(result).toHaveLength(1);
     expect(result[0].message).toBe("feat: A");
   });
@@ -612,7 +642,7 @@ describe("mergeCommitsByFile", () => {
       commit("feat: hunk0", { hunks: [0], path: "a.ts" }),
       commit("feat: hunk1", { hunks: [1], path: "a.ts" }),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     // Different hunks — they can be staged independently, keep separate
     expect(result).toHaveLength(2);
     // Hunk arrays preserved
@@ -627,7 +657,7 @@ describe("mergeCommitsByFile", () => {
       // Commit 2: file A hunk 1 (unrelated fix)
       commit("fix: cleanup", { hunks: [1], path: "a.ts" }),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     expect(result).toHaveLength(2);
     // Commit 1 intact: a.ts[0] + b.ts whole
     expect(result[0].files.find((f) => f.path === "a.ts")?.hunks).toEqual([0]);
@@ -643,7 +673,7 @@ describe("mergeCommitsByFile", () => {
       commit("feat: all", { path: "a.ts" }), // whole file
       commit("fix: hunk", { hunks: [2], path: "a.ts" }), // specific hunk - fully covered
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     // Second commit dropped — its file is already covered by first
     expect(result).toHaveLength(1);
     expect(result[0].message).toBe("feat: all");
@@ -656,7 +686,7 @@ describe("mergeCommitsByFile", () => {
       commit("feat: hunk", { hunks: [0], path: "a.ts" }), // specific hunk
       commit("refactor: all", { path: "a.ts" }), // whole file — more than first covers
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     // Second is dropped; first gets promoted to whole-file to cover everything
     expect(result).toHaveLength(1);
     expect(result[0].message).toBe("feat: hunk");
@@ -675,7 +705,7 @@ describe("mergeCommitsByFile", () => {
         { path: "unrelated.ts" },
       ),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     // favicon.png dropped from second commit; unrelated.ts survives on its own
     expect(result).toHaveLength(2);
     expect(result[0].message).toBe("docs: readmes");
@@ -693,7 +723,7 @@ describe("mergeCommitsByFile", () => {
       commit("docs: all", { path: "a.ts" }, { path: "b.ts" }),
       commit("chore: dup", { path: "a.ts" }, { path: "b.ts" }),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     expect(result).toHaveLength(1);
     expect(result[0].message).toBe("docs: all");
   });
@@ -704,7 +734,7 @@ describe("mergeCommitsByFile", () => {
       commit("feat: B", { path: "b.ts" }),
       commit("fix: A2", { hunks: [0], path: "a.ts" }), // duplicate of first — dropped
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     expect(result).toHaveLength(2);
     // a.ts commit is unchanged (fix: A2 was dropped, not merged)
     const aGroup = result.find((g) => g.files.some((f) => f.path === "a.ts"));
@@ -724,11 +754,32 @@ describe("mergeCommitsByFile", () => {
       commit("feat: A", { hunks: [0], path: "a.ts" }),
       commit("feat: B", { hunks: [0, 1], path: "a.ts" }),
     ];
-    const result = mergeCommitsByFile(groups);
+    const result = resolveOverlappingCommits(groups);
     // Second commit keeps only hunk 1
     expect(result).toHaveLength(2);
     expect(result[0].files[0].hunks).toEqual([0]);
     expect(result[1].files[0].hunks).toEqual([1]);
     expect(result[1].message).toBe("feat: B");
+  });
+
+  test("later whole-file ownership promotes only the covered path", () => {
+    const groups = [
+      commit(
+        "feat: ui",
+        { hunks: [0], path: "a.ts" },
+        { hunks: [0], path: "b.ts" },
+      ),
+      commit("refactor: a", { path: "a.ts" }),
+    ];
+
+    const result = resolveOverlappingCommits(groups);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].files.find((file) => file.path === "a.ts")?.hunks).toBe(
+      undefined,
+    );
+    expect(result[0].files.find((file) => file.path === "b.ts")?.hunks).toEqual(
+      [0],
+    );
   });
 });

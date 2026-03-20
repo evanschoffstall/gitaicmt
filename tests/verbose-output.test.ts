@@ -215,11 +215,112 @@ describe("verbose-output", () => {
       { maxWidth: 84, mode: "summary", sequence: 2 },
     );
 
-    expect(lines[0]).toContain("Final consolidation #2");
+    expect(lines[0]).toContain("Dependency ordering #2");
     expect(lines.some((line) => line.includes("kind: planner-decision"))).toBe(true);
     expect(lines.some((line) => line.includes("transport: internal"))).toBe(true);
     expect(lines.some((line) => line.includes("time: 37ms"))).toBe(true);
     expect(lines.some((line) => line.includes('"decision": "dependency-ordering"'))).toBe(true);
+  });
+
+  test("uses planner decision titles in trace mode for batch finalization", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          batchCount: 3,
+          decision: "batched-plan-finalization",
+          finalCommitCount: 9,
+        }),
+        kind: "planner-decision",
+        stage: "group",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 4 },
+    );
+
+    expect(lines[0]).toContain("Batched plan finalization #4 trace");
+  });
+
+  test("uses planner decision titles in trace mode for retries", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          decision: "consolidation-retry-scheduled",
+          failedAttemptCount: 1,
+          maxAttemptCount: 2,
+          nextAction: "retry",
+          reason: "transient-call-failure",
+        }),
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 1 },
+    );
+
+    expect(lines[0]).toContain("Consolidation retry scheduled #1 trace");
+  });
+
+  test("shows retry-exhausted details on consolidation fallback traces", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          attemptCount: 2,
+          decision: "consolidation-fallback",
+          error: "OpenAI API call failed: Request was aborted.",
+          inputGroupCount: 5,
+          reason: "retry-exhausted-call-failed",
+        }),
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 2 },
+    );
+
+    expect(lines[0]).toContain("Consolidation fallback #2 trace");
+    expect(lines[0]).toContain("\x1b[31m");
+    expect(lines.some((line) => line.startsWith("\x1b[31m│\x1b[0m"))).toBe(true);
+    expect(lines.some((line) => line.includes('"attemptCount": 2'))).toBe(true);
+    expect(
+      lines.some((line) => line.includes('"reason": "retry-exhausted-call-failed"')),
+    ).toBe(true);
+  });
+
+  test("uses planner decision titles in trace mode for repartition after consolidation", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          decision: "repartition-after-consolidation",
+          outputGroupCount: 16,
+          premergedGroupCount: 19,
+        }),
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 3 },
+    );
+
+    expect(lines[0]).toContain("Repartition after consolidation #3 trace");
+  });
+
+  test("renders retry warnings with yellow trace frames", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          decision: "consolidation-retry-scheduled",
+          failedAttemptCount: 1,
+          maxAttemptCount: 2,
+        }),
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 1 },
+    );
+
+    expect(lines[0]).toContain("\x1b[33m");
+    expect(lines.some((line) => line.startsWith("\x1b[33m│\x1b[0m"))).toBe(true);
   });
 
   test("formats sub-millisecond event durations without rounding down to zero", () => {

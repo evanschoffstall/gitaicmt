@@ -6,17 +6,34 @@ type AiOutputEvent = import("../../commit-planning/openai-client.js").AiOutputEv
 export const ANSI_BOLD = "\x1b[1m";
 export const ANSI_CYAN = "\x1b[36m";
 export const ANSI_DIM = "\x1b[2m";
+export const ANSI_RED = "\x1b[31m";
 export const ANSI_RESET = "\x1b[0m";
+export const ANSI_YELLOW = "\x1b[33m";
 
-/** Builds a stage title, optionally appending a sequence number. */
-export function buildStageTitle(
-  stage: AiOutputEvent["stage"],
+export type TraceFrameSeverity = "error" | "info" | "warning";
+
+/** Builds an event title, optionally appending a sequence number. */
+export function buildEventTitle(
+  event: AiOutputEvent,
+  parsed: unknown,
   sequence?: number,
 ): string {
-  const baseTitle = describeStage(stage);
+  const baseTitle = describeEvent(event, parsed);
   return sequence === undefined
     ? baseTitle
     : `${baseTitle} #${String(sequence)}`;
+}
+
+/** Resolves a human-friendly title for one AI output event. */
+export function describeEvent(event: AiOutputEvent, parsed: unknown): string {
+  if (event.kind === "planner-decision") {
+    const decisionTitle = describePlannerDecision(parsed);
+    if (decisionTitle) {
+      return decisionTitle;
+    }
+  }
+
+  return describeStage(event.stage);
 }
 
 /** Returns a human-friendly label for an AI pipeline stage name. */
@@ -50,6 +67,7 @@ export function describeStage(stage: AiOutputEvent["stage"]): string {
 export function formatEventStatLines(
   event: AiOutputEvent,
   maxWidth: number,
+  severity: TraceFrameSeverity = "info",
 ): string[] {
   const parts: string[] = [];
 
@@ -80,7 +98,9 @@ export function formatEventStatLines(
   }
 
   const statsLine = `stats: ${parts.join(" · ")}`;
-  return wrapLine(statsLine, maxWidth - 4, "│   ", "│     ").map(styleTraceRail);
+  return wrapLine(statsLine, maxWidth - 4, "│   ", "│     ").map((line) =>
+    styleTraceRail(line, severity),
+  );
 }
 
 /** Renders a full trace block (raw/JSON expansion) for the given event. */
@@ -90,13 +110,17 @@ export function formatTraceBlock(
   maxWidth: number,
   sequence?: number,
 ): string[] {
-  const title = `${buildStageTitle(event.stage, sequence)} trace`;
+  const title = `${buildEventTitle(event, parsed, sequence)} trace`;
+  const severity = getEventFrameSeverity(event, parsed);
   const rawContent = event.content.trimEnd();
-  const lines = [styleTraceHeader(`╭── ${title}`)];
-  lines.push(...formatEventStatLines(event, maxWidth));
+  const lines = [styleTraceHeader(`╭── ${title}`, severity)];
+  lines.push(...formatEventStatLines(event, maxWidth, severity));
 
   if (rawContent.length === 0) {
-    lines.push(styleTraceRail("│ (empty)"), styleTraceFooter("╰──"));
+    lines.push(
+      styleTraceRail("│ (empty)", severity),
+      styleTraceFooter("╰──", severity),
+    );
     return lines;
   }
 
@@ -106,33 +130,60 @@ export function formatTraceBlock(
       : formatJsonTraceValue(parsed, maxWidth - 2);
 
   for (const rawLine of traceContent.split("\n")) {
-    lines.push(...wrapTraceLine(rawLine, maxWidth));
+    lines.push(...wrapTraceLine(rawLine, maxWidth, severity));
   }
 
-  lines.push(styleTraceFooter("╰──"));
+  lines.push(styleTraceFooter("╰──", severity));
   return lines;
 }
 
+export function getEventFrameSeverity(
+  event: AiOutputEvent,
+  parsed: unknown,
+): TraceFrameSeverity {
+  const decision = getPlannerDecisionName(parsed);
+  if (decision?.endsWith("-fallback") || decision === "grouping-fallback") {
+    return "error";
+  }
+  if (
+    decision?.endsWith("-retry-scheduled") ||
+    decision === "consolidation-stop"
+  ) {
+    return "warning";
+  }
+
+  return "info";
+}
+
 /** Styles a trace-box footer line with dim cyan. */
-export function styleTraceFooter(line: string): string {
-  return `${ANSI_DIM}${ANSI_CYAN}${line}${ANSI_RESET}`;
+export function styleTraceFooter(
+  line: string,
+  severity: TraceFrameSeverity = "info",
+): string {
+  return `${ANSI_DIM}${getSeverityColor(severity)}${line}${ANSI_RESET}`;
 }
 
 /** Styles a trace-box header line with bold cyan. */
-export function styleTraceHeader(line: string): string {
-  return `${ANSI_BOLD}${ANSI_CYAN}${line}${ANSI_RESET}`;
+export function styleTraceHeader(
+  line: string,
+  severity: TraceFrameSeverity = "info",
+): string {
+  return `${ANSI_BOLD}${getSeverityColor(severity)}${line}${ANSI_RESET}`;
 }
 
 /**
  * Styles a trace-box rail line: the leading `│` character gets bold cyan,
  * the rest is unstyled.
  */
-export function styleTraceRail(line: string): string {
+export function styleTraceRail(
+  line: string,
+  severity: TraceFrameSeverity = "info",
+): string {
   if (!line.startsWith("│")) {
     return line;
   }
 
-  return `${ANSI_CYAN}│${ANSI_RESET}${line.slice(1)}`;
+  return `${getSeverityColor(severity)}│${ANSI_RESET}${line.slice(1)}`;
 }
 
 /**
@@ -185,7 +236,11 @@ export function wrapLine(
  * Wraps a single raw trace line, preserving JSON key alignment when the line
  * looks like `"key": value`.
  */
-export function wrapTraceLine(text: string, maxWidth: number): string[] {
+export function wrapTraceLine(
+  text: string,
+  maxWidth: number,
+  severity: TraceFrameSeverity = "info",
+): string[] {
   const valuePrefixMatch = /^(\s*"[^"]+":\s+)(.*)$/u.exec(text);
   if (valuePrefixMatch) {
     const [, firstContentPrefix, valueText] = valuePrefixMatch;
@@ -195,7 +250,7 @@ export function wrapTraceLine(text: string, maxWidth: number): string[] {
       Math.max(12, maxWidth - firstContentPrefix.length - 2),
       `│ ${firstContentPrefix}`,
       `│ ${continuationContentPrefix}`,
-    ).map(styleTraceRail);
+    ).map((line) => styleTraceRail(line, severity));
   }
 
   const indentMatch = /^(\s*)(.*)$/u.exec(text);
@@ -207,7 +262,56 @@ export function wrapTraceLine(text: string, maxWidth: number): string[] {
     Math.max(12, maxWidth - firstContentPrefix.length - 2),
     `│ ${firstContentPrefix}`,
     `│ ${firstContentPrefix}`,
-  ).map(styleTraceRail);
+  ).map((line) => styleTraceRail(line, severity));
+}
+
+function describePlannerDecision(parsed: unknown): null | string {
+  const decision = getPlannerDecisionName(parsed);
+  if (!decision) {
+    return null;
+  }
+
+  switch (decision) {
+    case "batched-plan-finalization": {
+      return "Batched plan finalization";
+    }
+    case "cluster-fallback": {
+      return "Cluster fallback";
+    }
+    case "cluster-pass": {
+      return "Cluster pass";
+    }
+    case "consolidation-fallback": {
+      return "Consolidation fallback";
+    }
+    case "consolidation-pass": {
+      return "Consolidation pass";
+    }
+    case "consolidation-retry-scheduled": {
+      return "Consolidation retry scheduled";
+    }
+    case "consolidation-stop": {
+      return "Consolidation stop";
+    }
+    case "dependency-ordering": {
+      return "Dependency ordering";
+    }
+    case "finalize-planned-groups": {
+      return "Finalize planned groups";
+    }
+    case "repartition-after-consolidation": {
+      return "Repartition after consolidation";
+    }
+    case "skip-consolidation": {
+      return "Skip consolidation";
+    }
+    default: {
+      return decision
+        .split("-")
+        .map((segment) => segment[0].toUpperCase() + segment.slice(1))
+        .join(" ");
+    }
+  }
 }
 
 function formatDuration(durationMs: number): string {
@@ -218,4 +322,31 @@ function formatDuration(durationMs: number): string {
   return durationMs >= 1000
     ? `${(durationMs / 1000).toFixed(2)}s`
     : `${Math.round(durationMs)}ms`;
+}
+
+function getPlannerDecisionName(parsed: unknown): null | string {
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("decision" in parsed) ||
+    typeof parsed.decision !== "string"
+  ) {
+    return null;
+  }
+
+  return parsed.decision;
+}
+
+function getSeverityColor(severity: TraceFrameSeverity): string {
+  switch (severity) {
+    case "error": {
+      return ANSI_RED;
+    }
+    case "warning": {
+      return ANSI_YELLOW;
+    }
+    default: {
+      return ANSI_CYAN;
+    }
+  }
 }
