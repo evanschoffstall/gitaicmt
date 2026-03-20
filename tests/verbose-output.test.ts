@@ -304,6 +304,25 @@ describe("verbose-output", () => {
     expect(lines[0]).toContain("Repartition after consolidation #3 trace");
   });
 
+  test("uses planner decision titles in trace mode for consolidation noop", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify({
+          decision: "consolidation-noop",
+          inputGroupCount: 7,
+          outputGroupCount: 7,
+          reason: "no-meaningful-reduction",
+        }),
+        kind: "planner-decision",
+        stage: "consolidate",
+        transport: "internal",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 4 },
+    );
+
+    expect(lines[0]).toContain("Consolidation noop #4 trace");
+  });
+
   test("renders retry warnings with yellow trace frames", () => {
     const lines = formatVerboseAiOutputLines(
       {
