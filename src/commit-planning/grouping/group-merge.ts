@@ -5,32 +5,32 @@ import {
 } from "./grouping-types.js";
 import { isSupportLikeType, parseSubjectWords } from "./subject-analysis.js";
 
-/** Applies AI-produced commit clusters after validating basic cluster shape. */
-export function applyCommitClusters(
+/** Merge AI-produced commit clusters into commit groups. */
+export function mergeCommitClusters(
   groups: PlannedCommit[],
   clusters: number[][],
   fileByPath: Map<string, FileDiff>,
 ): PlannedCommit[] {
-  const result: PlannedCommit[] = [];
+  const mergedGroups: PlannedCommit[] = [];
 
   for (const cluster of clusters) {
     if (cluster.length === 0) {
       continue;
     }
     if (cluster.length === 1) {
-      result.push(groups[cluster[0]]);
+      mergedGroups.push(groups[cluster[0]]);
       continue;
     }
 
-    result.push(
+    mergedGroups.push(
       mergeCommitsIntoGroup(cluster.map((index) => groups[index]), fileByPath),
     );
   }
 
-  return result;
+  return mergedGroups;
 }
 
-/** Merges file references while preserving hunk precision where possible. */
+/** Merge file references while preserving hunk precision where possible. */
 export function mergeCommitFiles(
   commits: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
@@ -49,27 +49,27 @@ export function mergeCommitFiles(
         continue;
       }
 
-      const existing = fileHunkMap.get(fileRef.path);
-      if (existing === null || existing === undefined) {
+      const existingHunkIndexes = fileHunkMap.get(fileRef.path);
+      if (existingHunkIndexes === null || existingHunkIndexes === undefined) {
         continue;
       }
 
-      for (const hunk of fileRef.hunks) {
-        existing.add(hunk);
+      for (const hunkIndex of fileRef.hunks) {
+        existingHunkIndexes.add(hunkIndex);
       }
     }
   }
 
   const mergedFiles: PlannedCommitFile[] = [];
-  for (const [path, hunks] of fileHunkMap) {
+  for (const [path, hunkIndexes] of fileHunkMap) {
     const file = fileByPath.get(path);
-    if (!file || file.hunks.length === 0 || hunks === null) {
+    if (!file || file.hunks.length === 0 || hunkIndexes === null) {
       mergedFiles.push({ path });
       continue;
     }
 
     mergedFiles.push({
-      hunks: [...hunks].sort((left, right) => left - right),
+      hunks: [...hunkIndexes].sort((left, right) => left - right),
       path,
     });
   }
@@ -126,7 +126,7 @@ export function mergeCommitMessages(commits: PlannedCommit[]): string {
     .join("\n")}`;
 }
 
-/** Creates a single planned commit from multiple groups. */
+/** Create a single planned commit from multiple groups. */
 export function mergeCommitsIntoGroup(
   commits: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
@@ -137,13 +137,15 @@ export function mergeCommitsIntoGroup(
   };
 }
 
-/** Prefers stronger implementation commits when synthesizing merged subjects. */
+/** Prefer stronger implementation commits when synthesizing merged subjects. */
 export function prioritizeMergedCommits(
   commits: PlannedCommit[],
 ): PlannedCommit[] {
   return [...commits].sort((left, right) => {
     const leftSubject = parseSubjectWords(left.message.split("\n")[0] ?? "");
-    const rightSubject = parseSubjectWords(right.message.split("\n")[0] ?? "");
+    const rightSubject = parseSubjectWords(
+      right.message.split("\n")[0] ?? "",
+    );
     const leftScore =
       (isSupportLikeType(leftSubject.type) ? 0 : 10) +
       leftSubject.words.size +

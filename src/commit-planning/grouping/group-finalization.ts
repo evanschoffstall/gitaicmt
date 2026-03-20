@@ -15,14 +15,15 @@ import {
   groupCoversGroup,
   hasMatchingCoverage,
 } from "./commit-coverage.js";
-import {
-  applyCommitClusters,
-  mergeCommitMessages,
-  prioritizeMergedCommits,
-} from "./commit-merge.js";
 import { orderCommitsByDependencies } from "./dependency-ordering.js";
 import { buildFileChangeSignals } from "./file-signals.js";
 import {
+  mergeCommitClusters,
+  mergeCommitMessages,
+  prioritizeMergedCommits,
+} from "./group-merge.js";
+import {
+  type FileChangeSignals,
   type FileDiff,
   type PlannedCommit,
 } from "./grouping-types.js";
@@ -187,7 +188,7 @@ async function clusterAndMerge(
       break;
     }
 
-    const merged = applyCommitClusters(current, clusters, fileByPath);
+    const merged = mergeCommitClusters(current, clusters, fileByPath);
     if (!hasMatchingCoverage(current, merged, fileByPath)) {
       break;
     }

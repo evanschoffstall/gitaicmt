@@ -1,9 +1,9 @@
 import { groupCoversGroup, groupsShareCoverage, groupsSharePaths } from "./commit-coverage.js";
-import { mergeCommitsIntoGroup } from "./commit-merge.js";
 import {
   getCommitDependencyScore,
   hasDependencySignalBetweenGroups,
 } from "./dependency-ordering.js";
+import { mergeCommitsIntoGroup } from "./group-merge.js";
 import { type FileChangeSignals, type FileDiff, type PlannedCommit } from "./grouping-types.js";
 import {
   getCommonActionWords,

@@ -1,5 +1,5 @@
 import { hasMatchingCoverage } from "./commit-coverage.js";
-import { applyCommitClusters } from "./commit-merge.js";
+import { mergeCommitClusters } from "./group-merge.js";
 import { type FileDiff, type PlannedCommit } from "./grouping-types.js";
 import { hasHighWordOverlap, parseSubjectWords } from "./subject-analysis.js";
 
@@ -69,6 +69,6 @@ export function premergeBySubject(
     return groups;
   }
 
-  const merged = applyCommitClusters(groups, clusters, fileByPath);
+  const merged = mergeCommitClusters(groups, clusters, fileByPath);
   return hasMatchingCoverage(groups, merged, fileByPath) ? merged : groups;
 }
