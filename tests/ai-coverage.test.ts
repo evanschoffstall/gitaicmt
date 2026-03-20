@@ -648,6 +648,27 @@ describe("ai coverage", () => {
       "the subject should name the umbrella outcome or area",
     );
     expect(prompt).toContain(
+      "When one concrete guardrail, heuristic, validation, retry path, cache behavior, or signaling rule dominates the diff, name that dominant mechanism directly in the subject",
+    );
+    expect(prompt).toContain(
+      "When the diff mostly changes prompt, instruction, or guidance text, name the concrete rule introduced, banned, or clarified in the subject",
+    );
+    expect(prompt).toContain(
+      "Treat source files that define prompts, heuristics, validators, planner logic, or other runtime behavior as code, not documentation",
+    );
+    expect(prompt).toContain(
+      "avoid meta verbs if the concrete rule being changed can be named directly",
+    );
+    expect(prompt).toContain(
+      "Use fix when the change corrects misleading behavior, wrong decisions, broken safeguards, incorrect diagnostics, or other user-visible or operator-visible mistakes",
+    );
+    expect(prompt).toContain(
+      "Use feat only when the change primarily introduces a genuinely new capability or workflow",
+    );
+    expect(prompt).toContain(
+      "Avoid generic umbrella nouns like flow, pipeline, logic, handling, support, or behavior",
+    );
+    expect(prompt).toContain(
       "Avoid comma-separated or and-linked subject lists",
     );
     expect(prompt).toContain("Badly generic subjects like feat: update tests");
@@ -714,6 +735,21 @@ describe("ai coverage", () => {
     );
     expect(prompt).toContain(
       "Prefer a subject that names the motivation or outcome the commit delivers",
+    );
+    expect(prompt).toContain(
+      "name that mechanism directly instead of broad umbrella nouns like flow or pipeline",
+    );
+    expect(prompt).toContain(
+      "When the partials mostly change prompt or instruction wording, name the concrete guidance being added or clarified instead of meta wording.",
+    );
+    expect(prompt).toContain(
+      "Treat source modules that define prompts, heuristics, validators, planner logic, or other runtime behavior as code changes, not docs changes",
+    );
+    expect(prompt).toContain(
+      "avoid meta verbs if the specific rule can be named directly",
+    );
+    expect(prompt).toContain(
+      "preserve that corrective framing and prefer fix over feat",
     );
   });
 
@@ -1232,7 +1268,7 @@ describe("ai coverage", () => {
       {
         files: [{ path: "src/commit-planning/prompt-builders/consolidation-prompts.ts" }],
         message: commitMessage(
-          "docs(prompts): tighten consolidation ownership rules",
+          "fix(prompts): tighten consolidation ownership rules",
           "- Keep consolidation focused on one clear why per commit.",
         ),
       },
@@ -1267,7 +1303,7 @@ describe("ai coverage", () => {
     ).toContain("feat(ai-cache): cache planned commit analysis");
     expect(
       result.map((group) => group.message.split("\n")[0]),
-    ).toContain("docs(prompts): tighten consolidation ownership rules");
+    ).toContain("fix(prompts): tighten consolidation ownership rules");
     expect(
       result.map((group) => group.message.split("\n")[0]),
     ).toContain("fix(token-estimation): buffer consolidation budgeting");

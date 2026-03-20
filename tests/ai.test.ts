@@ -663,9 +663,9 @@ describe("consolidation user prompt", () => {
       "Collapse ALL style, import-order, formatting, and whitespace-only sweep commits",
     );
     expect(systemPrompt).toContain("1-2 commits maximum");
-    // Same-file multi-hunk splits must always merge
+    // Same-file multi-hunk splits are only a merge cue when the why still aligns
     expect(systemPrompt).toContain(
-      "If two commits modify different hunks of the SAME file, merge them",
+      "If two commits modify different hunks of the SAME file, treat that as a merge cue only when the result still reads as one clear reason for change",
     );
 
     const fileA = makeMultiHunkFileDiff("tests/api-services.test.ts", [
@@ -699,7 +699,7 @@ describe("consolidation user prompt", () => {
       "Collapse ALL style/import-order/formatting sweep commits",
     );
     expect(userPrompt).toContain(
-      "If multiple commits modify different hunks of the SAME file",
+      "If multiple commits modify different hunks of the SAME file, use that as a merge cue only when they still represent one clear why",
     );
   });
 });
@@ -714,6 +714,12 @@ describe("cluster prompts", () => {
     expect(prompt).toContain("style, import-order, formatting");
     expect(prompt).toContain("ONE cluster");
     expect(prompt).toContain("same-feature");
+    expect(prompt).toContain(
+      "Do NOT merge multiple implementation commits into one umbrella cluster",
+    );
+    expect(prompt).toContain(
+      "Prefer support-into-owner clusters over owner-to-owner umbrella clusters",
+    );
   });
 
   test("buildClusterUserPrompt lists all commit subjects by index", async () => {
@@ -739,6 +745,12 @@ describe("cluster prompts", () => {
     expect(prompt).toContain("2: test(auth): cover login flow");
     expect(prompt).not.toContain("[cues:");
     expect(prompt).toContain("3 commits");
+    expect(prompt).toContain(
+      "Do not create umbrella implementation clusters that only share a subsystem",
+    );
+    expect(prompt).toContain(
+      "Prefer support-into-owner clusters over merging multiple independent implementation commits together.",
+    );
   });
 });
 
