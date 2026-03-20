@@ -21,6 +21,7 @@ const CONTROL_CHARACTER = /\p{Cc}/gu;
 const FORBIDDEN_PATH_CONTROL_CHARACTERS = /\p{Cc}/u;
 const SAFE_LINE_CONTROL_CHARACTERS = new Set(["\t", "\n", "\r"]);
 const CANONICAL_DIFF_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"];
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[/\\]/u;
 
 // ============================================================================
 // Repository Validation
@@ -53,17 +54,26 @@ export function commitWithMessage(message: string, cwd?: string): void {
     cwd: dir,
     encoding: "utf-8",
     input: validatedMessage,
-    stdio: ["pipe", "inherit", "inherit"],
+    stdio: ["pipe", "pipe", "pipe"],
   });
 
   if (result.status !== 0) {
     const exitCode = result.status ?? 1;
-    const errorMessage = result.error?.message ?? "unknown error";
+    const errorMessage = [result.stderr.trim(), result.error?.message]
+      .filter((part) => part && part.length > 0)
+      .join("\n");
     throw new GitCommandError(
-      `Git commit failed (exit ${String(exitCode)}): ${errorMessage}`,
+      `Git commit failed (exit ${String(exitCode)}): ${errorMessage.length > 0 ? errorMessage : "unknown error"}`,
       "git commit -F -",
       exitCode,
     );
+  }
+
+  if (result.stdout.length > 0) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr.length > 0) {
+    process.stderr.write(result.stderr);
   }
 }
 
@@ -128,6 +138,26 @@ export function getStagedPatch(cwd?: string): string {
 // ============================================================================
 
 /**
+ * Check whether the current repository already has at least one commit.
+ * This avoids relying on localized git error text when HEAD does not exist yet.
+ */
+export function hasCommitHistory(cwd?: string): boolean {
+  try {
+    const result = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
+      cwd: cwd ?? process.cwd(),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.error) {
+      return false;
+    }
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check if there are any staged changes
  * @param cwd - Optional working directory (defaults to process.cwd())
  * @returns true if there are staged changes, false otherwise
@@ -170,24 +200,16 @@ export function isGitRepository(cwd?: string): boolean {
  * @throws {GitCommandError} If git command fails (except for empty staging area)
  */
 export function resetStaging(cwd?: string): void {
-  try {
-    execGit(["reset", "HEAD", "--", "."], { cwd });
-  } catch (err) {
-    // Only ignore "nothing to reset" errors
-    if (err instanceof GitCommandError) {
-      // Git returns 0 for empty reset, but check message just in case
-      const msg = err.message.toLowerCase();
-      if (
-        msg.includes("no changes") ||
-        msg.includes("nothing to reset") ||
-        msg.includes("did not match any files")
-      ) {
-        return; // Safe to ignore
-      }
-    }
-    // Re-throw unexpected errors (permission denied, repo corruption, etc.)
-    throw err;
+  if (!hasStagedChanges(cwd)) {
+    return;
   }
+
+  if (!hasCommitHistory(cwd)) {
+    execGit(["rm", "--cached", "-r", "--", "."], { cwd });
+    return;
+  }
+
+  execGit(["reset", "HEAD", "--", "."], { cwd });
 }
 
 /**
@@ -350,6 +372,10 @@ function normalizePath(path: string): string {
  * @throws {InvalidPathError} If path contains dangerous characters or patterns
  */
 function sanitizeFilePath(path: string): string {
+  if (path.trim().length === 0) {
+    throw new InvalidPathError(`Invalid file path is empty`, path);
+  }
+
   // Prevent all forms of null bytes and control characters
   if (containsForbiddenPathControlCharacters(path)) {
     throw new InvalidPathError(
@@ -358,23 +384,8 @@ function sanitizeFilePath(path: string): string {
     );
   }
 
-  // Remove any shell metacharacters and dangerous patterns
-  // Blocklist: ; | & $ ` ( ) { } < > \ ' " * ? ~ ! #
-  // Note: [] are allowed (used in Next.js dynamic routes like [slug])
-  // Safe because we use spawnSync with array args (no shell interpretation)
-  if (
-    /[;|&$`(){}<>\\'"`*?~!#]/.test(path) ||
-    path.includes("$(") ||
-    path.includes("${")
-  ) {
-    throw new InvalidPathError(
-      `Invalid file path contains shell metacharacters`,
-      path,
-    );
-  }
-
   // Prevent absolute paths (git staging should be relative to repo root)
-  if (path.startsWith("/")) {
+  if (path.startsWith("/") || WINDOWS_ABSOLUTE_PATH.test(path)) {
     throw new InvalidPathError(
       `Invalid file path (absolute path not allowed)`,
       path,
@@ -393,6 +404,10 @@ function sanitizeFilePath(path: string): string {
 
   // Normalize to resolve .. and . segments, catching traversal attempts
   const normalized = normalizePath(path);
+
+  if (normalized.length === 0) {
+    throw new InvalidPathError(`Invalid file path is empty`, path);
+  }
 
   // Final check: ensure no attempts to escape repo root
   if (normalized.startsWith("..")) {
