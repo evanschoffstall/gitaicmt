@@ -842,6 +842,66 @@ describe("ai coverage", () => {
     expect(calls.chat).toHaveLength(0);
   });
 
+  test("finalizePlannedGroups skips follow-up AI passes for support commits that only share broad folders", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("support-folder-gate"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?support-folder-gate-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/commit-planning/grouping/subject-analysis.ts" }],
+        message: commitMessage(
+          "fix(planned-commit-grouping): narrow support merge gating",
+          "- Ignore broad shared folders that do not indicate the same commit intent.",
+        ),
+      },
+      {
+        files: [
+          { path: "src/commit-planning/prompt-builders/commit-format.ts" },
+          { path: "tests/ai-coverage.test.ts" },
+        ],
+        message: commitMessage(
+          "docs(prompts): clarify runtime prompt typing",
+          "- Explain that prompt-builder source changes are runtime behavior, not docs-only updates.",
+        ),
+      },
+      {
+        files: [{ path: "src/commit-planning/token-estimation.ts" }],
+        message: commitMessage(
+          "fix(token-estimation): buffer consolidation budgets",
+          "- Reduce low estimates during planner follow-up calls.",
+        ),
+      },
+    ];
+    const allFiles = [
+      makeFile("src/commit-planning/grouping/subject-analysis.ts"),
+      makeFile("src/commit-planning/prompt-builders/commit-format.ts"),
+      makeFile("tests/ai-coverage.test.ts"),
+      makeFile("src/commit-planning/token-estimation.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(0);
+    expect(
+      result.map((group) => group.message.split("\n")[0]),
+    ).toEqual([
+      "fix(planned-commit-grouping): narrow support merge gating",
+      "fix(token-estimation): buffer consolidation budgets",
+      "docs(prompts): clarify runtime prompt typing",
+    ]);
+  });
+
   test("finalizePlannedGroups keeps the implementation-led subject when merging support coverage", async () => {
     writeLocalConfig({
       openai: {
@@ -2167,10 +2227,131 @@ describe("ai coverage", () => {
     observer.setAiOutputObserver(null);
   });
 
-  test("finalizePlannedGroups keeps separate-hunk workflow neighbors split when action and artifact diverge", async () => {
+  test("finalizePlannedGroups stabilizes broad cluster merges before acceptance", async () => {
     writeLocalConfig({
       openai: {
-        apiKey: validApiKey("same-file-hunks-reason-split"),
+        apiKey: validApiKey("cluster-repartition-stabilization"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  [0, 1, 2, 3],
+                  [4, 5, 6, 7],
+                  [8, 9],
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?cluster-repartition-stabilization-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/auth/login.ts" }],
+        message: commitMessage(
+          "feat(auth): add login endpoint",
+          "- Wire the login handler into the auth flow.",
+        ),
+      },
+      {
+        files: [{ path: "tests/auth/login.test.ts" }],
+        message: commitMessage(
+          "test(auth): reject invalid credentials",
+          "- Verify the login endpoint rejects invalid credentials.",
+        ),
+      },
+      {
+        files: [{ path: "src/cli/prompts.ts" }],
+        message: commitMessage(
+          "feat(cli): add review prompts",
+          "- Show interactive prompts during manual review.",
+        ),
+      },
+      {
+        files: [{ path: "docs/cli-prompts.md" }],
+        message: commitMessage(
+          "docs(cli): explain prompt walkthrough",
+          "- Explain the interactive review walkthrough for operators.",
+        ),
+      },
+      {
+        files: [{ path: "src/cache/store.ts" }],
+        message: commitMessage(
+          "feat(cache): add persisted store",
+          "- Persist cache state between planner runs.",
+        ),
+      },
+      {
+        files: [{ path: "tests/cache/store.test.ts" }],
+        message: commitMessage(
+          "test(cache): preserve store snapshots",
+          "- Verify the persisted store restores its last snapshot.",
+        ),
+      },
+      {
+        files: [{ path: "src/tokens/buffer.ts" }],
+        message: commitMessage(
+          "feat(tokens): add buffer tracking",
+          "- Track the planner token buffer budget.",
+        ),
+      },
+      {
+        files: [{ path: "docs/tokens-buffer.md" }],
+        message: commitMessage(
+          "docs(tokens): outline budget heuristics",
+          "- Describe the token budget heuristics for planner buffering.",
+        ),
+      },
+      {
+        files: [{ path: "src/overlap/resolver.ts" }],
+        message: commitMessage(
+          "feat(overlap): add resolver flow",
+          "- Resolve ownership across overlapping changes.",
+        ),
+      },
+      {
+        files: [{ path: "tests/overlap/resolver.test.ts" }],
+        message: commitMessage(
+          "test(overlap): enforce owner tiebreaks",
+          "- Verify overlap ownership uses deterministic tie breaking.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      groups.map((group) => makeFile(group.files[0]!.path)),
+      groups,
+    );
+    const payload = calls.chat[0]?.payload as {
+      messages?: { content?: string; role?: string }[];
+    };
+    const userPrompt = payload.messages?.find(
+      (message) => message.role === "user",
+    )?.content;
+
+    expect(calls.chat).toHaveLength(1);
+    expect(userPrompt).toContain("Cluster these 10 commits into semantic groups.");
+    expect(result.length).toBeGreaterThan(3);
+    expect(result.length).toBeLessThan(10);
+  });
+
+  test("finalizePlannedGroups emits consolidation noop when a pass makes no reduction", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidation-noop-trace"),
         model: "gpt-4o-mini",
       },
     });
@@ -2182,13 +2363,18 @@ describe("ai coverage", () => {
               message: {
                 content: JSON.stringify([
                   {
-                    files: [
-                      { hunks: [0, 1], path: "src/commit-planning/orchestration.ts" },
-                      { path: "src/commit-planning/openai-client.ts" },
-                      { path: "src/commit-planning/token-estimation.ts" },
-                    ],
-                    message:
-                      "feat(ai): track stage costs and expose output hooks\n\n- Combine telemetry and planning-cost work into one pipeline commit.",
+                    files: [{ path: "src/auth/login.ts" }],
+                    message: commitMessage(
+                      "feat(auth): add login endpoint",
+                      "- Wire the login handler into the auth flow.",
+                    ),
+                  },
+                  {
+                    files: [{ path: "tests/auth/login.test.ts" }],
+                    message: commitMessage(
+                      "test(auth): cover login flow",
+                      "- Verify the login endpoint accepts valid credentials.",
+                    ),
                   },
                 ]),
               },
@@ -2197,6 +2383,59 @@ describe("ai coverage", () => {
         },
       ],
     });
+    const observer = await import("../src/commit-planning/openai-client.js");
+    const events: { content: string; kind?: string; stage: string }[] = [];
+    observer.setAiOutputObserver((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?consolidation-noop-trace-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/auth/login.ts" }],
+        message: commitMessage(
+          "feat(auth): add login endpoint",
+          "- Wire the login handler into the auth flow.",
+        ),
+      },
+      {
+        files: [{ path: "tests/auth/login.test.ts" }],
+        message: commitMessage(
+          "test(auth): cover login flow",
+          "- Verify the login endpoint accepts valid credentials.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      groups.map((group) => makeFile(group.files[0]!.path)),
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toEqual(groups);
+    expect(
+      events.some((event) => event.content.includes('"decision":"consolidation-noop"')),
+    ).toBe(true);
+    expect(
+      events.some((event) => event.content.includes('"decision":"consolidation-pass"')),
+    ).toBe(false);
+    observer.setAiOutputObserver(null);
+  });
+
+  test("finalizePlannedGroups keeps separate-hunk workflow neighbors split when action and artifact diverge", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("same-file-hunks-reason-split"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
     const { finalizePlannedGroups } = await import(
       new URL(
         `../src/commit-planning/grouping/index.js?same-file-hunks-reason-split-${Math.random()}`,
@@ -2239,7 +2478,7 @@ describe("ai coverage", () => {
       groups,
     );
 
-    expect(calls.chat).toHaveLength(1);
+    expect(calls.chat).toHaveLength(0);
     expect(result).toEqual(groups);
   });
 
@@ -2315,7 +2554,7 @@ describe("ai coverage", () => {
       groups,
     );
 
-    expect(calls.chat).toHaveLength(1);
+    expect(calls.chat).toHaveLength(0);
     expect(result).toEqual(groups);
   });
 
@@ -3340,8 +3579,9 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("premerge-style");
     const result = await ai.planCommits(allFiles, formatFileDiff);
 
-    // grouping + 1 consolidation = 2 calls (no cluster needed)
-    expect(calls.chat).toHaveLength(2);
+    // grouping only: deterministic pre-merge drops the plan to two commits and
+    // the narrower merge gate skips follow-up consolidation.
+    expect(calls.chat).toHaveLength(1);
     expect(result).toHaveLength(2);
     const styleCommit = result.find(
       (c: { files: unknown[]; message: string }) => c.message.includes("style"),
@@ -3430,8 +3670,9 @@ describe("ai coverage", () => {
     const ai = await importFreshAi("premerge-dup-hunks");
     const result = await ai.planCommits(allFiles, formatFileDiff);
 
-    // grouping + consolidation = 2 calls (no clustering needed for 2 commits)
-    expect(calls.chat).toHaveLength(2);
+    // grouping only: deterministic pre-merge drops the plan to two commits and
+    // the narrower merge gate skips follow-up consolidation.
+    expect(calls.chat).toHaveLength(1);
     // Pre-merge collapsed the 2 style commits despite duplicate hunk 0
     expect(result).toHaveLength(2);
   });

@@ -147,6 +147,7 @@ export function getEventFrameSeverity(
   }
   if (
     decision?.endsWith("-retry-scheduled") ||
+    decision === "cluster-stop" ||
     decision === "consolidation-stop"
   ) {
     return "warning";
@@ -281,8 +282,14 @@ function describePlannerDecision(parsed: unknown): null | string {
     case "cluster-pass": {
       return "Cluster pass";
     }
+    case "cluster-stop": {
+      return "Cluster stop";
+    }
     case "consolidation-fallback": {
       return "Consolidation fallback";
+    }
+    case "consolidation-noop": {
+      return "Consolidation noop";
     }
     case "consolidation-pass": {
       return "Consolidation pass";

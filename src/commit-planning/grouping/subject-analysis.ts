@@ -2,6 +2,10 @@ import {
   parseConventionalSubject,
   sanitizeSubjectWords,
 } from "../../commit-messages/subject-parser.js";
+import {
+  groupsShareCoverage,
+  groupsSharePaths,
+} from "./commit-coverage.js";
 import { type PlannedCommit, type SubjectWords } from "./grouping-types.js";
 
 /** Stop words are excluded so merge heuristics stay anchored on intent. */
@@ -60,11 +64,19 @@ export function filterSignificantWords(
 }
 
 /**
- * Returns the top-level areas touched by a commit to detect broad support
- * spillover.
+ * Returns specific file-family labels touched by a commit so support work only
+ * pulls toward nearby implementation changes.
  */
 export function getCommitAreas(group: PlannedCommit): Set<string> {
-  return new Set(group.files.map((file) => getTopLevelArea(file.path)));
+  const areas = new Set<string>();
+
+  for (const file of group.files) {
+    for (const area of getPathAreas(file.path)) {
+      areas.add(area);
+    }
+  }
+
+  return areas;
 }
 
 /**
@@ -104,16 +116,6 @@ export function hasPotentialMergeSignals(groups: PlannedCommit[]): boolean {
     parseSubjectWords(group.message.split("\n")[0] ?? ""),
   );
   const areas = groups.map((group) => getCommitAreas(group));
-  const seenPaths = new Set<string>();
-
-  for (const group of groups) {
-    for (const file of group.files) {
-      if (seenPaths.has(file.path)) {
-        return true;
-      }
-      seenPaths.add(file.path);
-    }
-  }
 
   for (let leftIndex = 0; leftIndex < groups.length; leftIndex++) {
     for (
@@ -121,9 +123,20 @@ export function hasPotentialMergeSignals(groups: PlannedCommit[]): boolean {
       rightIndex < groups.length;
       rightIndex++
     ) {
+      if (groupsShareCoverage(groups[leftIndex], groups[rightIndex])) {
+        return true;
+      }
+
       if (
         subjects[leftIndex].scope &&
         subjects[leftIndex].scope === subjects[rightIndex].scope
+      ) {
+        return true;
+      }
+
+      if (
+        groupsSharePaths(groups[leftIndex], groups[rightIndex]) &&
+        hasSharedPathMergeSignal(subjects[leftIndex], subjects[rightIndex])
       ) {
         return true;
       }
@@ -142,6 +155,15 @@ export function hasPotentialMergeSignals(groups: PlannedCommit[]): boolean {
           if (areas[rightIndex].has(area)) {
             return true;
           }
+        }
+
+        if (
+          groupsShareFeatureDirectory(
+            groups[leftIndex],
+            groups[rightIndex],
+          )
+        ) {
+          return true;
         }
       }
     }
@@ -194,7 +216,101 @@ export function wordsRelated(left: string, right: string): boolean {
   return longer.startsWith(shorter);
 }
 
-function getTopLevelArea(path: string): string {
-  const [head, tail] = path.split("/");
-  return tail ? head : "(root)";
+/** Counts shared leading directory segments between two file paths. */
+function countSharedDirectorySegments(
+  leftDirectories: string[],
+  rightDirectories: string[],
+): number {
+  let sharedSegments = 0;
+
+  while (
+    sharedSegments < leftDirectories.length &&
+    sharedSegments < rightDirectories.length &&
+    leftDirectories[sharedSegments] === rightDirectories[sharedSegments]
+  ) {
+    sharedSegments++;
+  }
+
+  return sharedSegments;
+}
+
+/** Returns directory segments without the file name for feature-family checks. */
+function getDirectorySegments(path: string): string[] {
+  const segments = path.split("/");
+  return segments.slice(0, -1);
+}
+
+/**
+ * Path areas stay close to the owning directory or file stem so shared `src`
+ * or `tests` folders alone do not trigger merge review.
+ */
+function getPathAreas(path: string): Set<string> {
+  const segments = path.split("/");
+  if (segments.length < 2) {
+    return new Set(["(root)"]);
+  }
+
+  const areas = new Set<string>();
+  const directory = segments.at(-2);
+  const basename = segments.at(-1) ?? "";
+  const stem = normalizePathStem(basename);
+
+  if (directory && directory !== "src" && directory !== "tests") {
+    areas.add(directory);
+  }
+  if (stem.length > 0) {
+    areas.add(stem);
+  }
+
+  return areas;
+}
+
+/**
+ * Shared feature-family prefixes must be deeper than broad buckets like `src`
+ * or `src/commit-planning` before they count as support merge evidence.
+ */
+function groupsShareFeatureDirectory(
+  left: PlannedCommit,
+  right: PlannedCommit,
+): boolean {
+  for (const leftFile of left.files) {
+    const leftDirectories = getDirectorySegments(leftFile.path);
+
+    for (const rightFile of right.files) {
+      if (
+        countSharedDirectorySegments(
+          leftDirectories,
+          getDirectorySegments(rightFile.path),
+        ) >= 3
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/** Same-file disjoint hunks are only merge-worthy when the subjects still align. */
+function hasSharedPathMergeSignal(
+  left: SubjectWords,
+  right: SubjectWords,
+): boolean {
+  if (left.scope && right.scope && scopesRelated(left.scope, right.scope)) {
+    return true;
+  }
+
+  if (hasHighWordOverlap(left.words, right.words)) {
+    return true;
+  }
+
+  return isSupportLikeType(left.type) || isSupportLikeType(right.type);
+}
+
+/** Normalizes file stems so test suffixes do not block support matching. */
+function normalizePathStem(basename: string): string {
+  return basename
+    .replace(/\.[^.]+$/u, "")
+    .replace(/\.(test|spec)$/u, "")
+    .replace(/^readme$/iu, "");
 }

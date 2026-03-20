@@ -77,7 +77,7 @@ export async function finalizePlannedGroups(
     return ordered;
   }
 
-  current = await clusterAndMerge(current, fileByPath);
+  current = await clusterAndMerge(current, fileByPath, fileSignals);
   let previousReduction = Number.POSITIVE_INFINITY;
 
   for (
@@ -220,6 +220,7 @@ async function callCluster(groups: PlannedCommit[]): Promise<null | number[][]> 
 async function clusterAndMerge(
   groups: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
+  fileSignals: Map<string, FileChangeSignals>,
 ): Promise<PlannedCommit[]> {
   let current = groups;
 
@@ -244,13 +245,41 @@ async function clusterAndMerge(
       break;
     }
 
+    const stabilized = splitWeakConsolidations(
+      current,
+      merged,
+      fileByPath,
+      fileSignals,
+    );
+    if (stabilized.length >= current.length) {
+      emitAiOutputEvent({
+        content: JSON.stringify({
+          clusterCount: clusters.length,
+          decision: "cluster-stop",
+          inputGroupCount: current.length,
+          mergedGroupCount: merged.length,
+          pass: pass + 1,
+          reason: "semantic-repartition-undid-merge",
+          repartitionedGroupCount: stabilized.length,
+        }),
+        durationMs: performance.now() - passStartedAtMs,
+        kind: "planner-decision",
+        stage: "cluster",
+        transport: "internal",
+      });
+      break;
+    }
+
     emitAiOutputEvent({
       content: JSON.stringify({
         clusterCount: clusters.length,
         decision: "cluster-pass",
         inputGroupCount: current.length,
-        mergedGroupCount: merged.length,
+        mergedGroupCount: stabilized.length,
         pass: pass + 1,
+        rawMergedGroupCount: merged.length,
+        repartitionedGroupCount:
+          stabilized.length > merged.length ? stabilized.length : undefined,
       }),
       durationMs: performance.now() - passStartedAtMs,
       kind: "planner-decision",
@@ -258,7 +287,7 @@ async function clusterAndMerge(
       transport: "internal",
     });
 
-    current = merged;
+    current = stabilized;
   }
 
   return current;
@@ -396,6 +425,22 @@ async function consolidateOnce(
         outputGroupCount: harmonized.length,
         reason: "semantic-repartition-would-undo-merge",
         repartitionedGroupCount: repartitioned.length,
+      }),
+      durationMs: performance.now() - startedAtMs,
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+    return null;
+  }
+
+  if (harmonized.length >= groups.length) {
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        decision: "consolidation-noop",
+        inputGroupCount: groups.length,
+        outputGroupCount: harmonized.length,
+        reason: "no-meaningful-reduction",
       }),
       durationMs: performance.now() - startedAtMs,
       kind: "planner-decision",
