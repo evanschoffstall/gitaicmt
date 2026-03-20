@@ -3,7 +3,7 @@
  *
  * These are the tests that would have caught the two bugs that shipped:
  *   Bug 1: stageGroupFiles ignored hunks and staged whole files
- *   Bug 2: mergeCommitsByFile stripped hunk arrays ("// Ignore hunks for simplicity")
+ *   Bug 2: resolveOverlappingCommits stripped hunk arrays ("// Ignore hunks for simplicity")
  *
  * All tests that touch the filesystem create isolated temp git repos and clean
  * up after themselves.  XDG_CONFIG_HOME is set to prevent the user's real
@@ -11,13 +11,13 @@
  */
 
 import { execSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { resetConfigCache } from "../src/application/config.js";
 import { stageGroupFiles } from "../src/cli/commit-group-staging.js";
-import { mergeCommitsByFile } from "../src/commit-planning/commit-plan-merge.js";
+import { resolveOverlappingCommits } from "../src/commit-planning/overlap-resolution.js";
 import { parseDiff } from "../src/git/diff.js";
 import {
   commitWithMessage,
@@ -446,7 +446,7 @@ describe("stageGroupFiles — hunk-level staging", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// End-to-end pipeline: mergeCommitsByFile → stageGroupFiles → commitWithMessage
+// End-to-end pipeline: resolveOverlappingCommits → stageGroupFiles → commitWithMessage
 // (THE TESTS THAT WOULD HAVE CAUGHT BOTH BUGS TOGETHER)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -474,8 +474,8 @@ describe("end-to-end commit pipeline", () => {
         },
       ];
 
-      // Bug 2 regression: mergeCommitsByFile must NOT merge these
-      const merged = mergeCommitsByFile(aiGroups);
+      // Bug 2 regression: resolveOverlappingCommits must NOT merge these
+      const merged = resolveOverlappingCommits(aiGroups);
       expect(merged).toHaveLength(2); // should stay separate
       expect(merged[0].files[0].hunks).toEqual([0]);
       expect(merged[1].files[0].hunks).toEqual([1]);
@@ -539,7 +539,7 @@ describe("end-to-end commit pipeline", () => {
         },
       ];
 
-      const merged = mergeCommitsByFile(aiGroups);
+      const merged = resolveOverlappingCommits(aiGroups);
       expect(merged).toHaveLength(1);
 
       stageGroupFiles(merged[0].files, fileMap, dir);
@@ -593,7 +593,7 @@ describe("end-to-end commit pipeline", () => {
         },
       ];
 
-      const merged = mergeCommitsByFile(aiGroups);
+      const merged = resolveOverlappingCommits(aiGroups);
       // These commits don't conflict: group 0 uses hunk 0 of a.ts, group 1 uses hunk 1
       expect(merged).toHaveLength(2);
 
