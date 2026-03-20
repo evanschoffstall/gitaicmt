@@ -180,6 +180,22 @@ similarity index 100%
 rename from old.txt
 rename to new.txt`;
 
+const SPACED_PATH_DIFF = `diff --git a/dir with space/file name.txt b/dir with space/file name.txt
+index abc1234..def5678 100644
+--- a/dir with space/file name.txt
++++ b/dir with space/file name.txt
+@@ -1 +1 @@
+-old
++new`;
+
+const QUOTED_UTF8_PATH_DIFF = `diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"
+index 5626abf..f719efd 100644
+--- "a/caf\\303\\251.txt"
++++ "b/caf\\303\\251.txt"
+@@ -1 +1 @@
+-one
++two`;
+
 // ═══════════════════════════════════════════════════════════════
 
 beforeEach(() => {
@@ -403,6 +419,24 @@ index abc1234..def5678 100644
 
       expect(files).toHaveLength(1);
       expect(files[0].path).toBe("src/index.ts");
+      expect(files[0].oldPath).toBeNull();
+      expect(files[0].hunks).toHaveLength(1);
+    });
+
+    test("parses file headers with spaces in the path", () => {
+      const files = parseDiff(SPACED_PATH_DIFF);
+
+      expect(files).toHaveLength(1);
+      expect(files[0].path).toBe("dir with space/file name.txt");
+      expect(files[0].oldPath).toBeNull();
+      expect(files[0].hunks).toHaveLength(1);
+    });
+
+    test("decodes Git-quoted UTF-8 paths", () => {
+      const files = parseDiff(QUOTED_UTF8_PATH_DIFF);
+
+      expect(files).toHaveLength(1);
+      expect(files[0].path).toBe("caf\u00e9.txt");
       expect(files[0].oldPath).toBeNull();
       expect(files[0].hunks).toHaveLength(1);
     });
@@ -644,6 +678,22 @@ describe("formatFileDiff", () => {
     expect(text).toContain('+export const VERSION = "1.0.0"');
   });
 
+  test("uses /dev/null headers for added files", () => {
+    const files = parseDiff(NEW_FILE_DIFF);
+    const text = formatFileDiff(files[0]);
+
+    expect(text).toContain("--- /dev/null");
+    expect(text).toContain("+++ src/utils.ts");
+  });
+
+  test("uses /dev/null headers for deleted files", () => {
+    const files = parseDiff(DELETED_FILE_DIFF);
+    const text = formatFileDiff(files[0]);
+
+    expect(text).toContain("--- old-file.js");
+    expect(text).toContain("+++ /dev/null");
+  });
+
   test("uses oldPath for renamed files", () => {
     const files = parseDiff(RENAMED_FILE_DIFF);
     const text = formatFileDiff(files[0]);
@@ -703,6 +753,15 @@ describe("buildPatch", () => {
     expect(patch).toContain("--- a/src/index.ts");
     expect(patch).toContain("+++ b/src/index.ts");
     expect(patch).toContain("@@");
+  });
+
+  test("quotes UTF-8 paths using Git's patch format", () => {
+    const files = parseDiff(QUOTED_UTF8_PATH_DIFF);
+    const patch = buildPatch(files[0]);
+
+    expect(patch).toContain('diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"');
+    expect(patch).toContain('--- "a/caf\\303\\251.txt"');
+    expect(patch).toContain('+++ "b/caf\\303\\251.txt"');
   });
 
   test("generates patch for renamed file", () => {

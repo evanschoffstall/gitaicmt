@@ -48,10 +48,33 @@ export interface FileDiff {
   status: "added" | "deleted" | "modified" | "renamed";
 }
 
-function buildDisplayHeaderLines(file: FileDiff): string[] {
+const DEV_NULL_PATH = "/dev/null";
+const DIFF_GIT_PREFIX = "diff --git ";
+const OLD_FILE_MARKER = "--- ";
+const NEW_FILE_MARKER = "+++ ";
+
+const GIT_QUOTED_PATH_ESCAPE_BYTES = {
+  '"': 0x22,
+  "\\": 0x5c,
+  a: 0x07,
+  b: 0x08,
+  f: 0x0c,
+  n: 0x0a,
+  r: 0x0d,
+  t: 0x09,
+  v: 0x0b,
+} as const;
+
+/** Build unified diff header lines for prompt/display output. */
+export function formatDiffHeaderLines(file: FileDiff): string[] {
+  const oldHeaderPath =
+    file.status === "added" ? DEV_NULL_PATH : (file.oldPath ?? file.path);
+  const newHeaderPath =
+    file.status === "deleted" ? DEV_NULL_PATH : file.path;
+
   return [
-    `--- ${file.oldPath ?? file.path}`,
-    `+++ ${file.path}`,
+    `--- ${oldHeaderPath}`,
+    `+++ ${newHeaderPath}`,
     ...(file.metadataLines ?? []),
   ];
 }
@@ -60,7 +83,6 @@ function buildDisplayHeaderLines(file: FileDiff): string[] {
 // Parser
 // ============================================================================
 
-const FILE_HEADER = /^diff --git (.+) (.+)$/;
 const HUNK_HEADER = /^@@ -([0-9,]+) \+([0-9,]+) @@/;
 const STATUS_PREFIXES = [
   "new file",
@@ -91,19 +113,21 @@ export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
   const lines: string[] = [];
   const oldPath = file.oldPath ?? file.path;
 
-  lines.push(`diff --git a/${oldPath} b/${file.path}`);
+  lines.push(
+    `diff --git ${formatGitPatchPath(oldPath, "a/")} ${formatGitPatchPath(file.path, "b/")}`,
+  );
   lines.push(...metadataLines);
 
   if (selectedHunks.length > 0) {
     if (file.status === "added") {
       lines.push("--- /dev/null");
-      lines.push(`+++ b/${file.path}`);
+      lines.push(`+++ ${formatGitPatchPath(file.path, "b/")}`);
     } else if (file.status === "deleted") {
-      lines.push(`--- a/${oldPath}`);
+      lines.push(`--- ${formatGitPatchPath(oldPath, "a/")}`);
       lines.push("+++ /dev/null");
     } else {
-      lines.push(`--- a/${oldPath}`);
-      lines.push(`+++ b/${file.path}`);
+      lines.push(`--- ${formatGitPatchPath(oldPath, "a/")}`);
+      lines.push(`+++ ${formatGitPatchPath(file.path, "b/")}`);
     }
   }
 
@@ -217,7 +241,7 @@ export function formatSelectedFileDiff(
   file: FileDiff,
   hunks?: DiffHunk[],
 ): string {
-  const parts = buildDisplayHeaderLines(file);
+  const parts = formatDiffHeaderLines(file);
   for (const hunk of hunks ?? file.hunks) {
     parts.push(hunk.header);
     parts.push(...hunk.lines);
@@ -296,6 +320,25 @@ export function parseDiff(raw: string): FileDiff[] {
 
     if (!current) continue;
 
+    const oldPathLine = parseUnifiedDiffPathLine(line, OLD_FILE_MARKER);
+    if (oldPathLine !== null) {
+      if (oldPathLine !== DEV_NULL_PATH) {
+        current.oldPath = oldPathLine;
+      }
+      continue;
+    }
+
+    const newPathLine = parseUnifiedDiffPathLine(line, NEW_FILE_MARKER);
+    if (newPathLine !== null) {
+      if (newPathLine !== DEV_NULL_PATH) {
+        current.path = newPathLine;
+        if (current.oldPath === current.path) {
+          current.oldPath = null;
+        }
+      }
+      continue;
+    }
+
     // Detect status from metadata lines
     if (line.startsWith("new file")) {
       current.status = "added";
@@ -307,7 +350,7 @@ export function parseDiff(raw: string): FileDiff[] {
       sawFileLevelChange = true;
     } else if (line.startsWith("rename from")) {
       current.status = "renamed";
-      const oldName = line.slice("rename from ".length).trim();
+      const oldName = normalizeDiffPath(line.slice("rename from ".length));
       if (oldName) current.oldPath = oldName;
       current.metadataLines?.push(line);
       sawFileLevelChange = true;
@@ -370,23 +413,284 @@ export function parseDiff(raw: string): FileDiff[] {
   return files;
 }
 
+/** Decode Git's C-style quoted diff paths, including octal-escaped UTF-8. */
+function decodeGitQuotedPath(path: string): string {
+  const bytes: number[] = [];
+  const content = path.slice(1, -1);
+
+  for (let index = 0; index < content.length; index++) {
+    const character = content.at(index);
+    if (character === undefined) {
+      continue;
+    }
+
+    if (character !== "\\") {
+      bytes.push(...Buffer.from(character));
+      continue;
+    }
+
+    const escaped = content.at(index + 1);
+    if (escaped === undefined) {
+      bytes.push(0x5c);
+      continue;
+    }
+
+    const escapeByte = getGitQuotedPathEscapeByte(escaped);
+    if (escapeByte !== undefined) {
+      bytes.push(escapeByte);
+      index++;
+      continue;
+    }
+
+    if (/[0-7]/u.test(escaped)) {
+      const octalDigits = (/^[0-7]{1,3}/u.exec(content
+        .slice(index + 1, index + 4)))?.[0];
+      if (octalDigits) {
+        bytes.push(Number.parseInt(octalDigits, 8));
+        index += octalDigits.length;
+        continue;
+      }
+    }
+
+    bytes.push(...Buffer.from(escaped));
+    index++;
+  }
+
+  return Buffer.from(bytes).toString("utf8");
+}
+
+/** Encode file paths so generated patches match Git's quoted-path format. */
+function encodeGitQuotedPath(path: string): string {
+  let needsQuoting = false;
+  let encodedPath = "";
+
+  for (const byte of Buffer.from(path)) {
+    if (byte === 0x22) {
+      encodedPath += '\\"';
+      needsQuoting = true;
+      continue;
+    }
+
+    if (byte === 0x5c) {
+      encodedPath += "\\\\";
+      needsQuoting = true;
+      continue;
+    }
+
+    if (byte === 0x09) {
+      encodedPath += "\\t";
+      needsQuoting = true;
+      continue;
+    }
+
+    if (byte === 0x0a) {
+      encodedPath += "\\n";
+      needsQuoting = true;
+      continue;
+    }
+
+    if (byte === 0x0d) {
+      encodedPath += "\\r";
+      needsQuoting = true;
+      continue;
+    }
+
+    if (byte >= 0x20 && byte <= 0x7e) {
+      encodedPath += String.fromCharCode(byte);
+      continue;
+    }
+
+    encodedPath += `\\${byte.toString(8).padStart(3, "0")}`;
+    needsQuoting = true;
+  }
+
+  return needsQuoting ? `"${encodedPath}"` : encodedPath;
+}
+
+function formatGitPatchPath(path: string, prefix: "a/" | "b/"): string {
+  return encodeGitQuotedPath(`${prefix}${path}`);
+}
+
+function getGitQuotedPathEscapeByte(character: string): number | undefined {
+  switch (character) {
+    case '"':
+    case "\\":
+    case "a":
+    case "b":
+    case "f":
+    case "n":
+    case "r":
+    case "t":
+    case "v":
+      return GIT_QUOTED_PATH_ESCAPE_BYTES[character];
+    default:
+      return undefined;
+  }
+}
+
+function normalizeDiffPath(rawPath: string): string {
+  const trimmedPath = rawPath.trim();
+  if (
+    trimmedPath.length >= 2 &&
+    trimmedPath.startsWith('"') &&
+    trimmedPath.endsWith('"')
+  ) {
+    return decodeGitQuotedPath(trimmedPath);
+  }
+
+  return trimmedPath;
+}
+
 /**
  * Parse a git diff file header, accepting either canonical a/b prefixes or no
  * prefixes when callers provide raw git output.
  */
 function parseFileHeader(line: string): null | { newPath: string; oldPath: string } {
-  const match = FILE_HEADER.exec(line);
-  if (!match) {
+  if (!line.startsWith(DIFF_GIT_PREFIX)) {
     return null;
   }
 
-  let [, oldPath, newPath] = match;
-  if (oldPath.startsWith("a/") && newPath.startsWith("b/")) {
-    oldPath = oldPath.slice(2);
-    newPath = newPath.slice(2);
+  const pair = splitDiffHeaderPaths(line.slice(DIFF_GIT_PREFIX.length));
+  if (!pair) {
+    return null;
   }
 
+  const [rawOldPath, rawNewPath] = pair;
+  const oldPath = stripCanonicalDiffPrefix(normalizeDiffPath(rawOldPath), "a/");
+  const newPath = stripCanonicalDiffPrefix(normalizeDiffPath(rawNewPath), "b/");
+
   return { newPath, oldPath };
+}
+
+function parseQuotedDiffHeaderPaths(
+  remainder: string,
+): [string, string] | null {
+  if (!remainder.startsWith('"')) {
+    return null;
+  }
+
+  const firstToken = readQuotedDiffPathToken(remainder, 0);
+  if (!firstToken) {
+    return null;
+  }
+
+  const separator = /^\s+/u.exec(remainder.slice(firstToken.nextIndex));
+  if (!separator) {
+    return null;
+  }
+
+  const secondStart = firstToken.nextIndex + separator[0].length;
+  const secondToken = readQuotedDiffPathToken(remainder, secondStart);
+  if (!secondToken) {
+    return null;
+  }
+
+  if (remainder.slice(secondToken.nextIndex).trim().length > 0) {
+    return null;
+  }
+
+  return [firstToken.token, secondToken.token];
+}
+
+function parseUnifiedDiffPathLine(line: string, marker: string): null | string {
+  if (!line.startsWith(marker)) {
+    return null;
+  }
+
+  const path = normalizeDiffPath(line.slice(marker.length));
+  if (path.length === 0) {
+    return null;
+  }
+
+  if (path === DEV_NULL_PATH) {
+    return path;
+  }
+
+  if (marker === OLD_FILE_MARKER) {
+    return stripCanonicalDiffPrefix(path, "a/");
+  }
+
+  if (marker === NEW_FILE_MARKER) {
+    return stripCanonicalDiffPrefix(path, "b/");
+  }
+
+  return path;
+}
+
+function readQuotedDiffPathToken(
+  text: string,
+  startIndex: number,
+): null | { nextIndex: number; token: string } {
+  if (text[startIndex] !== '"') {
+    return null;
+  }
+
+  let index = startIndex + 1;
+  let isEscaped = false;
+  while (index < text.length) {
+    const character = text[index];
+    if (!isEscaped && character === '"') {
+      return {
+        nextIndex: index + 1,
+        token: text.slice(startIndex, index + 1),
+      };
+    }
+
+    isEscaped = !isEscaped && character === "\\";
+    index++;
+  }
+
+  return null;
+}
+
+function splitDiffHeaderPaths(remainder: string): [string, string] | null {
+  const quotedPair = parseQuotedDiffHeaderPaths(remainder);
+  if (quotedPair) {
+    return quotedPair;
+  }
+
+  const prefixedPair = splitPrefixedDiffHeaderPaths(remainder);
+  if (prefixedPair) {
+    return prefixedPair;
+  }
+
+  const separatorIndex = remainder.indexOf(" ");
+  if (separatorIndex === -1) {
+    return null;
+  }
+
+  return [
+    remainder.slice(0, separatorIndex),
+    remainder.slice(separatorIndex + 1),
+  ];
+}
+
+function splitPrefixedDiffHeaderPaths(remainder: string): [string, string] | null {
+  if (remainder.startsWith("a/")) {
+    const separatorIndex = remainder.lastIndexOf(" b/");
+    if (separatorIndex > 0) {
+      return [
+        remainder.slice(0, separatorIndex),
+        remainder.slice(separatorIndex + 1),
+      ];
+    }
+  }
+
+  if (remainder.startsWith("b/")) {
+    const separatorIndex = remainder.lastIndexOf(" a/");
+    if (separatorIndex > 0) {
+      return [
+        remainder.slice(separatorIndex + 1),
+        remainder.slice(0, separatorIndex),
+      ];
+    }
+  }
+
+  return null;
+}
+
+function stripCanonicalDiffPrefix(path: string, prefix: "a/" | "b/"): string {
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 
 // ============================================================================
