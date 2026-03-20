@@ -652,7 +652,10 @@ function logTokenEstimate(
   }
 
   log(
-    `${DIM}estimated tokens: ~${formatCount(estimate.totalTokens)} across about ${formatCount(estimate.requestCount)} request(s), estimated peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`,
+    estimate.minimumRequestCount < estimate.requestCount ||
+      estimate.minimumTotalTokens < estimate.totalTokens
+      ? `${DIM}estimated tokens: baseline estimate ~${formatCount(estimate.minimumTotalTokens)} across ${formatCount(estimate.minimumRequestCount)} request(s); conservative upper bound ~${formatCount(estimate.totalTokens)} across about ${formatCount(estimate.requestCount)} request(s), estimated peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`
+      : `${DIM}estimated tokens: ~${formatCount(estimate.totalTokens)} across about ${formatCount(estimate.requestCount)} request(s), estimated peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`,
   );
 
   if (

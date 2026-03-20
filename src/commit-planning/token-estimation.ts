@@ -41,6 +41,8 @@ export interface TokenEstimate {
 }
 
 export interface TokenEstimateSummary {
+  minimumRequestCount: number;
+  minimumTotalTokens: number;
   peakRequestTokens: number;
   requestCount: number;
   totalInputTokens: number;
@@ -174,6 +176,10 @@ function combineSummaries(
 ): TokenEstimateSummary {
   return summaries.reduce<TokenEstimateSummary>(
     (combined, summary) => ({
+      minimumRequestCount:
+        combined.minimumRequestCount + summary.minimumRequestCount,
+      minimumTotalTokens:
+        combined.minimumTotalTokens + summary.minimumTotalTokens,
       peakRequestTokens: Math.max(
         combined.peakRequestTokens,
         summary.peakRequestTokens,
@@ -189,6 +195,8 @@ function combineSummaries(
 
 function emptySummary(): TokenEstimateSummary {
   return {
+    minimumRequestCount: 0,
+    minimumTotalTokens: 0,
     peakRequestTokens: 0,
     requestCount: 0,
     totalInputTokens: 0,
@@ -335,16 +343,21 @@ function estimatePlanOperationDetails(
         (total, detail) => total + detail.estimatedGroupCount,
         0,
       );
-      const summaries = batchDetails.map((detail) => detail.summary);
+      const lowerBoundSummary = combineSummaries(
+        batchDetails.map((detail) => detail.summary),
+      );
+      const summaries = [lowerBoundSummary];
       if (includeFollowUpEstimates) {
         summaries.push(
           ...estimatePlanFollowUpSummaries(allFiles, estimatedGroupCount, cfg),
         );
       }
 
+      const summary = combineSummaries(summaries);
+
       return {
         estimatedGroupCount,
-        summary: combineSummaries(summaries),
+        summary: withLowerBound(summary, lowerBoundSummary),
       };
     }
   }
@@ -355,20 +368,22 @@ function estimatePlanOperationDetails(
   );
 
   const estimatedGroupCount = estimateLikelyPlanGroupCount(files);
+  const lowerBoundSummary = summarizeRequests([
+    estimateCompletionTokens(
+      buildGroupingSystemPrompt(),
+      buildGroupingUserPrompt(files, formatFileDiff, promptContext),
+      groupingTokens,
+    ),
+  ]);
+  const followUpSummaries =
+    includeFollowUpEstimates
+      ? estimatePlanFollowUpSummaries(files, estimatedGroupCount, cfg)
+      : [];
+  const summary = combineSummaries([lowerBoundSummary, ...followUpSummaries]);
+
   return {
     estimatedGroupCount,
-    summary: combineSummaries([
-      summarizeRequests([
-        estimateCompletionTokens(
-          buildGroupingSystemPrompt(),
-          buildGroupingUserPrompt(files, formatFileDiff, promptContext),
-          groupingTokens,
-        ),
-      ]),
-      ...(includeFollowUpEstimates
-        ? estimatePlanFollowUpSummaries(files, estimatedGroupCount, cfg)
-        : []),
-    ]),
+    summary: withLowerBound(summary, lowerBoundSummary),
   };
 }
 
@@ -380,6 +395,8 @@ function getTopLevelArea(path: string): string {
 function summarizeRequests(requests: TokenEstimate[]): TokenEstimateSummary {
   return requests.reduce<TokenEstimateSummary>(
     (summary, request) => ({
+      minimumRequestCount: summary.minimumRequestCount + 1,
+      minimumTotalTokens: summary.minimumTotalTokens + request.totalTokens,
       peakRequestTokens: Math.max(
         summary.peakRequestTokens,
         request.totalTokens,
@@ -391,4 +408,15 @@ function summarizeRequests(requests: TokenEstimate[]): TokenEstimateSummary {
     }),
     emptySummary(),
   );
+}
+
+function withLowerBound(
+  summary: TokenEstimateSummary,
+  lowerBoundSummary: TokenEstimateSummary,
+): TokenEstimateSummary {
+  return {
+    ...summary,
+    minimumRequestCount: lowerBoundSummary.requestCount,
+    minimumTotalTokens: lowerBoundSummary.totalTokens,
+  };
 }

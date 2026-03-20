@@ -77,6 +77,8 @@ describe("ai token estimation", () => {
     );
 
     expect(estimate.requestCount).toBeGreaterThan(1);
+    expect(estimate.minimumRequestCount).toBeLessThan(estimate.requestCount);
+    expect(estimate.minimumTotalTokens).toBeLessThan(estimate.totalTokens);
     expect(estimate.totalTokens).toBeGreaterThan(estimate.peakRequestTokens);
     expect(estimate.totalOutputTokens).toBeGreaterThanOrEqual(
       2 * DEFAULTS.openai.maxTokens,
@@ -100,5 +102,34 @@ describe("ai token estimation", () => {
     );
 
     expect(estimate.requestCount).toBeGreaterThan(2);
+  });
+
+  test("tracks a lower-bound estimate separately from conservative follow-up passes", () => {
+    const files = [
+      makeFileDiff("src/commit-planning/grouping/subject-analysis.ts"),
+      makeFileDiff("src/commit-planning/grouping/group-finalization.ts", 3),
+      makeFileDiff("src/cli/verbose-rendering/block-render.ts"),
+      makeFileDiff("tests/ai-coverage.test.ts", 7),
+      makeFileDiff("tests/verbose-output.test.ts"),
+    ];
+
+    const estimate = estimatePlanOperationTokens(
+      files,
+      (file) =>
+        [
+          `--- ${file.path}`,
+          `+++ ${file.path}`,
+          ...file.hunks.flatMap((hunk) => [hunk.header, ...hunk.lines]),
+        ].join("\n"),
+      DEFAULTS,
+    );
+
+    expect(estimate.minimumRequestCount).toBeGreaterThan(0);
+    expect(estimate.minimumRequestCount).toBeLessThanOrEqual(
+      estimate.requestCount,
+    );
+    expect(estimate.minimumTotalTokens).toBeLessThanOrEqual(
+      estimate.totalTokens,
+    );
   });
 });

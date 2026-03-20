@@ -1,6 +1,7 @@
 import { execSync, spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -360,8 +361,20 @@ describe("CLI", () => {
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
       );
-      writeFileSync(join(dir, "test.txt"), "hello\nworld\nmore\ntext\n");
-      execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
+      mkdirSync(join(dir, "src", "auth"), { recursive: true });
+      mkdirSync(join(dir, "tests", "auth"), { recursive: true });
+      mkdirSync(join(dir, "scripts"), { recursive: true });
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      mkdirSync(join(dir, "src", "cache"), { recursive: true });
+      writeFileSync(join(dir, "src", "auth", "login.ts"), "export const login = true;\n");
+      writeFileSync(join(dir, "tests", "auth", "login.test.ts"), "export const loginTest = true;\n");
+      writeFileSync(join(dir, "scripts", "check.ts"), "export const check = true;\n");
+      writeFileSync(join(dir, "docs", "auth.md"), "# auth\n");
+      writeFileSync(join(dir, "src", "cache", "store.ts"), "export const store = true;\n");
+      execSync("git add src/auth/login.ts tests/auth/login.test.ts scripts/check.ts docs/auth.md src/cache/store.ts", {
+        cwd: dir,
+        stdio: "pipe",
+      });
 
       const { exitCode, stderr } = run("gen", {
         cwd: dir,
@@ -394,8 +407,9 @@ describe("CLI", () => {
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
       );
-      writeFileSync(join(dir, "test.txt"), "hello\nworld\nmore\ntext\n");
-      execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
+      writeFileSync(join(dir, "test-a.ts"), "export const a = 1;\n");
+      writeFileSync(join(dir, "test-b.ts"), "export const b = 2;\n");
+      execSync("git add test-a.ts test-b.ts", { cwd: dir, stdio: "pipe" });
 
       const { exitCode, stderr } = run("gen --no-token-check", {
         cwd: dir,
@@ -463,8 +477,15 @@ describe("CLI", () => {
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
       );
-      writeFileSync(join(dir, "test.txt"), "hello\nworld\nmore\ntext\n");
-      execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
+      writeFileSync(join(dir, "test-a.ts"), "export const a = 1;\n");
+      writeFileSync(join(dir, "test-b.ts"), "export const b = 2;\n");
+      writeFileSync(join(dir, "test-c.ts"), "export const c = 3;\n");
+      writeFileSync(join(dir, "test-d.ts"), "export const d = 4;\n");
+      writeFileSync(join(dir, "test-e.ts"), "export const e = 5;\n");
+      execSync("git add test-a.ts test-b.ts test-c.ts test-d.ts test-e.ts", {
+        cwd: dir,
+        stdio: "pipe",
+      });
 
       const { exitCode, stderr } = run("plan", {
         cwd: dir,
