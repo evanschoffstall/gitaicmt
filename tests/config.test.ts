@@ -310,6 +310,22 @@ describe("config", () => {
       rmSync(firstDir, { recursive: true });
       rmSync(secondDir, { recursive: true });
     });
+
+    test("loadConfig returns defensive copies so caller mutation does not poison the cache", () => {
+      const dir = makeTmpDir();
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ openai: { model: "immutable-model" } }),
+      );
+
+      const firstConfig = loadConfig(dir);
+      firstConfig.openai.model = "mutated-by-caller";
+
+      const secondConfig = loadConfig(dir);
+      expect(secondConfig.openai.model).toBe("immutable-model");
+
+      rmSync(dir, { recursive: true });
+    });
   });
 
   // ───── initConfig ─────
@@ -398,6 +414,18 @@ describe("config", () => {
       const cfg = loadConfig(dir);
 
       expect(cfg.analysis.tokenWarningThreshold).toBe(12345);
+
+      rmSync(dir, { recursive: true });
+    });
+
+    test("reports precise field paths for schema validation failures", () => {
+      const dir = makeTmpDir();
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ analysis: { chunkSize: "fast" } }),
+      );
+
+      expect(() => loadConfig(dir)).toThrow(/analysis\.chunkSize/u);
 
       rmSync(dir, { recursive: true });
     });

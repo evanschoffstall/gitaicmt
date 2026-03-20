@@ -4,6 +4,7 @@
  * Extracted from command-line-interface.ts so tests can import this module
  * without triggering command-line-interface.ts's unconditional `main()` invocation.
  */
+import { ValidationError } from "../application/errors.js";
 import { buildPatch, type FileDiff } from "../git/diff.js";
 import { stageFiles, stagePatch } from "../git/operations.js";
 
@@ -40,25 +41,12 @@ export function stageGroupFiles(
     // SECURITY: Validate that all paths exist in the original diff
     const file = originalFiles.get(fileRef.path);
     if (!file) {
-      throw new Error(
+      throw new ValidationError(
         `AI returned invalid file path not in original diff: ${fileRef.path}`,
       );
     }
 
-    if (fileRef.hunks && fileRef.hunks.length > 0) {
-      // SECURITY: Validate hunk indices are within bounds
-      for (const hunkIndex of fileRef.hunks) {
-        if (hunkIndex < 0 || hunkIndex >= file.hunks.length) {
-          throw new Error(
-            `AI returned out-of-bounds hunk index ${String(hunkIndex)} for ${fileRef.path} (max: ${String(file.hunks.length - 1)})`,
-          );
-        }
-      }
-      entries.push({ file, hunkIndices: fileRef.hunks });
-    } else {
-      // Whole-file: use all hunks so we never accidentally pick up unstaged changes
-      entries.push({ file, hunkIndices: file.hunks.map((_, i) => i) });
-    }
+    entries.push({ file, hunkIndices: getStageableHunkIndexes(fileRef, file) });
   }
 
   // Stage all entries via patch (git apply --cached)
@@ -84,6 +72,32 @@ export function stageGroupFiles(
       throw err;
     }
   }
+}
+
+function getStageableHunkIndexes(
+  fileRef: PlannedCommitFile,
+  file: FileDiff,
+): number[] {
+  if (!fileRef.hunks || fileRef.hunks.length === 0) {
+    return file.hunks.map((_, index) => index);
+  }
+
+  const uniqueHunkIndexes = new Set<number>();
+  for (const hunkIndex of fileRef.hunks) {
+    if (!Number.isInteger(hunkIndex)) {
+      throw new ValidationError(
+        `AI returned non-integer hunk index ${String(hunkIndex)} for ${fileRef.path}`,
+      );
+    }
+    if (hunkIndex < 0 || hunkIndex >= file.hunks.length) {
+      throw new ValidationError(
+        `AI returned out-of-bounds hunk index ${String(hunkIndex)} for ${fileRef.path} (max: ${String(file.hunks.length - 1)})`,
+      );
+    }
+    uniqueHunkIndexes.add(hunkIndex);
+  }
+
+  return [...uniqueHunkIndexes].sort((left, right) => left - right);
 }
 
 function log(msg: string) {

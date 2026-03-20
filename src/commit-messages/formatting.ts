@@ -1,4 +1,5 @@
 import { ValidationError } from "../application/errors.js";
+import { formatDiffHeaderLines } from "../git/diff.js";
 
 type FileDiff = import("../git/diff.js").FileDiff;
 
@@ -10,11 +11,7 @@ export function formatLabeledDiff(
     return formatFileDiff(file);
   }
 
-  const parts: string[] = [
-    `--- ${file.oldPath ?? file.path}`,
-    `+++ ${file.path}`,
-    ...(file.metadataLines ?? []),
-  ];
+  const parts: string[] = [...formatDiffHeaderLines(file)];
   for (let i = 0; i < file.hunks.length; i++) {
     const hunk = file.hunks[i];
     parts.push(`[Hunk ${formatScalar(i)}] ${hunk.header}`);

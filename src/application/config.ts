@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { ZodError } from "zod";
 
 import { type Config, ConfigSchema } from "./config-schema.js";
 import { ConfigError } from "./errors.js";
@@ -89,12 +90,13 @@ export function loadConfig(cwd?: string): Config {
   const dir = resolve(cwd ?? process.cwd());
   const cached = configCache.get(dir);
   if (cached) {
-    return cached;
+    return structuredClone(cached);
   }
 
-  let merged: Record<string, unknown> = {
-    ...(DEFAULTS as unknown as Record<string, unknown>),
-  };
+  let merged: Record<string, unknown> = structuredClone(DEFAULTS) as Record<
+    string,
+    unknown
+  >;
 
   // 1. Global config
   const globalRaw = readJsonConfig(globalConfigPath());
@@ -123,15 +125,16 @@ export function loadConfig(cwd?: string): Config {
   // 5. Validate with Zod schema
   try {
     const parsedConfig = ConfigSchema.parse(merged);
-    configCache.set(dir, parsedConfig);
-    return parsedConfig;
+    configCache.set(dir, structuredClone(parsedConfig));
+    return structuredClone(parsedConfig);
   } catch (err: unknown) {
-    if (err && typeof err === "object" && "errors" in err) {
-      const zodErr = err as {
-        errors: { message: string; path: string[] }[];
-      };
-      const errors = zodErr.errors
-        .map((e) => `  - ${e.path.join(".")}: ${e.message}`)
+    if (err instanceof ZodError) {
+      const errors = err.issues
+        .map((issue) => {
+          const path = issue.path.join(".");
+          const label = path.length > 0 ? path : "(root)";
+          return `  - ${label}: ${issue.message}`;
+        })
         .join("\n");
       throw new ConfigError(`Configuration validation failed:\n${errors}`);
     }
