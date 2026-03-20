@@ -2,6 +2,7 @@ import { type Config } from "../application/config.js";
 import {
     CLUSTERING_THRESHOLD,
     GROUPING_BASE_TOKENS,
+  MAX_CONSOLIDATION_PASSES,
     MIN_COMMIT_MESSAGE_TOKENS,
     MIN_GROUPING_TOKENS,
     TOKENS_PER_FILE,
@@ -31,6 +32,7 @@ type PlannedCommit = import("./types.js").PlannedCommit;
 
 const REQUEST_OVERHEAD_TOKENS = 24;
 const CHARS_PER_TOKEN = 4;
+const REQUEST_ESTIMATE_SAFETY_FACTOR = 1.12;
 
 export interface TokenEstimate {
   inputTokens: number;
@@ -57,9 +59,10 @@ export function estimateCompletionTokens(
     REQUEST_OVERHEAD_TOKENS;
 
   return {
-    inputTokens,
+    inputTokens: Math.ceil(inputTokens * REQUEST_ESTIMATE_SAFETY_FACTOR),
     outputTokens,
-    totalTokens: inputTokens + outputTokens,
+    totalTokens:
+      Math.ceil(inputTokens * REQUEST_ESTIMATE_SAFETY_FACTOR) + outputTokens,
   };
 }
 
@@ -203,7 +206,8 @@ function estimateLikelyConsolidationPassCount(groupCount: number): number {
     remainingGroups = Math.max(1, Math.ceil(remainingGroups / 2));
   }
 
-  return passCount;
+  const bufferedPassCount = groupCount >= 5 ? passCount + 1 : passCount;
+  return Math.min(bufferedPassCount, MAX_CONSOLIDATION_PASSES);
 }
 
 function estimateLikelyPlanGroupCount(files: FileDiff[]): number {

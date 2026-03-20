@@ -9,6 +9,8 @@ export function validateAndNormalizeGrouping(
   raw: unknown,
   fileByPath: Map<string, FileDiff>,
 ): PlannedCommit[] {
+  const pathResolver = buildFilePathResolver(fileByPath);
+
   if (!Array.isArray(raw)) {
     throw new ValidationError(
       `AI grouping response is not an array. Got: ${typeof raw}`,
@@ -49,9 +51,10 @@ export function validateAndNormalizeGrouping(
         `Commit group ${formatScalar(i)} has empty 'files' array`,
       );
     }
-    if (group.files.length > 100) {
+    const maximumRawFileEntries = getMaximumRawFileEntries(fileByPath.size);
+    if (group.files.length > maximumRawFileEntries) {
       throw new ValidationError(
-        `Commit group ${formatScalar(i)} has suspiciously many files (${formatScalar(group.files.length)})`,
+        `Commit group ${formatScalar(i)} has suspiciously many file entries (${formatScalar(group.files.length)} > ${formatScalar(maximumRawFileEntries)})`,
       );
     }
 
@@ -72,35 +75,16 @@ export function validateAndNormalizeGrouping(
     }
 
     const normalizedFiles: PlannedCommitFile[] = [];
-    for (const fileEntry of group.files) {
-      if (!isValidFileEntry(fileEntry, fileByPath)) {
-        continue;
-      }
-
-      if (typeof fileEntry === "string") {
-        normalizedFiles.push({ path: fileEntry });
-        continue;
-      }
-
-      const entry = fileEntry as { hunks?: number[]; path: string };
-      const file = fileByPath.get(entry.path);
-      if (!file) {
-        continue;
-      }
-
-      if (entry.hunks && entry.hunks.length > 0) {
-        const validHunks = entry.hunks.filter(
-          (hunk) => hunk >= 0 && hunk < file.hunks.length,
-        );
-        normalizedFiles.push(
-          validHunks.length > 0
-            ? { hunks: validHunks, path: entry.path }
-            : { path: entry.path },
-        );
-        continue;
-      }
-
-      normalizedFiles.push({ path: entry.path });
+    for (let fileIndex = 0; fileIndex < group.files.length; fileIndex++) {
+      normalizedFiles.push(
+        normalizeFileEntry(
+          group.files[fileIndex],
+          fileByPath,
+          pathResolver,
+          i,
+          fileIndex,
+        ),
+      );
     }
 
     const mergedFiles = mergeDuplicateFileEntries(normalizedFiles, fileByPath);
@@ -124,35 +108,52 @@ export function validateAndNormalizeGrouping(
   return groups;
 }
 
-function isValidFileEntry(
-  fileEntry: unknown,
+function buildFilePathResolver(
   fileByPath: Map<string, FileDiff>,
-): fileEntry is PlannedCommitFile {
-  if (typeof fileEntry === "string") {
-    return fileByPath.has(fileEntry);
-  }
-  if (!fileEntry || typeof fileEntry !== "object") {
-    return false;
+): Map<string, string> {
+  const resolver = new Map<string, string>();
+  const files = [...fileByPath.values()];
+
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
+    const canonicalPath = file.path;
+    const alias = `F${String(index + 1)}`;
+
+    resolver.set(canonicalPath, canonicalPath);
+    resolver.set(alias, canonicalPath);
+    resolver.set(`${alias}: ${canonicalPath}`, canonicalPath);
+
+    if (file.oldPath && !resolver.has(file.oldPath)) {
+      resolver.set(file.oldPath, canonicalPath);
+      resolver.set(`${alias}: ${file.oldPath}`, canonicalPath);
+    }
   }
 
-  const entry = fileEntry as { hunks?: unknown; path?: unknown };
-  if (typeof entry.path !== "string" || !fileByPath.has(entry.path)) {
-    return false;
-  }
-  if (entry.hunks === undefined) {
-    return true;
-  }
-  if (!Array.isArray(entry.hunks)) {
-    return false;
-  }
+  return resolver;
+}
 
-  const file = fileByPath.get(entry.path);
-  if (!file) {
-    return false;
-  }
-  return entry.hunks.every(
-    (hunk) => typeof hunk === "number" && hunk >= 0 && hunk < file.hunks.length,
+/**
+ * Allow some duplication in raw AI output while still rejecting obviously
+ * malformed groups that explode far past the available file set.
+ */
+function getMaximumRawFileEntries(availableFileCount: number): number {
+  return Math.max(availableFileCount * 4, availableFileCount + 32);
+}
+
+/**
+ * Accept only integer hunk indices inside the known range for a file.
+ */
+function isValidHunkIndex(hunk: unknown, file: FileDiff): hunk is number {
+  return (
+    typeof hunk === "number" &&
+    Number.isInteger(hunk) &&
+    hunk >= 0 &&
+    hunk < file.hunks.length
   );
+}
+
+function isWholeFileHunkSelector(hunks: unknown): boolean {
+  return typeof hunks === "string" && hunks.trim().toLowerCase() === "all";
 }
 
 /**
@@ -207,4 +208,94 @@ function mergeDuplicateFileEntries(
       path,
     };
   });
+}
+
+function normalizeFileEntry(
+  fileEntry: unknown,
+  fileByPath: Map<string, FileDiff>,
+  pathResolver: Map<string, string>,
+  groupIndex: number,
+  fileIndex: number,
+): PlannedCommitFile {
+  if (typeof fileEntry === "string") {
+    const resolvedPath = resolveKnownPath(fileEntry, pathResolver);
+    if (!resolvedPath) {
+      throw new ValidationError(
+        `Commit group ${formatScalar(groupIndex)} file entry ${formatScalar(fileIndex)} references unknown path ${JSON.stringify(fileEntry)}`,
+      );
+    }
+    return { path: resolvedPath };
+  }
+  if (!fileEntry || typeof fileEntry !== "object") {
+    throw new ValidationError(
+      `Commit group ${formatScalar(groupIndex)} file entry ${formatScalar(fileIndex)} is not a valid object`,
+    );
+  }
+
+  const entry = fileEntry as { hunks?: unknown; path?: unknown };
+  if (typeof entry.path !== "string") {
+    throw new ValidationError(
+      `Commit group ${formatScalar(groupIndex)} file entry ${formatScalar(fileIndex)} has invalid path type ${JSON.stringify(typeof entry.path)}`,
+    );
+  }
+  const resolvedPath = resolveKnownPath(entry.path, pathResolver);
+  if (!resolvedPath) {
+    throw new ValidationError(
+      `Commit group ${formatScalar(groupIndex)} file entry ${formatScalar(fileIndex)} references unknown path ${JSON.stringify(entry.path)}`,
+    );
+  }
+  const file = fileByPath.get(resolvedPath);
+  if (!file) {
+    throw new ValidationError(
+      `Commit group ${formatScalar(groupIndex)} file entry ${formatScalar(fileIndex)} references unknown path ${JSON.stringify(entry.path)}`,
+    );
+  }
+  if (entry.hunks === undefined) {
+    return { path: resolvedPath };
+  }
+  if (isWholeFileHunkSelector(entry.hunks)) {
+    return { path: resolvedPath };
+  }
+  if (!Array.isArray(entry.hunks)) {
+    throw new ValidationError(
+      `Commit group ${formatScalar(groupIndex)} file entry ${formatScalar(fileIndex)} has invalid hunks field`,
+    );
+  }
+
+  if (!entry.hunks.every((hunk) => isValidHunkIndex(hunk, file))) {
+    throw new ValidationError(
+      `Commit group ${formatScalar(groupIndex)} file entry ${formatScalar(fileIndex)} has invalid hunk indices for ${JSON.stringify(entry.path)}`,
+    );
+  }
+
+  if (entry.hunks.length === 0) {
+    return { path: resolvedPath };
+  }
+
+  return {
+    hunks: [...new Set(entry.hunks)].sort((left, right) => left - right),
+    path: resolvedPath,
+  };
+}
+
+function resolveKnownPath(
+  rawPath: string,
+  pathResolver: Map<string, string>,
+): null | string {
+  const trimmedPath = rawPath.trim();
+  if (trimmedPath.length === 0) {
+    return null;
+  }
+
+  const direct = pathResolver.get(trimmedPath);
+  if (direct) {
+    return direct;
+  }
+
+  const aliasPrefixedPath = /^F\d+:\s+/u.exec(trimmedPath);
+  if (!aliasPrefixedPath) {
+    return null;
+  }
+
+  return pathResolver.get(trimmedPath.slice(aliasPrefixedPath[0].length)) ?? null;
 }
