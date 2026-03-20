@@ -165,6 +165,22 @@ describe("stageGroupFiles — validation errors", () => {
     }
   });
 
+  test("throws when hunk index is not an integer", () => {
+    const dir = makeGitDir();
+    try {
+      setupFileWithTwoHunks(dir, "app.ts");
+      const rawDiff = getDiff(dir, "app.ts");
+      const files = parseDiff(rawDiff);
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      expect(() =>
+        stageGroupFiles([{ hunks: [0.5], path: "app.ts" }], fileMap),
+      ).toThrow("non-integer hunk index 0.5");
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   test("empty group stages nothing (no error)", () => {
     const emptyMap = new Map();
     // Should not throw
@@ -317,6 +333,68 @@ describe("stageGroupFiles — hunk-level staging", () => {
     }
   });
 
+  test("whole-file staging preserves files whose paths contain spaces", () => {
+    const dir = makeGitDir();
+    try {
+      const relativePath = "dir with space/file name.ts";
+      mkdirSync(join(dir, "dir with space"), { recursive: true });
+      writeFileSync(join(dir, relativePath), "export const value = 1;\n");
+      execSync(`git add "${relativePath}" && git commit -m 'add spaced file'`, {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      writeFileSync(join(dir, relativePath), "export const value = 2;\n");
+
+      const rawDiff = getDiff(dir, relativePath);
+      const files = parseDiff(rawDiff);
+      expect(files).toHaveLength(1);
+      expect(files[0].path).toBe(relativePath);
+
+      const fileMap = new Map([[files[0].path, files[0]]]);
+      stageGroupFiles([{ path: relativePath }], fileMap, dir);
+
+      const staged = getStagedDiff(dir);
+      expect(staged).toContain(`diff --git a/${relativePath} b/${relativePath}`);
+      expect(staged).toContain("-export const value = 1;");
+      expect(staged).toContain("+export const value = 2;");
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("whole-file staging preserves UTF-8 file paths quoted by Git", () => {
+    const dir = makeGitDir();
+    try {
+      const relativePath = "caf\u00e9.ts";
+      writeFileSync(join(dir, relativePath), "export const value = 1;\n");
+      execSync(`git add "${relativePath}" && git commit -m 'add utf8 file'`, {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      writeFileSync(join(dir, relativePath), "export const value = 2;\n");
+
+      const rawDiff = getDiff(dir, relativePath);
+      const files = parseDiff(rawDiff);
+      expect(files).toHaveLength(1);
+      expect(files[0].path).toBe(relativePath);
+
+      const fileMap = new Map([[files[0].path, files[0]]]);
+      stageGroupFiles([{ path: relativePath }], fileMap, dir);
+
+      const stagedFiles = parseDiff(getStagedDiff(dir));
+      expect(stagedFiles).toHaveLength(1);
+      expect(stagedFiles[0].path).toBe(relativePath);
+      expect(stagedFiles[0].hunks).toHaveLength(1);
+      expect(stagedFiles[0].hunks[0]?.lines).toContain(
+        "+export const value = 2;",
+      );
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   test("whole-file staging preserves mode changes alongside hunks", () => {
     const dir = makeGitDir();
     try {
@@ -394,6 +472,24 @@ describe("stageGroupFiles — hunk-level staging", () => {
       const staged = getStagedDiff(dir);
       expect(staged).toContain(hunk0Marker);
       expect(staged).toContain(hunk1Marker);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("duplicate hunk requests are deduplicated before staging", () => {
+    const dir = makeGitDir();
+    try {
+      const { hunk0Marker, hunk1Marker } = setupFileWithTwoHunks(dir, "app.ts");
+      const rawDiff = getDiff(dir, "app.ts");
+      const files = parseDiff(rawDiff);
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      stageGroupFiles([{ hunks: [0, 0], path: "app.ts" }], fileMap, dir);
+
+      const staged = getStagedDiff(dir);
+      expect(staged).toContain(hunk0Marker);
+      expect(staged).not.toContain(hunk1Marker);
     } finally {
       cleanupDir(dir);
     }

@@ -8,7 +8,9 @@ import {
   commitWithMessage,
   getStagedDiff,
   getStagedFiles,
+  hasCommitHistory,
   isGitRepository,
+  resetStaging,
   stageAll,
   stageFiles,
   stagePatch,
@@ -46,6 +48,25 @@ describe("git coverage", () => {
     } finally {
       cleanupDir(repoDir);
       cleanupDir(plainDir);
+    }
+  });
+
+  test("hasCommitHistory distinguishes initialized repositories from committed ones", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitaicmt-no-head-"));
+
+    try {
+      execSync(
+        'git init && git config user.email "test@test.com" && git config user.name "Test User"',
+        { cwd: dir, stdio: "pipe" },
+      );
+
+      expect(hasCommitHistory(dir)).toBe(false);
+
+      execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
+
+      expect(hasCommitHistory(dir)).toBe(true);
+    } finally {
+      cleanupDir(dir);
     }
   });
 
@@ -91,6 +112,26 @@ describe("git coverage", () => {
       expect(() =>
         commitWithMessage(commitMessage("feat(core): nothing staged"), dir),
       ).toThrow(GitCommandError);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("commitWithMessage includes hook stderr when git rejects the commit", () => {
+    const dir = makeGitDir();
+
+    try {
+      writeFileSync(
+        join(dir, ".git", "hooks", "commit-msg"),
+        "#!/bin/sh\necho 'commit-msg hook rejected this commit' >&2\nexit 1\n",
+        { mode: 0o755 },
+      );
+      writeFileSync(join(dir, "file.txt"), "hello\n");
+      execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
+
+      expect(() =>
+        commitWithMessage(commitMessage("feat(core): trigger hook failure"), dir),
+      ).toThrow(/commit-msg hook rejected this commit/u);
     } finally {
       cleanupDir(dir);
     }
@@ -166,11 +207,26 @@ describe("git coverage", () => {
     }
   });
 
-  test("stageFiles rejects shell metacharacters in paths", () => {
+  test("stageFiles stages valid paths that contain shell punctuation safely", () => {
     const dir = makeGitDir();
 
     try {
-      expect(() => stageFiles(["bad;name.txt"], dir)).toThrow(InvalidPathError);
+      const punctuatedPath = "src/feat;name!(v2)#draft$.ts";
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, punctuatedPath), "export const value = 1;\n");
+
+      expect(() => stageFiles([punctuatedPath], dir)).not.toThrow();
+      expect(getStagedFiles(dir)).toContain(punctuatedPath);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("stageFiles rejects whitespace-only paths", () => {
+    const dir = makeGitDir();
+
+    try {
+      expect(() => stageFiles(["   "], dir)).toThrow(InvalidPathError);
     } finally {
       cleanupDir(dir);
     }
@@ -181,6 +237,9 @@ describe("git coverage", () => {
 
     try {
       expect(() => stageFiles(["/tmp/file.txt"], dir)).toThrow(
+        InvalidPathError,
+      );
+      expect(() => stageFiles(["C:/tmp/file.txt"], dir)).toThrow(
         InvalidPathError,
       );
     } finally {
@@ -218,6 +277,27 @@ describe("git coverage", () => {
         InvalidPathError,
       );
       expect(() => stageFiles(["../evil.txt"], dir)).toThrow(InvalidPathError);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("resetStaging unstages files in a repository without commits", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gitaicmt-reset-no-head-"));
+
+    try {
+      execSync(
+        'git init && git config user.email "test@test.com" && git config user.name "Test User"',
+        { cwd: dir, stdio: "pipe" },
+      );
+      writeFileSync(join(dir, "draft.txt"), "hello\n");
+      execSync("git add draft.txt", { cwd: dir, stdio: "pipe" });
+
+      expect(getStagedFiles(dir)).toEqual(["draft.txt"]);
+
+      resetStaging(dir);
+
+      expect(getStagedFiles(dir)).toEqual([]);
     } finally {
       cleanupDir(dir);
     }

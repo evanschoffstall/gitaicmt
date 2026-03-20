@@ -14,10 +14,15 @@ type DiffChunk = import("../src/git/diff.js").DiffChunk;
 type DiffStats = import("../src/git/diff.js").DiffStats;
 type FileDiff = import("../src/git/diff.js").FileDiff;
 
+type MockHandler = (
+  payload: unknown,
+  mockOptions: unknown,
+) => Promise<unknown> | unknown;
+
 const { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } =
   await import("bun:test");
 
-type MockResult = Error | unknown;
+type MockResult = Error | MockHandler | unknown;
 
 const originalCwd = process.cwd();
 const originalOpenAiKey = process.env.OPENAI_API_KEY;
@@ -92,13 +97,21 @@ function installOpenAiMock(options: {
   const chatQueue = [...(options.chatQueue ?? [])];
   const responseQueue = [...(options.responseQueue ?? [])];
 
-  const shiftResult = (queue: MockResult[], label: string) => {
+  const shiftResult = (
+    queue: MockResult[],
+    label: string,
+    payload: unknown,
+    mockOptions: unknown,
+  ) => {
     if (queue.length === 0) {
       throw new Error(`No mocked ${label} result left`);
     }
     const next = queue.shift();
     if (next instanceof Error) {
       throw next;
+    }
+    if (typeof next === "function") {
+      return next(payload, mockOptions);
     }
     return next;
   };
@@ -109,7 +122,12 @@ function installOpenAiMock(options: {
         completions: {
           create: async (payload: unknown, mockOptions: unknown) => {
             calls.chat.push({ options: mockOptions, payload });
-            return shiftResult(chatQueue, "chat completion");
+            return shiftResult(
+              chatQueue,
+              "chat completion",
+              payload,
+              mockOptions,
+            );
           },
         },
       };
@@ -117,7 +135,12 @@ function installOpenAiMock(options: {
       responses = {
         create: async (payload: unknown, mockOptions: unknown) => {
           calls.responses.push({ options: mockOptions, payload });
-          return shiftResult(responseQueue, "responses completion");
+          return shiftResult(
+            responseQueue,
+            "responses completion",
+            payload,
+            mockOptions,
+          );
         },
       };
     },
@@ -155,6 +178,18 @@ function makeStats(
   chunks = 2,
 ): DiffStats {
   return { additions, chunks, deletions, filesChanged };
+}
+
+function makeZeroHunkFile(path: string): FileDiff {
+  return {
+    additions: 0,
+    deletions: 0,
+    hunks: [],
+    metadataLines: ["old mode 100644", "new mode 100755"],
+    oldPath: null,
+    path,
+    status: "modified",
+  };
 }
 
 function validApiKey(tag: string): string {
@@ -836,6 +871,165 @@ describe("ai coverage", () => {
     );
   });
 
+  test("finalizePlannedGroups retries one transient consolidation failure before falling back", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidation-retry"),
+        model: "gpt-4o-mini",
+      },
+      performance: { timeoutMs: 25 },
+    });
+    const abortError = new Error("Request was aborted.");
+    abortError.name = "AbortError";
+    const calls = installOpenAiMock({
+      chatQueue: [
+        abortError,
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/commit-planning/result-cache.ts" },
+                      { path: "tests/ai-coverage.test.ts" },
+                    ],
+                    message:
+                      "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.\n- Keep cache coverage aligned with the grouped rollout.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const observer = await import("../src/commit-planning/openai-client.js");
+    const events: { content: string; kind?: string; stage: string }[] = [];
+    observer.setAiOutputObserver((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?consolidation-retry-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "tests/ai-coverage.test.ts" }],
+        message:
+          "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+      },
+      {
+        files: [{ path: "src/commit-planning/result-cache.ts" }],
+        message:
+          "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
+      },
+    ];
+    const allFiles = [
+      makeFile("src/commit-planning/result-cache.ts"),
+      makeFile("tests/ai-coverage.test.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(2);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.message).toContain(
+      "feat(ai-cache): cache planned commit analysis",
+    );
+    expect(
+      events.some((event) =>
+        event.content.includes('"decision":"consolidation-retry-scheduled"'),
+      ),
+    ).toBe(true);
+    observer.setAiOutputObserver(null);
+  });
+
+  test("finalizePlannedGroups uses the extended planner timeout for slow consolidation reviews", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidation-timeout-budget"),
+        model: "gpt-4o-mini",
+      },
+      performance: { timeoutMs: 10 },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        async (_payload, mockOptions) => {
+          const signal = (mockOptions as { signal?: AbortSignal }).signal;
+
+          return await new Promise<unknown>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              resolve({
+                choices: [
+                  {
+                    message: {
+                      content: JSON.stringify([
+                        {
+                          files: [
+                            { path: "src/commit-planning/result-cache.ts" },
+                            { path: "tests/ai-coverage.test.ts" },
+                          ],
+                          message:
+                            "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.\n- Keep cache coverage aligned with the grouped rollout.",
+                        },
+                      ]),
+                    },
+                  },
+                ],
+              });
+            }, 20);
+
+            signal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                const abortError = new Error("Request was aborted.");
+                abortError.name = "AbortError";
+                reject(abortError);
+              },
+              { once: true },
+            );
+          });
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?consolidation-timeout-budget-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "tests/ai-coverage.test.ts" }],
+        message:
+          "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+      },
+      {
+        files: [{ path: "src/commit-planning/result-cache.ts" }],
+        message:
+          "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
+      },
+    ];
+    const allFiles = [
+      makeFile("src/commit-planning/result-cache.ts"),
+      makeFile("tests/ai-coverage.test.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.message).toContain(
+      "feat(ai-cache): cache planned commit analysis",
+    );
+  });
+
   test("finalizePlannedGroups merges duplicate file entries inside one consolidated commit", async () => {
     writeLocalConfig({
       openai: {
@@ -982,6 +1176,110 @@ describe("ai coverage", () => {
     expect(result[1]?.message).toContain(
       "- Cover the stronger why-first consolidation rules.",
     );
+  });
+
+  test("finalizePlannedGroups rejects umbrella consolidation that repartition would mostly undo", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("reject-unstable-consolidation"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "src/commit-planning/result-cache.ts" },
+                      { path: "src/commit-planning/prompt-builders/consolidation-prompts.ts" },
+                      { path: "src/commit-planning/token-estimation.ts" },
+                      { path: "tests/ai.test.ts" },
+                    ],
+                    message:
+                      "fix(commit-planning): harden planner orchestration rollout\n\n- Fold cache, prompt, budget, and test changes into one broad umbrella update.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const observer = await import("../src/commit-planning/openai-client.js");
+    const events: { content: string; kind?: string; stage: string }[] = [];
+    observer.setAiOutputObserver((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?reject-unstable-consolidation-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "src/commit-planning/result-cache.ts" }],
+        message: commitMessage(
+          "feat(ai-cache): cache planned commit analysis",
+          "- Reuse grouped plans for identical diff inputs.",
+        ),
+      },
+      {
+        files: [{ path: "src/commit-planning/prompt-builders/consolidation-prompts.ts" }],
+        message: commitMessage(
+          "docs(prompts): tighten consolidation ownership rules",
+          "- Keep consolidation focused on one clear why per commit.",
+        ),
+      },
+      {
+        files: [{ path: "src/commit-planning/token-estimation.ts" }],
+        message: commitMessage(
+          "fix(token-estimation): buffer consolidation budgeting",
+          "- Reduce underestimation risk during planner calls.",
+        ),
+      },
+      {
+        files: [{ path: "tests/ai.test.ts" }],
+        message: commitMessage(
+          "test(prompts): lock consolidation ownership guidance",
+          "- Cover the tighter why-first consolidation wording.",
+        ),
+      },
+    ];
+    const allFiles = [
+      makeFile("src/commit-planning/result-cache.ts"),
+      makeFile("src/commit-planning/prompt-builders/consolidation-prompts.ts"),
+      makeFile("src/commit-planning/token-estimation.ts"),
+      makeFile("tests/ai.test.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toHaveLength(4);
+    expect(
+      result.map((group) => group.message.split("\n")[0]),
+    ).toContain("feat(ai-cache): cache planned commit analysis");
+    expect(
+      result.map((group) => group.message.split("\n")[0]),
+    ).toContain("docs(prompts): tighten consolidation ownership rules");
+    expect(
+      result.map((group) => group.message.split("\n")[0]),
+    ).toContain("fix(token-estimation): buffer consolidation budgeting");
+    expect(
+      result.map((group) => group.message.split("\n")[0]),
+    ).toContain("test(prompts): lock consolidation ownership guidance");
+    expect(
+      events.some((event) =>
+        event.content.includes('"reason":"semantic-repartition-would-undo-merge"'),
+      ),
+    ).toBe(true);
+    observer.setAiOutputObserver(null);
   });
 
   test("finalizePlannedGroups keeps runtime telemetry separate from cli trace presentation", async () => {
@@ -1396,7 +1694,10 @@ describe("ai coverage", () => {
     );
 
     expect(calls.chat).toHaveLength(0);
-    expect(result).toEqual([groups[1], groups[2], groups[3], groups[0]]);
+    expect(result).toHaveLength(4);
+    expect(result.indexOf(groups[1])).toBeLessThan(result.indexOf(groups[0]));
+    expect(result.indexOf(groups[2])).toBeLessThan(result.indexOf(groups[0]));
+    expect(result).toContain(groups[3]);
   });
 
   test("finalizePlannedGroups reorders enabling helpers before dependent commits", async () => {
@@ -1699,6 +2000,137 @@ describe("ai coverage", () => {
     expect(result).toEqual([groups[1], groups[0]]);
   });
 
+  test("finalizePlannedGroups prefers implementation commits ahead of standalone tests when dependencies tie", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("dependency-ordering-test-tiebreak"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({ chatQueue: [] });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?dependency-ordering-test-tiebreak-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "tests/planner-fallback.test.ts" }],
+        message: commitMessage(
+          "test(planner-fallback): cover invalid fallback reasons",
+          "- Verify fallback notices stay precise when planners degrade.",
+        ),
+      },
+      {
+        files: [{ path: "src/cli/verbose-output.ts" }],
+        message: commitMessage(
+          "feat(verbose-output): render planner trace labels",
+          "- Add human-readable planner decision titles to verbose output.",
+        ),
+      },
+    ];
+
+    const result = await finalizePlannedGroups(
+      [
+        makeFile("tests/planner-fallback.test.ts"),
+        makeFile("src/cli/verbose-output.ts"),
+      ],
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(0);
+    expect(result).toEqual([groups[1], groups[0]]);
+  });
+
+  test("finalizePlannedGroups stops consolidation after diminishing returns near the tail", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidation-diminishing-returns"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [{ path: "src/group-0.ts" }, { path: "src/group-1.ts" }],
+                    message: commitMessage(
+                      "feat(core): merge adjacent rollout slices",
+                      "- Keep closely related rollout changes together.",
+                    ),
+                  },
+                  {
+                    files: [{ path: "src/group-2.ts" }],
+                    message: commitMessage("feat(core): keep slice 2", "- Preserve slice 2."),
+                  },
+                  {
+                    files: [{ path: "src/group-3.ts" }],
+                    message: commitMessage("feat(core): keep slice 3", "- Preserve slice 3."),
+                  },
+                  {
+                    files: [{ path: "src/group-4.ts" }],
+                    message: commitMessage("feat(core): keep slice 4", "- Preserve slice 4."),
+                  },
+                  {
+                    files: [{ path: "src/group-5.ts" }],
+                    message: commitMessage("feat(core): keep slice 5", "- Preserve slice 5."),
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const observer = await import("../src/commit-planning/openai-client.js");
+    const events: { content: string; kind?: string; stage: string }[] = [];
+    observer.setAiOutputObserver((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?consolidation-diminishing-returns-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = Array.from({ length: 6 }, (_, index) => ({
+      files: [{ path: `src/group-${String(index)}.ts` }],
+      message: commitMessage(
+        [
+          "feat(core): add parser workflow",
+          "feat(core): add validator pipeline",
+          "feat(core): add reporter summary",
+          "feat(core): add cache hydration",
+          "feat(core): add queue draining",
+          "feat(core): add notifier routing",
+        ][index] ?? `feat(core): add slice ${String(index)}`,
+        `- Preserve distinct rollout slice ${String(index)}.`,
+      ),
+    }));
+
+    const result = await finalizePlannedGroups(
+      groups.map((group) => makeFile(group.files[0]!.path)),
+      groups,
+    );
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result.length).toBeGreaterThanOrEqual(5);
+    expect(result.length).toBeLessThanOrEqual(6);
+    expect(
+      events.some((event) =>
+        event.content.includes('"decision":"consolidation-stop"'),
+      ),
+    ).toBe(true);
+    observer.setAiOutputObserver(null);
+  });
+
   test("finalizePlannedGroups keeps separate-hunk workflow neighbors split when action and artifact diverge", async () => {
     writeLocalConfig({
       openai: {
@@ -1903,6 +2335,20 @@ describe("ai coverage", () => {
     ).rejects.toBeInstanceOf(ValidationError);
   });
 
+  test("planCommits rejects an empty file set before any AI call", async () => {
+    writeLocalConfig({
+      openai: { apiKey: validApiKey("empty-plan"), model: "gpt-4o-mini" },
+    });
+    const calls = installOpenAiMock({});
+    const ai = await importFreshAi("empty-plan");
+
+    await expect(ai.planCommits([], formatFileDiff)).rejects.toThrow(
+      "Cannot plan commits for an empty file set",
+    );
+    expect(calls.chat).toHaveLength(0);
+    expect(calls.responses).toHaveLength(0);
+  });
+
   test("planCommits appends a commit for missed hunks", async () => {
     writeLocalConfig({
       openai: { apiKey: validApiKey("missed-hunks"), model: "gpt-4o-mini" },
@@ -1969,6 +2415,56 @@ describe("ai coverage", () => {
       files: [{ hunks: [1], path: "src/app.ts" }],
       message: commitMessage("fix(app): cover second hunk"),
     });
+  });
+
+  test("planCommits does not duplicate zero-hunk file-level changes as missed files", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("zero-hunk-coverage"),
+        model: "gpt-4o-mini",
+      },
+    });
+    const calls = installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [
+                      { path: "script.sh" },
+                      { path: "src/app.ts" },
+                    ],
+                    message: commitMessage(
+                      "chore(core): keep staged file-level changes together",
+                    ),
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const ai = await importFreshAi("zero-hunk-coverage");
+
+    const result = await ai.planCommits(
+      [makeZeroHunkFile("script.sh"), makeFile("src/app.ts")],
+      formatFileDiff,
+      0,
+      { deferFinalization: true },
+    );
+
+    expect(calls.chat).toHaveLength(1);
+    expect(result).toEqual([
+      {
+        files: [{ path: "script.sh" }, { path: "src/app.ts" }],
+        message: commitMessage(
+          "chore(core): keep staged file-level changes together",
+        ),
+      },
+    ]);
   });
 
   test("planCommits falls back to a single commit when grouping JSON is invalid", async () => {
@@ -2717,19 +3213,8 @@ describe("ai coverage", () => {
 
     const result = await ai.planCommits(files, formatFileDiff);
 
-    expect(calls.chat).toHaveLength(3);
+    expect(calls.chat).toHaveLength(2);
     expect(result).toEqual([
-      {
-        files: [
-          { path: "src/app/dashboard/components/Background.tsx" },
-          { path: "src/app/dashboard/components/DashboardTopHeaderBar.tsx" },
-          { path: "src/app/dashboard/components/settings/SettingsModal.tsx" },
-          { path: "src/app/dashboard/hooks/useFeedLoader.ts" },
-        ],
-        message: commitMessage(
-          "style(dashboard): normalize dashboard formatting and layout",
-        ),
-      },
       {
         files: [{ path: "src/app/dashboard/services/dashboard-view-model.ts" }],
         message: commitMessage(
@@ -2741,6 +3226,17 @@ describe("ai coverage", () => {
         files: [{ path: "src/lib/auth/session.ts" }],
         message: commitMessage(
           "refactor(auth): extract session cache invalidation",
+        ),
+      },
+      {
+        files: [
+          { path: "src/app/dashboard/components/Background.tsx" },
+          { path: "src/app/dashboard/components/DashboardTopHeaderBar.tsx" },
+          { path: "src/app/dashboard/components/settings/SettingsModal.tsx" },
+          { path: "src/app/dashboard/hooks/useFeedLoader.ts" },
+        ],
+        message: commitMessage(
+          "style(dashboard): normalize dashboard formatting and layout",
         ),
       },
     ]);

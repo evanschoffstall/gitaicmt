@@ -616,6 +616,12 @@ describe("consolidation user prompt", () => {
       "If the best merged subject naturally wants to say X and Y as two separate reasons, keep those commits separate.",
     );
     expect(systemPrompt).toContain(
+      "Do NOT merge multiple implementation commits into one umbrella commit just because they touch the same subsystem, rollout, or planner stage.",
+    );
+    expect(systemPrompt).toContain(
+      "Prefer support-into-owner merges over owner-to-owner umbrella merges",
+    );
+    expect(systemPrompt).toContain(
       "Standalone style/import-order/formatting commits should be rare",
     );
     expect(userPrompt).toContain(
@@ -626,6 +632,21 @@ describe("consolidation user prompt", () => {
     );
     expect(userPrompt).toContain(
       "If the combined commit would need an and-subject to explain itself cleanly, keep it split.",
+    );
+    expect(userPrompt).toContain(
+      "Do not create umbrella implementation commits that only share a subsystem or rollout label",
+    );
+    expect(userPrompt).toContain(
+      "Prefer support-into-owner merges over merging multiple independent implementation commits together.",
+    );
+    expect(systemPrompt).toContain(
+      "Every returned message MUST be a full commit message: subject line, blank line, then one or more body bullet lines.",
+    );
+    expect(userPrompt).toContain(
+      "Every returned message must keep the full commit-message shape: subject line, blank line, then one or more body bullets.",
+    );
+    expect(systemPrompt).toContain(
+      '"message":"type(scope): subject\\n\\n- Body bullet"',
     );
   });
 
