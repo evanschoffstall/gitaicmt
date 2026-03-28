@@ -1,3 +1,4 @@
+import { stripAnsi } from "../src/cli/terminal-line-wrapping.js";
 import {
   formatVerboseAiOutputLines,
   getVerboseAiOutputSequenceKey,
@@ -6,6 +7,10 @@ import {
 const { describe, expect, test } = await import("bun:test");
 
 describe("verbose-output", () => {
+  function getPlainLines(lines: string[]): string[] {
+    return lines.map((line) => stripAnsi(line));
+  }
+
   test("normalizes leaked file aliases in semantic commit summaries", () => {
     const lines = formatVerboseAiOutputLines(
       {
@@ -157,34 +162,35 @@ describe("verbose-output", () => {
       },
       { maxWidth: 88, mode: "summary", sequence: 2 },
     );
+    const plainLines = getPlainLines(lines);
 
     expect(lines[0]).toContain("Grouping batch #2");
     expect(lines[0]).toContain("1 candidate commit");
     expect(
-      lines.some((line) =>
+      plainLines.some((line) =>
         line.includes("1. test(ai-cache): isolate cache state"),
       ),
     ).toBe(true);
     expect(
-      lines.some((line) =>
+      plainLines.some((line) =>
         line.includes(
           "coverage: 2 file(s) · tests/ai-coverage.test.ts [5 hunks], tests/ai-tokens.test.ts",
         ),
       ),
     ).toBe(true);
     expect(
-      lines.some((line) => line.includes("- Reset AI cache in shared hooks.")),
+      plainLines.some((line) => line.includes("- Reset AI cache in shared hooks.")),
     ).toBe(true);
     expect(
-      lines.some((line) => line.includes("... 1 more detail line(s)")),
+      plainLines.some((line) => line.includes("... 1 more detail line(s)")),
     ).toBe(true);
     expect(lines.join("\n")).not.toContain('"path"');
     expect(lines[0]).toContain("\x1b[1m");
     expect(lines[0]).toContain("\x1b[36m");
     expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(true);
-    expect(lines.some((line) => line.includes("stats: kind: model-output"))).toBe(true);
-    expect(lines.some((line) => line.includes("time: 842ms"))).toBe(true);
-    expect(lines.some((line) => line.includes("tok: 738"))).toBe(true);
+    expect(plainLines.some((line) => line.includes("stats: model-output · chat · 842ms"))).toBe(true);
+    expect(plainLines.some((line) => line.includes("usage: 1 req · 610 in · 128 out · 738 tok"))).toBe(true);
+    expect(lines.some((line) => line.includes("\x1b[2m"))).toBe(true);
   });
 
   test("formats plain commit messages without requiring JSON", () => {
@@ -225,13 +231,12 @@ describe("verbose-output", () => {
       },
       { maxWidth: 84, mode: "trace", sequence: 1 },
     );
+    const plainLines = getPlainLines(lines);
 
     expect(lines[0]).toContain("Final consolidation #1 trace");
     expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(true);
-    expect(lines.some((line) => line.includes("transport: responses"))).toBe(true);
-    expect(lines.some((line) => line.includes("time: 1.26s"))).toBe(true);
-    expect(lines.some((line) => line.includes("in"))).toBe(true);
-    expect(lines.some((line) => line.includes("444 · out: 111 · tok: 555"))).toBe(true);
+    expect(plainLines.some((line) => line.includes("stats: model-output · responses · 1.26s"))).toBe(true);
+    expect(plainLines.some((line) => line.includes("usage: 1 req · 444 in · 111 out · 555 tok"))).toBe(true);
     expect(
       lines.some((line) => line.includes('"hunks": [0, 1,')),
     ).toBe(true);
@@ -362,12 +367,11 @@ describe("verbose-output", () => {
       },
       { maxWidth: 84, mode: "summary", sequence: 2 },
     );
+    const plainLines = getPlainLines(lines);
 
     expect(lines[0]).toContain("Dependency ordering #2");
-    expect(lines.some((line) => line.includes("kind: planner-decision"))).toBe(true);
-    expect(lines.some((line) => line.includes("transport: internal"))).toBe(true);
-    expect(lines.some((line) => line.includes("time: 37ms"))).toBe(true);
-    expect(lines.some((line) => line.includes('"decision": "dependency-ordering"'))).toBe(true);
+    expect(plainLines.some((line) => line.includes("stats: planner-decision · internal · 37ms"))).toBe(true);
+    expect(plainLines.some((line) => line.includes('"decision": "dependency-ordering"'))).toBe(true);
   });
 
   test("uses separate sequence buckets for different consolidate event families", () => {
@@ -536,7 +540,10 @@ describe("verbose-output", () => {
       },
       { maxWidth: 84, mode: "trace", sequence: 1 },
     );
+    const plainLines = getPlainLines(lines);
 
-    expect(lines.some((line) => line.includes("time: <1ms"))).toBe(true);
+    expect(
+      plainLines.some((line) => line.includes("stats: planner-decision · internal · <1ms")),
+    ).toBe(true);
   });
 });

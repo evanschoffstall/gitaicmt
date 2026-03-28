@@ -70,38 +70,60 @@ export function formatEventStatLines(
   maxWidth: number,
   severity: TraceFrameSeverity = "info",
 ): string[] {
-  const parts: string[] = [];
+  const summaryParts: string[] = [];
+  const usageParts: string[] = [];
 
   if (event.kind) {
-    parts.push(`kind: ${event.kind}`);
+    summaryParts.push(event.kind);
   }
   if (event.transport) {
-    parts.push(`transport: ${event.transport}`);
+    summaryParts.push(event.transport);
   }
   if (typeof event.durationMs === "number") {
-    parts.push(`time: ${formatDuration(event.durationMs)}`);
+    summaryParts.push(formatDuration(event.durationMs));
   }
   if (typeof event.requestCountDelta === "number") {
-    parts.push(`req: ${String(event.requestCountDelta)}`);
+    usageParts.push(`${String(event.requestCountDelta)} req`);
   }
   if (typeof event.inputTokens === "number") {
-    parts.push(`in: ${String(event.inputTokens)}`);
+    usageParts.push(`${String(event.inputTokens)} in`);
   }
   if (typeof event.outputTokens === "number") {
-    parts.push(`out: ${String(event.outputTokens)}`);
+    usageParts.push(`${String(event.outputTokens)} out`);
   }
   if (typeof event.totalTokens === "number") {
-    parts.push(`tok: ${String(event.totalTokens)}`);
+    usageParts.push(`${String(event.totalTokens)} tok`);
   }
 
-  if (parts.length === 0) {
+  if (summaryParts.length === 0 && usageParts.length === 0) {
     return [];
   }
 
-  const statsLine = `stats: ${parts.join(" · ")}`;
-  return wrapLine(statsLine, maxWidth - 4, "│   ", "│     ").map((line) =>
-    styleTraceRail(line, severity),
-  );
+  const lines: string[] = [];
+
+  if (summaryParts.length > 0) {
+    lines.push(
+      ...wrapLine(
+        `stats: ${summaryParts.join(" · ")}`,
+        maxWidth - 4,
+        "│   ",
+        "│     ",
+      ).map((line) => styleTraceMutedRail(line, severity)),
+    );
+  }
+
+  if (usageParts.length > 0) {
+    lines.push(
+      ...wrapLine(
+        `usage: ${usageParts.join(" · ")}`,
+        maxWidth - 4,
+        "│   ",
+        "│     ",
+      ).map((line) => styleTraceMutedRail(line, severity)),
+    );
+  }
+
+  return lines;
 }
 
 /** Renders a full trace block (raw/JSON expansion) for the given event. */
@@ -193,6 +215,24 @@ export function styleTraceHeader(
   severity: TraceFrameSeverity = "info",
 ): string {
   return `${ANSI_BOLD}${getSeverityColor(severity)}${line}${ANSI_RESET}`;
+}
+
+/** Styles a trace rail with dimmed content for secondary metadata lines. */
+export function styleTraceMutedRail(
+  line: string,
+  severity: TraceFrameSeverity = "info",
+): string {
+  if (!line.startsWith("│")) {
+    return `${ANSI_DIM}${line}${ANSI_RESET}`;
+  }
+
+  const labelMatch = /^(│\s+)(stats:|usage:)(.*)$/u.exec(line);
+  if (!labelMatch) {
+    return `${getSeverityColor(severity)}│${ANSI_RESET}${ANSI_DIM}${line.slice(1)}${ANSI_RESET}`;
+  }
+
+  const [, prefix, label, suffix] = labelMatch;
+  return `${getSeverityColor(severity)}│${ANSI_RESET}${ANSI_DIM}${prefix.slice(1)}${ANSI_RESET}${ANSI_BOLD}${getSeverityColor(severity)}${label}${ANSI_RESET}${ANSI_DIM}${suffix}${ANSI_RESET}`;
 }
 
 /**
