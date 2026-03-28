@@ -34,6 +34,8 @@ interface OutputFilter {
 }
 
 interface StepConfig {
+  /** Allows `bun check --step ...args` to run the selected step directly. */
+  allowSuiteFlagArgs?: boolean;
   args?: string[];
   cmd?: string;
   config?: InlineTypeScriptConfig | LintConfig | Record<string, unknown>;
@@ -47,6 +49,7 @@ interface StepConfig {
   passMsg?: string;
   postProcess?: InlineTypeScriptConfig | Record<string, unknown>;
   preRun?: boolean;
+  serialGroup?: string;
   summary?: Summary;
   /** Max drain time for buffered output after a timed-out step is terminated. */
   timeoutDrainMs?: number | string;
@@ -150,11 +153,11 @@ const PATH_TOKENS: Record<string, string> = (() => {
 })();
 
 interface CliArguments {
+  command: "keys" | "run-suite" | "summary";
   directStep?: StepConfig;
   directStepArgs: string[];
   invalidSuiteFlags: string[];
   keyFilter: null | Set<string>;
-  summaryOnly: boolean;
 }
 
 interface Command {
@@ -1252,6 +1255,26 @@ const HANDLERS: Record<string, StepRunner> = {
 /** Splits CLI arguments into global flags, step filters, and direct step execution. */
 export function parseCliArguments(argv: string[]): CliArguments {
   const command = argv[2];
+  if (command === "summary") {
+    return {
+      command: "summary",
+      directStep: undefined,
+      directStepArgs: [],
+      invalidSuiteFlags: [],
+      keyFilter: null,
+    };
+  }
+
+  if (command === "keys") {
+    return {
+      command: "keys",
+      directStep: undefined,
+      directStepArgs: [],
+      invalidSuiteFlags: [],
+      keyFilter: null,
+    };
+  }
+
   const directStep =
     command && !command.startsWith("--")
       ? CFG.steps.find((step) => step.key === command && step.enabled !== false)
@@ -1259,32 +1282,58 @@ export function parseCliArguments(argv: string[]): CliArguments {
 
   if (directStep) {
     return {
+      command: "run-suite",
       directStep,
       directStepArgs: argv.slice(3),
       invalidSuiteFlags: [],
       keyFilter: null,
-      summaryOnly: false,
     };
   }
 
-  const globalFlags = new Set(["summary"]);
+  const suiteArguments = argv.slice(2);
+  const passthroughSeparatorIndex = suiteArguments.indexOf("--");
+  const suiteSelectionArguments =
+    passthroughSeparatorIndex >= 0
+      ? suiteArguments.slice(0, passthroughSeparatorIndex)
+      : suiteArguments;
+  const explicitSuiteStepArgs =
+    passthroughSeparatorIndex >= 0
+      ? suiteArguments.slice(passthroughSeparatorIndex + 1)
+      : [];
   const runnableSuiteStepKeys = getRunnableSuiteStepKeys();
-  const summaryOnly = argv.slice(2).includes("--summary");
-  const suiteFlags = argv
-    .slice(2)
+  const suiteFlags = suiteSelectionArguments
     .filter((argument) => argument.startsWith("--"))
     .map((argument) => argument.slice(2));
-  const suiteStepKeys = suiteFlags.filter((flag) => !globalFlags.has(flag));
-  const invalidSuiteFlags = suiteStepKeys.filter(
+  const suiteStepArgs = suiteSelectionArguments.filter(
+    (argument) => !argument.startsWith("--"),
+  );
+  const invalidSuiteFlags = suiteFlags.filter(
     (flag) => !runnableSuiteStepKeys.has(flag),
   );
 
+  if (invalidSuiteFlags.length === 0 && suiteFlags.length === 1) {
+    const selectedStep = CFG.steps.find(
+      (step) => step.key === suiteFlags[0] && step.enabled !== false,
+    );
+    const directStepArgs = [...suiteStepArgs, ...explicitSuiteStepArgs];
+
+    if (selectedStep?.allowSuiteFlagArgs && directStepArgs.length > 0) {
+      return {
+        command: "run-suite",
+        directStep: selectedStep,
+        directStepArgs,
+        invalidSuiteFlags: [],
+        keyFilter: null,
+      };
+    }
+  }
+
   return {
+    command: "run-suite",
     directStep: undefined,
     directStepArgs: [],
     invalidSuiteFlags,
-    keyFilter: suiteStepKeys.length > 0 ? new Set(suiteStepKeys) : null,
-    summaryOnly,
+    keyFilter: suiteFlags.length > 0 ? new Set(suiteFlags) : null,
   };
 }
 
@@ -1458,19 +1507,56 @@ export async function runCheckSuite(
   if (!allOk) process.exit(1);
 }
 
-/** Runs a parallel batch while refusing to start steps after the deadline. */
+/** Runs a batch in config order while refusing to start steps after the deadline. */
 export async function runStepBatch(
   steps: StepConfig[],
   deadlineMs: number,
 ): Promise<Record<string, Command>> {
-  return Object.fromEntries(
-    await Promise.all(
-      steps.map(
-        async (step) =>
-          [step.key, await runStepWithinDeadline(step, deadlineMs)] as const,
+  // Group steps: steps sharing a serialGroup run sequentially within their
+  // group, but all groups (and ungrouped steps) run concurrently.
+  const serialGroups = new Map<string, StepConfig[]>();
+  const ungrouped: StepConfig[] = [];
+
+  for (const step of steps) {
+    if (step.serialGroup) {
+      const group = serialGroups.get(step.serialGroup) ?? [];
+      group.push(step);
+      serialGroups.set(step.serialGroup, group);
+    } else {
+      ungrouped.push(step);
+    }
+  }
+
+  const tasks: Promise<(readonly [string, Command])[]>[] = [];
+
+  // Each ungrouped step runs independently in parallel.
+  for (const step of ungrouped) {
+    tasks.push(
+      runStepWithinDeadline(step, deadlineMs).then(
+        (cmd) => [[step.key, cmd] as const],
       ),
-    ),
-  ) as Record<string, Command>;
+    );
+  }
+
+  // Each serial group runs its steps sequentially, but the group itself
+  // runs concurrently with everything else.
+  for (const groupSteps of serialGroups.values()) {
+    tasks.push(
+      (async () => {
+        const groupResults: (readonly [string, Command])[] = [];
+        for (const step of groupSteps) {
+          groupResults.push([
+            step.key,
+            await runStepWithinDeadline(step, deadlineMs),
+          ]);
+        }
+        return groupResults;
+      })(),
+    );
+  }
+
+  const settled = await Promise.all(tasks);
+  return Object.fromEntries(settled.flat()) as Record<string, Command>;
 }
 
 /**
@@ -1490,6 +1576,12 @@ export function runStepWithinDeadline(
   }
 
   return runStep(step, timeoutMs, extraArgs);
+}
+
+function getConfiguredStepKeys(): string[] {
+  return CFG.steps
+    .filter((step) => step.enabled !== false)
+    .map((step) => step.key);
 }
 
 function getStepTimeoutMs(step: StepConfig, deadlineMs: number): number {
@@ -1513,6 +1605,11 @@ async function main() {
       output.endsWith("\n") ? output : `${output.replace(/\s+$/g, "")}\n`,
     );
 
+  if (cliArguments.command === "keys") {
+    writeOut(getConfiguredStepKeys().join(", "));
+    process.exit(0);
+  }
+
   if (cliArguments.invalidSuiteFlags.length > 0) {
     writeOut(
       `unknown suite flag(s): ${cliArguments.invalidSuiteFlags.join(", ")}`,
@@ -1531,7 +1628,7 @@ async function main() {
   }
 
   await runCheckSuite(cliArguments.keyFilter, {
-    summaryOnly: cliArguments.summaryOnly,
+    summaryOnly: cliArguments.command === "summary",
   });
 }
 
@@ -1584,7 +1681,7 @@ export {
   applyOutputFilter,
   buildSummary,
   compactDomAssertionNoise,
-  runStepPostProcess,
+  runStepPostProcess
 };
 
 if (import.meta.main && shouldAutoRunCheckCli(Bun.argv)) void main();
