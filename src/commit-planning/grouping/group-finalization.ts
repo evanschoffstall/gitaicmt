@@ -23,13 +23,14 @@ import {
 } from "../token-estimation.js";
 import {
   groupCoversGroup,
-  hasMatchingCoverage,
-} from "./commit-coverage.js";
+  groupsSharePaths,
+ hasMatchingCoverage } from "./commit-coverage.js";
 import { orderCommitsByDependencies } from "./dependency-ordering.js";
 import { buildFileChangeSignals } from "./file-signals.js";
 import {
   mergeCommitClusters,
   mergeCommitMessages,
+  mergeCommitsIntoGroup,
   prioritizeMergedCommits,
 } from "./group-merge.js";
 import {
@@ -39,9 +40,11 @@ import {
 } from "./grouping-types.js";
 import { splitWeakConsolidations } from "./repartition.js";
 import {
+  countSharedSubjectWords,
   hasPotentialMergeSignals,
   isSupportLikeType,
   parseSubjectWords,
+  scopesRelated,
 } from "./subject-analysis.js";
 import { premergeBySubject } from "./subject-premerge.js";
 
@@ -50,6 +53,32 @@ const MIN_CONSOLIDATION_TAIL_GROUP_COUNT = 5;
 const MAX_PLANNER_REVIEW_TIMEOUT_MS = 120_000;
 const PLANNER_RETRY_TIMEOUT_MULTIPLIER = 1.5;
 const PLANNER_TIMEOUT_PER_1K_TOKENS_MS = 4_000;
+
+/**
+ * Absorbs adjacent tiny follow-up commits into the prior broader change when
+ * they touch the same surface and read like incidental cleanup.
+ */
+export function absorbIncidentalAdjacentGroups(
+  groups: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+): PlannedCommit[] {
+  const absorbed: PlannedCommit[] = [];
+
+  for (const group of groups) {
+    const previous = absorbed.at(-1);
+    if (previous && shouldAbsorbAdjacentGroup(previous, group)) {
+      absorbed[absorbed.length - 1] = mergeCommitsIntoGroup(
+        [previous, group],
+        fileByPath,
+      );
+      continue;
+    }
+
+    absorbed.push(group);
+  }
+
+  return absorbed;
+}
 
 /** Finalizes batched planner output into stable, coverage-safe commit groups. */
 export async function finalizePlannedGroups(
@@ -153,10 +182,24 @@ export async function finalizePlannedGroups(
   });
 
   const ordered = orderCommitsByDependencies(current, fileSignals);
+  const stabilized = absorbIncidentalAdjacentGroups(ordered, fileByPath);
+  if (stabilized.length < ordered.length) {
+    emitAiOutputEvent({
+      content: JSON.stringify({
+        decision: "incidental-follow-up-merge",
+        inputGroupCount: ordered.length,
+        outputGroupCount: stabilized.length,
+      }),
+      durationMs: performance.now() - startedAtMs,
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+  }
   emitAiOutputEvent({
     content: JSON.stringify({
       decision: "finalize-planned-groups",
-      finalGroupCount: ordered.length,
+      finalGroupCount: stabilized.length,
       inputGroupCount: groups.length,
       premergedGroupCount: baselineGroups.length,
       repartitionedGroupCount: current.length,
@@ -167,7 +210,7 @@ export async function finalizePlannedGroups(
     transport: "internal",
   });
 
-  return ordered;
+  return stabilized;
 }
 
 async function callCluster(groups: PlannedCommit[]): Promise<null | number[][]> {
@@ -481,6 +524,13 @@ async function consolidateOnce(
   return harmonized;
 }
 
+function countMessageDetailBullets(message: string): number {
+  return message
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- ")).length;
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -617,6 +667,55 @@ function isRetryablePlannerError(error: unknown): boolean {
   }
 
   return false;
+}
+
+function isSingleSurfaceGroup(group: PlannedCommit): boolean {
+  return (
+    group.files.length === 1 &&
+    group.files.every(
+      (file) => !file.hunks || file.hunks.length <= 1,
+    )
+  );
+}
+
+function shouldAbsorbAdjacentGroup(
+  previous: PlannedCommit,
+  candidate: PlannedCommit,
+): boolean {
+  if (!isSingleSurfaceGroup(candidate)) {
+    return false;
+  }
+
+  const previousSubject = parseSubjectWords(previous.message.split("\n")[0] ?? "");
+  const candidateSubject = parseSubjectWords(candidate.message.split("\n")[0] ?? "");
+  if (isSupportLikeType(previousSubject.type)) {
+    return false;
+  }
+
+  const sharedScope =
+    previousSubject.scope.length > 0 &&
+    candidateSubject.scope.length > 0 &&
+    scopesRelated(previousSubject.scope, candidateSubject.scope);
+  const sharedSubjectWords = countSharedSubjectWords(
+    previousSubject.words,
+    candidateSubject.words,
+  );
+  const sharedPaths = groupsSharePaths(previous, candidate);
+  if (!sharedPaths && !sharedScope && sharedSubjectWords === 0) {
+    return false;
+  }
+
+  const candidateDetailCount = countMessageDetailBullets(candidate.message);
+  const previousDetailCount = countMessageDetailBullets(previous.message);
+  const candidateSupportLike = isSupportLikeType(candidateSubject.type);
+  const previousIsBroader =
+    previous.files.length > candidate.files.length ||
+    previousDetailCount > candidateDetailCount;
+
+  return (
+    previousIsBroader &&
+    (candidateSupportLike || sharedPaths || (sharedScope && sharedSubjectWords > 0))
+  );
 }
 
 function shouldRejectUnstableConsolidation(
