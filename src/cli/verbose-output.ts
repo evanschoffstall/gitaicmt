@@ -130,6 +130,9 @@ function formatCommitPlanBlock(
     const commit = commits[index];
     const subject =
       commit.message.split("\n")[0]?.trim() ?? "(missing subject)";
+    const bullets = collectBodyBullets(commit.message);
+    const impactSummary = `${String(commit.files.length)} file(s) · ${String(bullets.length)} ${bullets.length === 1 ? "detail" : "details"}`;
+
     lines.push(
       ...wrapLine(
         `${String(index + 1)}. ${subject}`,
@@ -138,14 +141,19 @@ function formatCommitPlanBlock(
         "│    ",
       ).map((line) => styleTraceRail(line, severity)),
       ...wrapLine(
-        `coverage: ${String(commit.files.length)} file(s) · ${formatCommitFiles(commit.files)}`,
+        `impact: ${impactSummary}`,
+        maxWidth - 4,
+        "│   ",
+        "│         ",
+      ).map((line) => styleTraceRail(line, severity)),
+      ...wrapLine(
+        `files: ${formatCommitFiles(commit.files)}`,
         maxWidth - 4,
         "│   ",
         "│         ",
       ).map((line) => styleTraceRail(line, severity)),
     );
 
-    const bullets = collectBodyBullets(commit.message);
     const previewBullets = bullets.slice(0, 2);
     for (const bullet of previewBullets) {
       lines.push(

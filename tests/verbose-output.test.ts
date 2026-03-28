@@ -31,7 +31,8 @@ describe("verbose-output", () => {
       { maxWidth: 88, mode: "summary", sequence: 1 },
     );
 
-    expect(lines.some((line) => line.includes("coverage: 1 file(s) · package.json"))).toBe(true);
+    expect(lines.some((line) => line.includes("impact: 1 file(s) · 1 detail"))).toBe(true);
+    expect(lines.some((line) => line.includes("files: package.json"))).toBe(true);
     expect(lines.join("\n")).not.toContain("F2");
   });
 
@@ -173,8 +174,13 @@ describe("verbose-output", () => {
     ).toBe(true);
     expect(
       plainLines.some((line) =>
+        line.includes("impact: 2 file(s) · 3 details"),
+      ),
+    ).toBe(true);
+    expect(
+      plainLines.some((line) =>
         line.includes(
-          "coverage: 2 file(s) · tests/ai-coverage.test.ts [5 hunks], tests/ai-tokens.test.ts",
+          "files: tests/ai-coverage.test.ts [5 hunks], tests/ai-tokens.test.ts",
         ),
       ),
     ).toBe(true);
