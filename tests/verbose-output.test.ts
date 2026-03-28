@@ -6,6 +6,56 @@ import {
 const { describe, expect, test } = await import("bun:test");
 
 describe("verbose-output", () => {
+  test("normalizes leaked file aliases in semantic commit summaries", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify([
+          {
+            files: [{ path: "F2" }],
+            message: "chore(tooling): refresh lint deps\n\n- Keep the lint stack current.",
+          },
+        ]),
+        fileAliasMap: new Map([
+          ["F1", "eslint.config.mjs"],
+          ["F2", "package.json"],
+        ]),
+        kind: "model-output",
+        stage: "group",
+        transport: "responses",
+      },
+      { maxWidth: 88, mode: "summary", sequence: 1 },
+    );
+
+    expect(lines.some((line) => line.includes("coverage: 1 file(s) · package.json"))).toBe(true);
+    expect(lines.join("\n")).not.toContain("F2");
+  });
+
+  test("normalizes leaked file aliases in raw trace blocks", () => {
+    const raw = JSON.stringify([
+      {
+        files: [{ hunks: [0], path: "F2" }],
+        message: "chore(deps): bump runtime package",
+      },
+    ]);
+
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: raw,
+        fileAliasMap: new Map([
+          ["F1", "eslint.config.mjs"],
+          ["F2", "package.json"],
+        ]),
+        kind: "model-output",
+        stage: "group",
+        transport: "responses",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 2 },
+    );
+
+    expect(lines.some((line) => line.includes('"path": "package.json"'))).toBe(true);
+    expect(lines.join("\n")).not.toContain('"path": "F2"');
+  });
+
   test("honors narrow trace widths instead of forcing a wider internal floor", () => {
     const raw = JSON.stringify([
       {

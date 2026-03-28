@@ -2,6 +2,7 @@ import OpenAI from "openai";
 
 import { loadConfig } from "../application/config.js";
 import { ConfigError, OpenAIError, OpenAITimeoutError } from "../application/errors.js";
+import { type AiOutputFileAliasMap, extractAiOutputFileAliasMap } from "./ai-output-aliases.js";
 
 let cachedClient: null | OpenAI = null;
 let lastApiKey: null | string = null;
@@ -9,6 +10,7 @@ let lastApiKey: null | string = null;
 export interface AiOutputEvent {
   content: string;
   durationMs?: number;
+  fileAliasMap?: AiOutputFileAliasMap;
   inputTokens?: number;
   kind?: AiOutputEventKind;
   outputTokens?: number;
@@ -60,6 +62,7 @@ export async function complete(
   const stage = options?.stage;
   const temperature = options?.temperature ?? cfg.openai.temperature;
   const startedAtMs = performance.now();
+  const fileAliasMap = extractAiOutputFileAliasMap(user);
 
   const chatPayload = {
     max_completion_tokens: maxTokens,
@@ -77,16 +80,12 @@ export async function complete(
     const content = res.choices[0]?.message?.content;
     if (typeof content === "string" && content.trim()) {
       const trimmedContent = content.trim();
-      notifyAiOutputObserver({
-        content: trimmedContent,
+      notifyModelOutputEvent(trimmedContent, {
         durationMs: performance.now() - startedAtMs,
-        inputTokens: usage?.inputTokens,
-        kind: "model-output",
-        outputTokens: usage?.outputTokens,
-        requestCountDelta: 1,
-        stage: stage ?? "unknown",
-        totalTokens: usage?.totalTokens,
+        fileAliasMap,
+        stage,
         transport: "chat",
+        usage,
       });
       return trimmedContent;
     }
@@ -126,16 +125,12 @@ export async function complete(
           "Responses API returned empty or invalid response",
         );
       }
-      notifyAiOutputObserver({
-        content,
+      notifyModelOutputEvent(content, {
         durationMs: performance.now() - fallbackStartedAtMs,
-        inputTokens: usage?.inputTokens,
-        kind: "model-output",
-        outputTokens: usage?.outputTokens,
-        requestCountDelta: 1,
-        stage: stage ?? "unknown",
-        totalTokens: usage?.totalTokens,
+        fileAliasMap,
+        stage,
         transport: "responses",
+        usage,
       });
       return content;
     } catch (fallbackErr: unknown) {
@@ -336,6 +331,32 @@ function notifyAiOutputObserver(event: AiOutputEvent): void {
   } catch {
     // Verbose logging must never interfere with commit generation.
   }
+}
+
+function notifyModelOutputEvent(
+  content: string,
+  options: {
+    durationMs: number;
+    fileAliasMap: AiOutputFileAliasMap;
+    stage?: TokenUsageStage;
+    transport: AiOutputTransport;
+    usage: null | Omit<TokenUsageSummary, "requestCount">;
+  },
+): void {
+  notifyAiOutputObserver({
+    content,
+    durationMs: options.durationMs,
+    ...(options.fileAliasMap.size > 0
+      ? { fileAliasMap: options.fileAliasMap }
+      : {}),
+    inputTokens: options.usage?.inputTokens,
+    kind: "model-output",
+    outputTokens: options.usage?.outputTokens,
+    requestCountDelta: 1,
+    stage: options.stage ?? "unknown",
+    totalTokens: options.usage?.totalTokens,
+    transport: options.transport,
+  });
 }
 
 function readUsageNumber(value: unknown): null | number {

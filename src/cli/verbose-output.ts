@@ -1,5 +1,6 @@
 import type { AiOutputEvent } from "../commit-planning/orchestration.js";
 
+import { normalizeAiOutputPaths } from "../commit-planning/ai-output-aliases.js";
 import {
   buildEventTitle,
   formatEventStatLines,
@@ -39,7 +40,7 @@ export function formatVerboseAiOutputLines(
 ): string[] {
   const maxWidth = Math.max(24, options?.maxWidth ?? 100);
   const mode = options?.mode ?? "summary";
-  const parsed = parseJson(event.content);
+  const parsed = normalizeAiOutputPaths(parseJson(event.content), event.fileAliasMap);
   const sequence = options?.sequence;
 
   if (mode === "trace") {
