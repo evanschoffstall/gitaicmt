@@ -66,12 +66,12 @@
     "globals": "^17.4.0",
     "jscpd": "^4.0.8",
     "knip": "^5.88.1",
-    "secretlint": "^11.3.1",
+    "secretlint": "^11.4.0",
     "type-coverage": "^2.29.7",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "openai": "^6.32.0",
+    "openai": "^6.33.0",
     "zod": "^4.3.6"
   }
 }
