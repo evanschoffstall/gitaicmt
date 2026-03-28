@@ -64,7 +64,9 @@ let verboseMode = false;
 const RED = "\x1b[31m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
+const BLUE = "\x1b[34m";
 const CYAN = "\x1b[36m";
+const WHITE = "\x1b[37m";
 const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
@@ -83,6 +85,12 @@ interface CommitPlanAnalysis {
   files: FileDiff[];
   groups: { files: PlannedCommitFile[]; message: string }[];
   plannerFallbackNotice: null | string;
+}
+
+interface StatusRow {
+  label: string;
+  tone?: "default" | "warning";
+  value: string;
 }
 
 interface TokenCheckOptions {
@@ -107,9 +115,11 @@ async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
     cfg,
     tokenCheckOptions,
   );
-  log(
-    `${DIM}Analyzing ${formatCount(files.length)} file(s) with ${cfg.openai.model}...${RESET}`,
-  );
+  log("");
+  logStatusSection("Analyzing changes", [
+    { label: "model", value: cfg.openai.model },
+    { label: "files", value: `${formatCount(files.length)} changed file(s)` },
+  ]);
   logTokenEstimate(
     tokenEstimate,
     cfg.analysis.tokenWarningThreshold,
@@ -126,6 +136,39 @@ async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
   const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
   const plannerFallbackNotice = getPlannerFallbackNotice(plannerNoticeState);
   return { elapsed, files, groups, plannerFallbackNotice } satisfies CommitPlanAnalysis;
+}
+
+function buildReadyToCommitPrompt(plannedCommitCount: number): string {
+  return buildStatusSectionLines(
+    "Ready to commit",
+    [
+      {
+        label: "commits",
+        value: `${formatCount(plannedCommitCount)} planned ${plannedCommitCount === 1 ? "commit" : "commits"} ready`,
+      },
+    ],
+    resolveLogWidth(),
+    `${BOLD}${YELLOW}Proceed?${RESET}`,
+  ).join("\n");
+}
+
+function buildStatusSectionLines(
+  title: string,
+  rows: StatusRow[],
+  maxWidth: number,
+  trailingLine?: string,
+): string[] {
+  const sectionLines = [`${BOLD}${WHITE}${title}${RESET}`];
+
+  for (const row of rows) {
+    sectionLines.push(...formatStatusRowLines(row, maxWidth));
+  }
+
+  if (trailingLine) {
+    sectionLines.push(trailingLine);
+  }
+
+  return sectionLines;
 }
 
 /** Analyze, split, and execute multiple commits */
@@ -160,7 +203,7 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
   if (!autoConfirm) {
     logActualTokenUsage(getTokenUsageSummary());
     const confirmed = await promptYesNo(
-      `${BOLD}Proceed with creating ${formatCount(mergedGroups.length)} planned ${mergedGroups.length === 1 ? "commit" : "commits"}?${RESET}`,
+      buildReadyToCommitPrompt(mergedGroups.length),
     );
     if (!confirmed) {
       log(`${YELLOW}Aborted.${RESET}`);
@@ -528,10 +571,12 @@ function ensureStaged(): void {
   }
 }
 
-// -------- Commands --------
-
 function formatCount(value: number): string {
   return String(value);
+}
+
+function formatRequestCount(value: number): string {
+  return `${formatCount(value)} request(s)`;
 }
 
 function formatStageUsageLabel(stage: string): string {
@@ -555,6 +600,25 @@ function formatStageUsageLabel(stage: string): string {
       return stage;
     }
   }
+}
+
+function formatStatusRowLines(row: StatusRow, maxWidth: number): string[] {
+  const labelText = `${row.label}:`;
+  const labelColumnWidth = 12;
+  const firstLinePrefix = `${labelText.padEnd(labelColumnWidth)} `;
+  const continuationPrefix = `${" ".repeat(labelColumnWidth)} `;
+  const contentWidth = Math.max(12, maxWidth - 3 - firstLinePrefix.length);
+  const wrappedValueLines = wrapDisplayText(row.value, contentWidth);
+  const labelColor = row.tone === "warning" ? YELLOW : WHITE;
+
+  return wrappedValueLines.map((line, index) => {
+    const prefix = index === 0 ? firstLinePrefix : continuationPrefix;
+    const styledPrefix =
+      index === 0
+        ? `${labelColor}${BOLD}${prefix}${RESET}`
+        : `${DIM}${prefix}${RESET}`;
+    return `  ${styledPrefix}${DIM}${line}${RESET}`;
+  });
 }
 
 function formatTokenWarning(tokenWarningThreshold: number): string {
@@ -582,14 +646,6 @@ function logActualTokenUsage(usage: {
   requestCount: number;
   totalTokens: number;
 }): void {
-  log(
-    `${DIM}tokens used: ${formatCount(usage.totalTokens)} total across ${formatCount(usage.requestCount)} request(s)${RESET}`,
-  );
-
-  if (!verboseMode) {
-    return;
-  }
-
   const usageByStage = getTokenUsageByStage();
   const stageLines = Object.entries(usageByStage)
     .filter(([, stageUsage]) => stageUsage.requestCount > 0)
@@ -598,9 +654,21 @@ function logActualTokenUsage(usage: {
         `${formatStageUsageLabel(stage)}=${formatCount(stageUsage.totalTokens)} (${formatCount(stageUsage.requestCount)} req)`,
     );
 
-  if (stageLines.length > 0) {
-    verbose(`Token stages: ${stageLines.join(", ")}`);
-  }
+  log("");
+  logStatusSection("Usage summary", [
+    {
+      label: "tokens used",
+      value: `${formatCount(usage.totalTokens)} total across ${formatRequestCount(usage.requestCount)}`,
+    },
+    ...(verboseMode && stageLines.length > 0
+      ? [
+          {
+            label: "stages",
+            value: stageLines.join(" · "),
+          },
+        ]
+      : []),
+  ]);
 }
 
 function logCommitPlanAnalysis(analysis: CommitPlanAnalysis): void {
@@ -648,6 +716,10 @@ function logPlannedCommits(
   log("");
 }
 
+function logStatusSection(title: string, rows: StatusRow[]): void {
+  writeTerminalLines(buildStatusSectionLines(title, rows, resolveLogWidth()));
+}
+
 function logTokenEstimate(
   estimate: TokenEstimateSummary,
   tokenWarningThreshold: number,
@@ -657,19 +729,39 @@ function logTokenEstimate(
     return;
   }
 
-  log(
-    estimate.minimumRequestCount < estimate.requestCount ||
-      estimate.minimumTotalTokens < estimate.totalTokens
-      ? `${DIM}estimated tokens: baseline estimate ~${formatCount(estimate.minimumTotalTokens)} across ${formatCount(estimate.minimumRequestCount)} request(s); conservative upper bound ~${formatCount(estimate.totalTokens)} across about ${formatCount(estimate.requestCount)} request(s), estimated peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`
-      : `${DIM}estimated tokens: ~${formatCount(estimate.totalTokens)} across about ${formatCount(estimate.requestCount)} request(s), estimated peak ~${formatCount(estimate.peakRequestTokens)}/request${RESET}`,
-  );
-
-  if (
-    !suppressWarning &&
-    isHighTokenEstimate(estimate, tokenWarningThreshold)
-  ) {
-    log(`${YELLOW}${formatTokenWarning(tokenWarningThreshold)}${RESET}`);
-  }
+  logStatusSection("estimated tokens:", [
+    ...(estimate.minimumRequestCount < estimate.requestCount ||
+    estimate.minimumTotalTokens < estimate.totalTokens
+      ? [
+          {
+            label: "baseline",
+            value: `~${formatCount(estimate.minimumTotalTokens)} across ${formatRequestCount(estimate.minimumRequestCount)}`,
+          },
+          {
+            label: "upper bound",
+            value: `~${formatCount(estimate.totalTokens)} across about ${formatRequestCount(estimate.requestCount)}`,
+          },
+        ]
+      : [
+          {
+            label: "estimate",
+            value: `~${formatCount(estimate.totalTokens)} across about ${formatRequestCount(estimate.requestCount)}`,
+          },
+        ]),
+    {
+      label: "peak",
+      value: `~${formatCount(estimate.peakRequestTokens)}/request`,
+    },
+    ...(!suppressWarning && isHighTokenEstimate(estimate, tokenWarningThreshold)
+      ? [
+          {
+            label: "warning",
+            tone: "warning" as const,
+            value: formatTokenWarning(tokenWarningThreshold),
+          },
+        ]
+      : []),
+  ]);
 }
 
 function logVerboseAiOutput(event: AiOutputEvent): void {
@@ -682,6 +774,8 @@ function logVerboseAiOutput(event: AiOutputEvent): void {
   });
   logVerboseBlock(lines);
 }
+
+// -------- Entry --------
 
 function logVerboseBlock(lines: string[]): void {
   if (!verboseMode) {
@@ -765,8 +859,6 @@ function observeAiOutput(event: AiOutputEvent): void {
     logVerboseAiOutput(event);
   }
 }
-
-// -------- Entry --------
 
 /** Prompt the user for y/n. Re-prompts until a valid answer is given. */
 async function promptYesNo(question: string): Promise<boolean> {
