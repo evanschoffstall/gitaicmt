@@ -9,9 +9,9 @@ type FileDiff = import("../../git/diff.js").FileDiff;
 type PlannedCommit = import("../types.js").PlannedCommit;
 type PlannedCommitFile = import("../types.js").PlannedCommitFile;
 
-const MAX_PREVIEW_FILES_PER_COMMIT = 3;
-const MAX_PREVIEW_HUNKS_PER_FILE = 2;
-const MAX_PREVIEW_LINES_PER_HUNK = 3;
+const MAX_PREVIEW_FILES_PER_COMMIT = 2;
+const MAX_PREVIEW_HUNKS_PER_FILE = 1;
+const MAX_PREVIEW_LINES_PER_HUNK = 2;
 const SUPPORT_COMMIT_TYPES = new Set(["chore", "docs", "style", "test"]);
 
 /** Builds all preview lines for a planned commit's files in the consolidation user prompt. */
@@ -203,7 +203,9 @@ export function shouldIncludeConsolidationPreview(
   const subject = group.message.split("\n")[0] ?? "";
   return (
     group.files.some((file) => repeatedPaths.has(file.path)) ||
-    group.files.some((file) => (file.hunks?.length ?? 0) > 0) ||
+    group.files.some(
+      (file) => Array.isArray(file.hunks) && file.hunks.length > 0,
+    ) ||
     isSupportLikeSubject(subject)
   );
 }
