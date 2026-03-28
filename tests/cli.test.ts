@@ -284,6 +284,19 @@ describe("CLI", () => {
       rmSync(dir, { recursive: true });
     });
 
+    test("'--plan' is an alias for 'plan'", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-alias-"));
+      execSync("git init && git commit --allow-empty -m 'init'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      const { stderr } = run("--plan", { cwd: dir });
+      expect(stderr).toContain("No changes to commit");
+
+      rmSync(dir, { recursive: true });
+    });
+
     test("'s' is an alias for 'single'", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-alias-"));
       execSync("git init && git commit --allow-empty -m 'init'", {
