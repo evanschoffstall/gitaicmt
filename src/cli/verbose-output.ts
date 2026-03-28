@@ -44,6 +44,10 @@ export function formatVerboseAiOutputLines(
   const sequence = options?.sequence;
 
   if (mode === "trace") {
+    if (event.stage === "consolidate" && isCommitPlan(parsed)) {
+      return formatConsolidationTraceSummary(event, parsed, maxWidth, sequence);
+    }
+
     return formatTraceBlock(event, parsed, maxWidth, sequence);
   }
 
@@ -65,6 +69,42 @@ export function formatVerboseAiOutputLines(
  */
 export function getVerboseAiOutputSequenceKey(event: AiOutputEvent): string {
   return getEventSequenceKey(event, parseJson(event.content));
+}
+
+function buildCommitSubjectPreviewLines(
+  commit: VerboseCommitPlanItem,
+  index: number,
+  maxWidth: number,
+  severity: ReturnType<typeof getEventFrameSeverity>,
+  firstPrefix: string,
+  continuationPrefix: string,
+  wrapOffset: number,
+): string[] {
+  const subject = commit.message.split("\n")[0]?.trim() ?? "(missing subject)";
+  return buildTraceWrappedLines(
+    `${String(index + 1)}. ${subject}`,
+    maxWidth,
+    severity,
+    firstPrefix,
+    continuationPrefix,
+    wrapOffset,
+  );
+}
+
+function buildTraceWrappedLines(
+  text: string,
+  maxWidth: number,
+  severity: ReturnType<typeof getEventFrameSeverity>,
+  firstPrefix: string,
+  continuationPrefix: string,
+  wrapOffset: number,
+): string[] {
+  return wrapLine(
+    text,
+    maxWidth - wrapOffset,
+    firstPrefix,
+    continuationPrefix,
+  ).map((line) => styleTraceRail(line, severity));
 }
 
 function collectBodyBullets(message: string): string[] {
@@ -93,6 +133,46 @@ function collectBodyBullets(message: string): string[] {
   return bullets;
 }
 
+function createCommitPlanRenderContext(
+  event: AiOutputEvent,
+  commits: VerboseCommitPlanItem[],
+  maxWidth: number,
+  titleBase: string,
+  includeCommitCountInTitle: boolean,
+): {
+  commitLabel: string;
+  lines: string[];
+  severity: ReturnType<typeof getEventFrameSeverity>;
+} {
+  const commitLabel =
+    commits.length === 1 ? "candidate commit" : "candidate commits";
+  const title = includeCommitCountInTitle
+    ? `${titleBase} · ${String(commits.length)} ${commitLabel}`
+    : titleBase;
+  const { lines, severity } = createCommitPlanTraceBlock(
+    event,
+    commits,
+    maxWidth,
+    title,
+  );
+  return { commitLabel, lines, severity };
+}
+
+function createCommitPlanTraceBlock(
+  event: AiOutputEvent,
+  commits: VerboseCommitPlanItem[],
+  maxWidth: number,
+  title: string,
+): {
+  lines: string[];
+  severity: ReturnType<typeof getEventFrameSeverity>;
+} {
+  const severity = getEventFrameSeverity(event, commits);
+  const lines = [styleTraceHeader(`╭── ${title}`, severity)];
+  lines.push(...formatEventStatLines(event, maxWidth, severity));
+  return { lines, severity };
+}
+
 function formatCommitFiles(files: VerboseCommitFile[]): string {
   return files
     .map((file) => {
@@ -115,43 +195,45 @@ function formatCommitPlanBlock(
   maxWidth: number,
   sequence?: number,
 ): string[] {
-  const severity = getEventFrameSeverity(event, commits);
-  const commitLabel =
-    commits.length === 1 ? "candidate commit" : "candidate commits";
-  const lines = [
-    styleTraceHeader(
-      `╭── ${buildEventTitle(event, commits, sequence)} · ${String(commits.length)} ${commitLabel}`,
-      severity,
-    ),
-  ];
-  lines.push(...formatEventStatLines(event, maxWidth, severity));
+  const { lines, severity } = createCommitPlanRenderContext(
+    event,
+    commits,
+    maxWidth,
+    buildEventTitle(event, commits, sequence),
+    true,
+  );
 
   for (let index = 0; index < commits.length; index++) {
     const commit = commits[index];
-    const subject =
-      commit.message.split("\n")[0]?.trim() ?? "(missing subject)";
     const bullets = collectBodyBullets(commit.message);
     const impactSummary = `${String(commit.files.length)} file(s) · ${String(bullets.length)} ${bullets.length === 1 ? "detail" : "details"}`;
 
     lines.push(
-      ...wrapLine(
-        `${String(index + 1)}. ${subject}`,
-        maxWidth - 2,
+      ...buildCommitSubjectPreviewLines(
+        commit,
+        index,
+        maxWidth,
+        severity,
         "│ ",
         "│    ",
-      ).map((line) => styleTraceRail(line, severity)),
-      ...wrapLine(
+        2,
+      ),
+      ...buildTraceWrappedLines(
         `impact: ${impactSummary}`,
-        maxWidth - 4,
+        maxWidth,
+        severity,
         "│   ",
         "│         ",
-      ).map((line) => styleTraceRail(line, severity)),
-      ...wrapLine(
+        4,
+      ),
+      ...buildTraceWrappedLines(
         `files: ${formatCommitFiles(commit.files)}`,
-        maxWidth - 4,
+        maxWidth,
+        severity,
         "│   ",
         "│         ",
-      ).map((line) => styleTraceRail(line, severity)),
+        4,
+      ),
     );
 
     const previewBullets = bullets.slice(0, 2);
@@ -174,6 +256,57 @@ function formatCommitPlanBlock(
     if (index < commits.length - 1) {
       lines.push(styleTraceRail("│", severity));
     }
+  }
+
+  lines.push(styleTraceFooter("╰──", severity));
+  return lines;
+}
+
+function formatConsolidationTraceSummary(
+  event: AiOutputEvent,
+  commits: VerboseCommitPlanItem[],
+  maxWidth: number,
+  sequence?: number,
+): string[] {
+  const { commitLabel, lines, severity } = createCommitPlanRenderContext(
+    event,
+    commits,
+    maxWidth,
+    `${buildEventTitle(event, commits, sequence)} trace`,
+    false,
+  );
+  lines.push(
+    ...buildTraceWrappedLines(
+      `summary: ${String(commits.length)} ${commitLabel} finalized; full plan cards render below`,
+      maxWidth,
+      severity,
+      "│   ",
+      "│            ",
+      4,
+    ),
+  );
+
+  for (const [index, commit] of commits.slice(0, 3).entries()) {
+    lines.push(
+      ...buildCommitSubjectPreviewLines(
+        commit,
+        index,
+        maxWidth,
+        severity,
+        "│   ",
+        "│      ",
+        4,
+      ),
+    );
+  }
+
+  if (commits.length > 3) {
+    lines.push(
+      styleTraceRail(
+        `│   ... ${String(commits.length - 3)} more commit summaries shown in the plan view`,
+        severity,
+      ),
+    );
   }
 
   lines.push(styleTraceFooter("╰──", severity));

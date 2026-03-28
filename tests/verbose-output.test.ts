@@ -231,7 +231,7 @@ describe("verbose-output", () => {
         kind: "model-output",
         outputTokens: 111,
         requestCountDelta: 1,
-        stage: "consolidate",
+        stage: "group",
         totalTokens: 555,
         transport: "responses",
       },
@@ -239,7 +239,7 @@ describe("verbose-output", () => {
     );
     const plainLines = getPlainLines(lines);
 
-    expect(lines[0]).toContain("Final consolidation #1 trace");
+    expect(lines[0]).toContain("Grouping batch #1 trace");
     expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(true);
     expect(plainLines.some((line) => line.includes("stats: model-output · responses · 1.26s"))).toBe(true);
     expect(plainLines.some((line) => line.includes("usage: 1 req · 444 in · 111 out · 555 tok"))).toBe(true);
@@ -252,6 +252,48 @@ describe("verbose-output", () => {
       ),
     ).toBe(true);
     expect(lines.some((line) => line.includes('4] }],'))).toBe(true);
+  });
+
+  test("summarizes final consolidation traces instead of repeating the full plan payload", () => {
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: JSON.stringify([
+          {
+            files: [{ path: "src/cli/output-presentation.ts" }],
+            message: "feat(cli): improve execution rendering\n\n- Render execution files vertically.",
+          },
+          {
+            files: [{ path: "src/git/operations.ts" }],
+            message: "fix(git): return structured commit output\n\n- Capture stdout and stderr for CLI rendering.",
+          },
+        ]),
+        durationMs: 1_048,
+        inputTokens: 555,
+        kind: "model-output",
+        outputTokens: 222,
+        requestCountDelta: 1,
+        stage: "consolidate",
+        totalTokens: 777,
+        transport: "responses",
+      },
+      { maxWidth: 84, mode: "trace", sequence: 1 },
+    );
+    const plainLines = getPlainLines(lines);
+
+    expect(lines[0]).toContain("Final consolidation #1 trace");
+    expect(
+      plainLines.some((line) =>
+        line.includes("summary: 2 candidate commits finalized; full plan cards render below"),
+      ),
+    ).toBe(true);
+    expect(
+      plainLines.some((line) => line.includes("1. feat(cli): improve execution rendering")),
+    ).toBe(true);
+    expect(
+      plainLines.some((line) => line.includes("2. fix(git): return structured commit output")),
+    ).toBe(true);
+    expect(lines.join("\n")).not.toContain('"files":');
+    expect(lines.join("\n")).not.toContain('"path": "src/cli/output-presentation.ts"');
   });
 
   test("wraps long trace values with continuation aligned to the value column", () => {
