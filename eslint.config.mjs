@@ -1,7 +1,6 @@
 import pluginJs from "@eslint/js";
 import pluginTypeScriptEslint from "@typescript-eslint/eslint-plugin";
 import pluginTypeScriptEslintRaw from "@typescript-eslint/eslint-plugin/use-at-your-own-risk/raw-plugin";
-import pluginBoundaries from "eslint-plugin-boundaries";
 import pluginEslintComments from "eslint-plugin-eslint-comments";
 import pluginImport from "eslint-plugin-import";
 import pluginNoOnlyTests from "eslint-plugin-no-only-tests";
@@ -179,7 +178,6 @@ export default [
   {
     plugins: {
       "@typescript-eslint": pluginTypeScriptEslint,
-      boundaries: pluginBoundaries,
       "eslint-comments": pluginEslintComments,
       import: pluginImport,
       "no-only-tests": pluginNoOnlyTests,
