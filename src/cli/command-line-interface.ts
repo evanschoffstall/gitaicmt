@@ -49,6 +49,7 @@ import {
   recordPlannerNotice,
 } from "./planner-notices.js";
 import { resolveTerminalColumns } from "./terminal-columns.js";
+import { wrapTerminalTextBlock } from "./terminal-line-wrapping.js";
 import { withThinkingIndicator, writeTerminalLines } from "./terminal-output-ui.js";
 import {
   formatVerboseAiOutputLines,
@@ -570,7 +571,7 @@ function isHighTokenEstimate(
 }
 
 function log(msg: string) {
-  writeTerminalLines(msg.split("\n"));
+  writeTerminalLines(wrapTerminalTextBlock(msg, resolveLogWidth()));
 }
 
 function logActualTokenUsage(usage: {
@@ -694,6 +695,7 @@ async function main() {
   const args = process.argv.slice(2);
   const hasYFlag = args.includes("-y") || args.includes("--yes");
   const hasNoTokenCheckFlag = args.includes("--no-token-check");
+  const hasPlanFlag = args.includes("--plan");
   const hasVerboseFlag = args.includes("-v") || args.includes("--verbose");
   const hasTraceFlag = args.includes("--trace");
   const hasVersionFlag = args.includes("--version");
@@ -714,6 +716,8 @@ async function main() {
 
   const cmd = hasHelpFlag
     ? "help"
+    : hasPlanFlag
+      ? "plan"
     : (args.find((a) => !a.startsWith("-")) ?? "");
 
   switch (cmd) {
@@ -765,6 +769,7 @@ function observeAiOutput(event: AiOutputEvent): void {
 /** Prompt the user for y/n. Re-prompts until a valid answer is given. */
 async function promptYesNo(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
+  const wrappedQuestionLines = wrapTerminalTextBlock(question, resolveLogWidth());
 
   try {
     for (;;) {
@@ -781,7 +786,13 @@ async function promptYesNo(question: string): Promise<boolean> {
         };
 
         process.stdin.once("end", onEnd);
-        rl.question(`${question} ${DIM}(y/n)${RESET} `, (answer) => {
+        const [promptLine = "", ...leadingLines] = wrappedQuestionLines
+          .slice()
+          .reverse();
+        if (leadingLines.length > 0) {
+          writeTerminalLines(leadingLines.reverse());
+        }
+        rl.question(`${promptLine} ${DIM}(y/n)${RESET} `, (answer) => {
           if (settled) {
             return;
           }
@@ -792,7 +803,10 @@ async function promptYesNo(question: string): Promise<boolean> {
       });
 
       const answer = await answerPromise;
-      if (answer === "__EOF__") return true;
+      if (answer === "__EOF__") {
+        writeTerminalLines([""]);
+        return true;
+      }
       const a = answer.trim().toLowerCase();
       if (a === "y" || a === "yes") return true;
       if (a === "n" || a === "no") return false;
@@ -809,7 +823,16 @@ function resolveDisplayWidth(): number {
     streams: [process.stderr, process.stdout],
   });
 
-  return Math.max(68, terminalColumns - 6);
+  return Math.max(24, terminalColumns - 6);
+}
+
+function resolveLogWidth(): number {
+  const terminalColumns = resolveTerminalColumns({
+    fallbackColumns: DEFAULT_VERBOSE_WIDTH,
+    streams: [process.stderr, process.stdout],
+  });
+
+  return Math.max(20, terminalColumns - 1);
 }
 
 function resolveVerboseWidth(): number {
@@ -818,7 +841,7 @@ function resolveVerboseWidth(): number {
     streams: [process.stderr, process.stdout],
   });
 
-  return Math.max(72, terminalColumns - 14);
+  return Math.max(24, terminalColumns - 14);
 }
 
 function shouldPromptForHighTokenUsage(

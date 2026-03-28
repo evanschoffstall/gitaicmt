@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { stripAnsi } from "../src/cli/terminal-line-wrapping.js";
 import {
   plannedCommitFilesOverlap,
   resolveOverlappingCommits,
@@ -18,6 +19,13 @@ import {
 const { describe, expect, test } = await import("bun:test");
 
 type PlannedCommit = import("../src/commit-planning/orchestration.js").PlannedCommit;
+
+function getVisibleLineLengths(text: string): number[] {
+  return stripAnsi(text)
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => line.length);
+}
 
 // ═══════════════════════════════════════════════════════════════
 // CLI integration tests — spawns the actual CLI binary
@@ -109,6 +117,14 @@ describe("CLI", () => {
       const { stderr } = run("help");
       expect(stderr).toContain("--trace");
       expect(stderr).toContain("raw intermediate AI payloads");
+    });
+
+    test("wraps help output on narrow terminals", () => {
+      const { stderr } = run("help", {
+        env: { COLUMNS: "36" },
+      });
+
+      expect(Math.max(...getVisibleLineLengths(stderr))).toBeLessThanOrEqual(35);
     });
   });
 
@@ -347,6 +363,35 @@ describe("CLI", () => {
       expect(stderr).toContain("estimated tokens:");
       expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
       expect(stderr).toContain("No OpenAI API key");
+
+      rmSync(dir, { recursive: true });
+    });
+
+    test("wraps token estimate output on narrow terminals", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-tokenwrap-"));
+      execSync("git init && git commit --allow-empty -m 'init'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+      writeFileSync(
+        join(dir, "gitaicmt.config.json"),
+        JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
+      );
+      writeFileSync(join(dir, "test.txt"), "hello\nworld\nmore\ntext\n");
+      execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
+
+      const { exitCode, stderr } = run("gen", {
+        cwd: dir,
+        env: {
+          COLUMNS: "38",
+          OPENAI_API_KEY: "",
+          PATH: process.env["PATH"] ?? "",
+          XDG_CONFIG_HOME: dir,
+        },
+      });
+
+      expect(exitCode).not.toBe(0);
+      expect(Math.max(...getVisibleLineLengths(stderr))).toBeLessThanOrEqual(37);
 
       rmSync(dir, { recursive: true });
     });

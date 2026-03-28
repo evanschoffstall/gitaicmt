@@ -7,6 +7,8 @@
 import { ValidationError } from "../application/errors.js";
 import { buildPatch, type FileDiff } from "../git/diff.js";
 import { stageFiles, stagePatch } from "../git/operations.js";
+import { resolveTerminalColumns } from "./terminal-columns.js";
+import { wrapTerminalTextBlock } from "./terminal-line-wrapping.js";
 
 type PlannedCommitFile = import("../commit-planning/orchestration.js").PlannedCommitFile;
 
@@ -101,5 +103,11 @@ function getStageableHunkIndexes(
 }
 
 function log(msg: string) {
-  process.stderr.write(msg + "\n");
+  const terminalColumns = resolveTerminalColumns({
+    fallbackColumns: 100,
+    streams: [process.stderr],
+  });
+  for (const line of wrapTerminalTextBlock(msg, Math.max(20, terminalColumns - 1))) {
+    process.stderr.write(`${line}\n`);
+  }
 }
