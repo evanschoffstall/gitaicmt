@@ -1,9 +1,16 @@
+import { posix as pathPosix } from "node:path";
+
 import { MAX_COMMIT_GROUPS, MAX_COMMIT_MESSAGE_LENGTH } from "../application/constants.js";
 import { ValidationError } from "../application/errors.js";
 import { formatScalar, validateCommitMessage } from "../commit-messages/formatting.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./types.js";
 
 type FileDiff = import("../git/diff.js").FileDiff;
+
+interface FilePathResolver {
+  exactPaths: Map<string, string>;
+  uniquePathsByStem: Map<string, string>;
+}
 
 export function validateAndNormalizeGrouping(
   raw: unknown,
@@ -110,26 +117,51 @@ export function validateAndNormalizeGrouping(
 
 function buildFilePathResolver(
   fileByPath: Map<string, FileDiff>,
-): Map<string, string> {
-  const resolver = new Map<string, string>();
+): FilePathResolver {
+  const exactPaths = new Map<string, string>();
   const files = [...fileByPath.values()];
+  const canonicalByStem = new Map<string, string>();
+  const ambiguousStems = new Set<string>();
 
   for (let index = 0; index < files.length; index++) {
     const file = files[index];
     const canonicalPath = file.path;
     const alias = `F${String(index + 1)}`;
 
-    resolver.set(canonicalPath, canonicalPath);
-    resolver.set(alias, canonicalPath);
-    resolver.set(`${alias}: ${canonicalPath}`, canonicalPath);
+    exactPaths.set(canonicalPath, canonicalPath);
+    exactPaths.set(alias, canonicalPath);
+    exactPaths.set(`${alias}: ${canonicalPath}`, canonicalPath);
 
-    if (file.oldPath && !resolver.has(file.oldPath)) {
-      resolver.set(file.oldPath, canonicalPath);
-      resolver.set(`${alias}: ${file.oldPath}`, canonicalPath);
+    if (file.oldPath && !exactPaths.has(file.oldPath)) {
+      exactPaths.set(file.oldPath, canonicalPath);
+      exactPaths.set(`${alias}: ${file.oldPath}`, canonicalPath);
+    }
+
+    registerStemCandidate(canonicalByStem, ambiguousStems, canonicalPath);
+    if (file.oldPath) {
+      registerStemCandidate(canonicalByStem, ambiguousStems, file.oldPath);
     }
   }
 
-  return resolver;
+  return {
+    exactPaths,
+    uniquePathsByStem: new Map(
+      [...canonicalByStem].filter(([stem]) => !ambiguousStems.has(stem)),
+    ),
+  };
+}
+
+/**
+ * Return the repository path without its trailing filename extension, when one
+ * exists. This stays generic across any file type instead of enumerating them.
+ */
+function getExtensionlessStem(path: string): null | string {
+  const extension = pathPosix.extname(path);
+  if (extension.length === 0) {
+    return null;
+  }
+
+  return path.slice(0, -extension.length);
 }
 
 /**
@@ -213,7 +245,7 @@ function mergeDuplicateFileEntries(
 function normalizeFileEntry(
   fileEntry: unknown,
   fileByPath: Map<string, FileDiff>,
-  pathResolver: Map<string, string>,
+  pathResolver: FilePathResolver,
   groupIndex: number,
   fileIndex: number,
 ): PlannedCommitFile {
@@ -278,24 +310,66 @@ function normalizeFileEntry(
   };
 }
 
+function registerStemCandidate(
+  canonicalByStem: Map<string, string>,
+  ambiguousStems: Set<string>,
+  path: string,
+): void {
+  const stem = getExtensionlessStem(path);
+  if (!stem || ambiguousStems.has(stem)) {
+    return;
+  }
+
+  const existingCanonicalPath = canonicalByStem.get(stem);
+  if (existingCanonicalPath && existingCanonicalPath !== path) {
+    canonicalByStem.delete(stem);
+    ambiguousStems.add(stem);
+    return;
+  }
+
+  canonicalByStem.set(stem, path);
+}
+
 function resolveKnownPath(
   rawPath: string,
-  pathResolver: Map<string, string>,
+  pathResolver: FilePathResolver,
 ): null | string {
   const trimmedPath = rawPath.trim();
   if (trimmedPath.length === 0) {
     return null;
   }
 
-  const direct = pathResolver.get(trimmedPath);
+  const direct = pathResolver.exactPaths.get(trimmedPath);
   if (direct) {
     return direct;
   }
 
   const aliasPrefixedPath = /^F\d+:\s+/u.exec(trimmedPath);
-  if (!aliasPrefixedPath) {
+  if (aliasPrefixedPath) {
+    return (
+      resolveStemMatchedPath(
+        trimmedPath.slice(aliasPrefixedPath[0].length),
+        pathResolver,
+      ) ?? null
+    );
+  }
+
+  return resolveStemMatchedPath(trimmedPath, pathResolver);
+}
+
+/**
+ * Resolve extension drift only when one repository path owns the stem. This
+ * avoids guessing between sibling files such as component `.ts` and `.tsx`
+ * variants that share the same base name.
+ */
+function resolveStemMatchedPath(
+  candidatePath: string,
+  pathResolver: FilePathResolver,
+): null | string {
+  const stem = getExtensionlessStem(candidatePath);
+  if (!stem) {
     return null;
   }
 
-  return pathResolver.get(trimmedPath.slice(aliasPrefixedPath[0].length)) ?? null;
+  return pathResolver.uniquePathsByStem.get(stem) ?? null;
 }

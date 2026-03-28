@@ -136,6 +136,49 @@ describe("validateAndNormalizeGrouping", () => {
     ]);
   });
 
+  test("accepts safe extension-variant paths when the repo stem is unique", () => {
+    const file = makeFile("src/app/dashboard/hooks/useDashboardToolbarState.ts", 1);
+    const fileByPath = new Map([[file.path, file]]);
+
+    const groups = validateAndNormalizeGrouping(
+      [
+        {
+          files: [{ path: "src/app/dashboard/hooks/useDashboardToolbarState.tsx" }],
+          message: commitMessage("fix(dashboard): accept planner extension drift"),
+        },
+      ],
+      fileByPath,
+    );
+
+    expect(groups).toEqual([
+      {
+        files: [{ path: "src/app/dashboard/hooks/useDashboardToolbarState.ts" }],
+        message: commitMessage("fix(dashboard): accept planner extension drift"),
+      },
+    ]);
+  });
+
+  test("rejects extension-variant paths when multiple files share the same stem", () => {
+    const tsFile = makeFile("src/app/dashboard/hooks/useDashboardToolbarState.ts", 1);
+    const tsxFile = makeFile("src/app/dashboard/hooks/useDashboardToolbarState.tsx", 1);
+    const fileByPath = new Map([
+      [tsFile.path, tsFile],
+      [tsxFile.path, tsxFile],
+    ]);
+
+    expect(() =>
+      validateAndNormalizeGrouping(
+        [
+          {
+            files: [{ path: "src/app/dashboard/hooks/useDashboardToolbarState.jsx" }],
+            message: commitMessage("fix(dashboard): reject ambiguous extension drift"),
+          },
+        ],
+        fileByPath,
+      ),
+    ).toThrow(ValidationError);
+  });
+
   test("accepts hunks:'all' by normalizing it to whole-file ownership", () => {
     const file = makeFile("src/app.ts", 2);
     const fileByPath = new Map([[file.path, file]]);
