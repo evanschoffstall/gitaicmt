@@ -37,7 +37,7 @@ export function formatVerboseAiOutputLines(
   event: AiOutputEvent,
   options?: VerboseOutputOptions,
 ): string[] {
-  const maxWidth = Math.max(60, options?.maxWidth ?? 100);
+  const maxWidth = Math.max(24, options?.maxWidth ?? 100);
   const mode = options?.mode ?? "summary";
   const parsed = parseJson(event.content);
   const sequence = options?.sequence;

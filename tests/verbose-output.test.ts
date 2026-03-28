@@ -6,6 +6,83 @@ import {
 const { describe, expect, test } = await import("bun:test");
 
 describe("verbose-output", () => {
+  test("honors narrow trace widths instead of forcing a wider internal floor", () => {
+    const raw = JSON.stringify([
+      {
+        files: [
+          {
+            hunks: [0, 1, 2, 3],
+            path: "src/cli/command-line-interface.ts",
+          },
+        ],
+        message:
+          "fix(verbose-output): isolate sequence counters by rendered event family",
+      },
+    ]);
+
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: raw,
+        kind: "model-output",
+        stage: "group",
+        transport: "responses",
+      },
+      { maxWidth: 28, mode: "trace", sequence: 1 },
+    );
+
+    expect(
+      lines.some((line) => line.includes('"path":')),
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('"hunks": [0, 1, 2, 3]')),
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('"message": "fix(verbose')),
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('-output):')),
+    ).toBe(true);
+  });
+
+  test("splits long trace path tokens before the terminal hard-wraps them", () => {
+    const raw = JSON.stringify([
+      {
+        files: [
+          {
+            hunks: [0],
+            path: "src/cli/verbose-rendering/block-render.ts",
+          },
+        ],
+        message: "fix: trace path wrapping",
+      },
+    ]);
+
+    const lines = formatVerboseAiOutputLines(
+      {
+        content: raw,
+        kind: "model-output",
+        stage: "group",
+        transport: "responses",
+      },
+      { maxWidth: 28, mode: "trace", sequence: 1 },
+    );
+
+    expect(
+      lines.some((line) =>
+        line.includes('"path": "src/cli/'),
+      ),
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('verbose-')),
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('rendering/')),
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('render.ts",')),
+    ).toBe(true);
+  });
+
   test("formats planned commit arrays as semantic terminal summaries", () => {
     const lines = formatVerboseAiOutputLines(
       {
@@ -150,12 +227,17 @@ describe("verbose-output", () => {
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('             { "path": "src/cli/command-line-interface.ts", "hunks": [0, 1,'),
+        line.includes('             {'),
       ),
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('             2, 4, 5, 8, 9, 10, 13, 14] },'),
+        line.includes('               "path": "src/cli/command-line-interface.ts",'),
+      ),
+    ).toBe(true);
+    expect(
+      lines.some((line) =>
+        line.includes('               "hunks": [0, 1, 2, 4, 5, 8, 9, 10, 13, 14]'),
       ),
     ).toBe(true);
   });
@@ -173,13 +255,26 @@ describe("verbose-output", () => {
 
     expect(
       lines.some((line) =>
-        line.includes('             { "path": "src/cli/command-line-interface.ts",'),
+        line.includes('             {'),
       ),
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('             "hunks": [0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13] }'),
+        line.includes('               "path": "src/cli/'),
       ),
+    ).toBe(true);
+    expect(
+      lines.some((line) =>
+        line.includes('                       command-'),
+      ),
+    ).toBe(true);
+    expect(
+      lines.some((line) =>
+        line.includes('               "hunks": [0, 1, 2, 4,'),
+      ),
+    ).toBe(true);
+    expect(
+      lines.some((line) => line.includes('                        9, 12, 13]')),
     ).toBe(true);
   });
 

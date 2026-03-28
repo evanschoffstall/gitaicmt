@@ -79,7 +79,7 @@ function formatJsonTraceObject(
   depth: number,
   maxWidth: number,
 ): string {
-  const compactFileReference = formatTraceFileReference(value);
+  const compactFileReference = formatTraceFileReference(value, depth, maxWidth);
   if (compactFileReference) {
     return compactFileReference;
   }
@@ -125,10 +125,21 @@ function formatJsonTraceObject(
  */
 function formatTraceFileReference(
   value: Record<string, unknown>,
+  depth: number,
+  maxWidth: number,
 ): null | string {
   const keys = Object.keys(value).sort();
   if (keys.length === 1 && typeof value.path === "string") {
-    return `{ "path": ${JSON.stringify(value.path)} }`;
+    const compactPathReference = `{ "path": ${JSON.stringify(value.path)} }`;
+    if (compactPathReference.length <= remainingTraceWidth(depth, maxWidth)) {
+      return compactPathReference;
+    }
+
+    return [
+      "{",
+      `  "path": ${JSON.stringify(value.path)}`,
+      "}",
+    ].join("\n");
   }
 
   if (
@@ -137,7 +148,18 @@ function formatTraceFileReference(
     Array.isArray(value.hunks) &&
     value.hunks.every((hunk) => typeof hunk === "number")
   ) {
-    return `{ "path": ${JSON.stringify(value.path)}, "hunks": [${value.hunks.join(", ")}] }`;
+    const compactFileReference = `{ "path": ${JSON.stringify(value.path)}, "hunks": [${value.hunks.join(", ")}] }`;
+    if (compactFileReference.length <= remainingTraceWidth(depth, maxWidth)) {
+      return compactFileReference;
+    }
+
+    const hunksValue = `[${value.hunks.join(", ")}]`;
+    return [
+      "{",
+      `  "path": ${JSON.stringify(value.path)},`,
+      `  "hunks": ${hunksValue}`,
+      "}",
+    ].join("\n");
   }
 
   return null;
