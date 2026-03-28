@@ -16,6 +16,16 @@ const ANSI_RESET = "\x1b[0m";
 const ANSI_WHITE = "\x1b[37m";
 const ANSI_YELLOW = "\x1b[33m";
 
+/** Input contract for rendering one execution-step block during commit runs. */
+export interface ExecutionCommitOptions {
+  fileDiffs?: Map<string, FileDiff>;
+  files: PlannedCommitFile[];
+  index: number;
+  maxWidth: number;
+  subject: string;
+  total: number;
+}
+
 /** Input contract for rendering one planned-commit card in the default UI. */
 export interface PlanCardOptions {
   fileDiffs?: Map<string, FileDiff>;
@@ -30,7 +40,49 @@ export interface PlanCardOptions {
 export interface PresentationStatusRow {
   label: string;
   tone?: "default" | "warning";
-  value: string;
+  value: string | string[];
+}
+
+/** Renders one execution step with a compact header and a vertical file list. */
+export function buildExecutionCommitLines(
+  options: ExecutionCommitOptions,
+): string[] {
+  const fileLines = wrapDisplayFileLines(
+    options.files.map((file) => formatCommitFile(file, options.fileDiffs)),
+    options.maxWidth - 8,
+  );
+
+  return [
+    `${ANSI_BOLD}${ANSI_GREEN}[${String(options.index)}/${String(options.total)}]${ANSI_RESET} ${options.subject}`,
+    `${ANSI_DIM}  Files${ANSI_RESET}`,
+    ...fileLines.map((line) => `    ${formatExecutionListLine(line)}`),
+  ];
+}
+
+/** Groups raw git commit output beneath the execution step as secondary detail. */
+export function buildExecutionResultLines(
+  output: string,
+  maxWidth: number,
+): string[] {
+  const trimmedOutput = output.trim();
+  if (trimmedOutput.length === 0) {
+    return [];
+  }
+
+  const rawLines = trimmedOutput
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0);
+  const lines = [`${ANSI_DIM}  Git${ANSI_RESET}`];
+
+  for (const rawLine of rawLines) {
+    const wrappedLines = wrapDisplayText(rawLine, Math.max(12, maxWidth - 8));
+    for (const wrappedLine of wrappedLines) {
+      lines.push(`    ${ANSI_DIM}${wrappedLine}${ANSI_RESET}`);
+    }
+  }
+
+  return lines;
 }
 
 /**
@@ -175,19 +227,51 @@ function formatCardValueLines(
   });
 }
 
+/** Styles one execution-stage file line with a neutral bullet and hanging indent. */
+function formatExecutionListLine(line: string): string {
+  const bulletMatch = /^(\s*)-\s(.*)$/u.exec(line);
+  if (!bulletMatch) {
+    return `${ANSI_DIM}${line}${ANSI_RESET}`;
+  }
+
+  const [, indentation, content] = bulletMatch;
+  return `${ANSI_DIM}${indentation}${ANSI_RESET}${ANSI_CYAN}${ANSI_BOLD}-${ANSI_RESET}${ANSI_DIM} ${content}${ANSI_RESET}`;
+}
+
 /** Aligns one status row label and wraps the value to the provided width. */
 function formatStatusRowLines(
   row: PresentationStatusRow,
   maxWidth: number,
 ): string[] {
   const labelWidth = 10;
-  const labelText = row.label.padEnd(labelWidth);
+  const labelText = `${row.label}:`.padEnd(labelWidth + 1);
   const valueWidth = Math.max(12, maxWidth - 3 - labelWidth - 1);
-  const valueLines = wrapDisplayText(row.value, valueWidth);
+  const valueLines = normalizeStatusValueLines(row.value, valueWidth);
   const labelColor = row.tone === "warning" ? ANSI_YELLOW : ANSI_DIM;
 
   return valueLines.map((line, index) => {
     const prefix = index === 0 ? labelText : " ".repeat(labelWidth);
     return `  ${labelColor}${prefix}${ANSI_RESET} ${ANSI_DIM}${line}${ANSI_RESET}`;
   });
+}
+
+/** Normalizes either one string or a staged list into wrapped status-value lines. */
+function normalizeStatusValueLines(
+  value: string | string[],
+  valueWidth: number,
+): string[] {
+  if (!Array.isArray(value)) {
+    return wrapDisplayText(value, valueWidth);
+  }
+
+  const normalizedLines: string[] = [];
+
+  for (const entry of value) {
+    const wrappedEntryLines = wrapDisplayText(entry, valueWidth - 2);
+    wrappedEntryLines.forEach((line, index) => {
+      normalizedLines.push(index === 0 ? `- ${line}` : `  ${line}`);
+    });
+  }
+
+  return normalizedLines;
 }

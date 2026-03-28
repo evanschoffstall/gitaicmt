@@ -33,7 +33,10 @@ const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[/\\]/u;
  * @param cwd - Optional working directory (defaults to process.cwd())
  * @throws {GitCommandError} If message is empty or commit fails
  */
-export function commitWithMessage(message: string, cwd?: string): void {
+export function commitWithMessage(
+  message: string,
+  cwd?: string,
+): { stderr: string; stdout: string } {
   if (!message || message.trim().length === 0) {
     throw new GitCommandError("Cannot commit with empty message", "git commit");
   }
@@ -69,12 +72,10 @@ export function commitWithMessage(message: string, cwd?: string): void {
     );
   }
 
-  if (result.stdout.length > 0) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr.length > 0) {
-    process.stderr.write(result.stderr);
-  }
+  return {
+    stderr: result.stderr,
+    stdout: result.stdout,
+  };
 }
 
 // ============================================================================

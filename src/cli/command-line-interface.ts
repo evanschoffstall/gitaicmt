@@ -38,9 +38,8 @@ import {
 } from "../git/operations.js";
 import { stageGroupFiles } from "./commit-group-staging.js";
 import {
-  formatCommitFile,
-} from "./commit-plan-display.js";
-import {
+  buildExecutionCommitLines,
+  buildExecutionResultLines,
   buildPlanCardLines,
   buildReadyPromptLines,
   buildStatusSectionLines,
@@ -91,7 +90,7 @@ interface CommitPlanAnalysis {
 interface StatusRow {
   label: string;
   tone?: "default" | "warning";
-  value: string;
+  value: string | string[];
 }
 
 interface TokenCheckOptions {
@@ -200,11 +199,15 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
       const g = mergedGroups[i];
       const subject = g.message.split("\n")[0];
 
-      log(
-        `${BOLD}${GREEN}[${formatCount(i + 1)}/${formatCount(mergedGroups.length)}]${RESET} ${subject}`,
-      );
-      log(
-        `  ${DIM}${g.files.map((f) => formatCommitFile(f, fileMap)).join(", ")} ${RESET}`,
+      writeTerminalLines(
+        buildExecutionCommitLines({
+          fileDiffs: fileMap,
+          files: g.files,
+          index: i + 1,
+          maxWidth: resolveDisplayWidth(),
+          subject,
+          total: mergedGroups.length,
+        }),
       );
 
       resetStaging();
@@ -218,7 +221,14 @@ async function cmdCommit(autoConfirm: boolean, skipTokenCheck: boolean) {
         continue;
       }
 
-      commitWithMessage(g.message);
+      const commitResult = commitWithMessage(g.message);
+      const executionResultLines = buildExecutionResultLines(
+        [commitResult.stdout, commitResult.stderr].filter(Boolean).join("\n"),
+        resolveDisplayWidth(),
+      );
+      if (executionResultLines.length > 0) {
+        writeTerminalLines(executionResultLines);
+      }
       committed++;
       log("");
     }
@@ -297,7 +307,14 @@ async function cmdCommitSingle(skipTokenCheck: boolean) {
   log(`${DIM}(${elapsed}s)${RESET}`);
 
   // Execute commit
-  commitWithMessage(message);
+  const commitResult = commitWithMessage(message);
+  const executionResultLines = buildExecutionResultLines(
+    [commitResult.stdout, commitResult.stderr].filter(Boolean).join("\n"),
+    resolveDisplayWidth(),
+  );
+  if (executionResultLines.length > 0) {
+    writeTerminalLines(executionResultLines);
+  }
 }
 
 /** Generate a single commit message (legacy / simple mode) */
@@ -606,7 +623,7 @@ function logActualTokenUsage(usage: {
       ? [
           {
             label: "stages",
-            value: stageLines.join(" · "),
+            value: stageLines,
           },
         ]
       : []),
