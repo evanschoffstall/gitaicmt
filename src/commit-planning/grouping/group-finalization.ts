@@ -17,7 +17,10 @@ import {
   buildConsolidationUserPrompt,
 } from "../prompt-builders/index.js";
 import { validateAndNormalizeGrouping } from "../response-validation.js";
-import { estimateTextTokens } from "../token-estimation.js";
+import {
+  estimateTextTokens,
+  getPlannerResponseTokenBudget,
+} from "../token-estimation.js";
 import {
   groupCoversGroup,
   hasMatchingCoverage,
@@ -172,7 +175,7 @@ async function callCluster(groups: PlannedCommit[]): Promise<null | number[][]> 
     buildClusterUserPrompt(groups),
     "cluster",
     buildClusterSystemPrompt(),
-    groups.length,
+    groups,
   );
   if (result === null) {
     return null;
@@ -301,14 +304,22 @@ async function completePlannerStage(
   input: string,
   stage: "cluster" | "consolidate",
   system: string,
-  inputGroupCount: number,
+  groups: PlannedCommit[],
 ): Promise<null | { parsed: unknown }> {
+  const cfg = loadConfig();
+  const inputGroupCount = groups.length;
+  const maxTokens = getPlannerResponseTokenBudget(
+    cfg.openai.maxTokens,
+    stage,
+    groups,
+  );
   let raw: null | string = null;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < MAX_PLANNER_CALL_ATTEMPTS; attempt++) {
     try {
       raw = await complete(system, input, {
+        maxTokens,
         stage,
         timeoutMs: getPlannerReviewTimeoutMs(stage, system, input, attempt),
       });
@@ -375,7 +386,7 @@ async function consolidateOnce(
     buildConsolidationUserPrompt(allFiles, groups),
     "consolidate",
     buildConsolidationSystemPrompt(),
-    groups.length,
+    groups,
   );
   if (result === null) {
     return null;

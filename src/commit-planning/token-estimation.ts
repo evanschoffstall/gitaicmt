@@ -1,28 +1,32 @@
 import { type Config } from "../application/config.js";
 import {
-    CLUSTERING_THRESHOLD,
-    GROUPING_BASE_TOKENS,
+  CLUSTERING_THRESHOLD,
+  CONSOLIDATION_RESPONSE_OVERHEAD_TOKENS,
+  CONSOLIDATION_RESPONSE_SAFETY_FACTOR,
+  GROUPING_BASE_TOKENS,
   MAX_CONSOLIDATION_PASSES,
-    MIN_COMMIT_MESSAGE_TOKENS,
-    MIN_GROUPING_TOKENS,
-    TOKENS_PER_FILE,
+  MIN_CLUSTERING_TOKENS,
+  MIN_COMMIT_MESSAGE_TOKENS,
+  MIN_GROUPING_TOKENS,
+  TOKENS_PER_CLUSTER_GROUP,
+  TOKENS_PER_FILE,
 } from "../application/constants.js";
 import {
-    batchFilesForGrouping,
-    batchingMakesProgress,
-    shouldBatchFiles,
+  batchFilesForGrouping,
+  batchingMakesProgress,
+  shouldBatchFiles,
 } from "./file-batching.js";
 import {
-    buildClusterSystemPrompt,
-    buildClusterUserPrompt,
-    buildConsolidationSystemPrompt,
-    buildConsolidationUserPrompt,
-    buildGroupingSystemPrompt,
-    buildGroupingUserPrompt,
-    buildMergePrompt,
-    buildSystemPrompt,
-    buildUserPrompt,
-    type GroupingPromptContext,
+  buildClusterSystemPrompt,
+  buildClusterUserPrompt,
+  buildConsolidationSystemPrompt,
+  buildConsolidationUserPrompt,
+  buildGroupingSystemPrompt,
+  buildGroupingUserPrompt,
+  buildMergePrompt,
+  buildSystemPrompt,
+  buildUserPrompt,
+  type GroupingPromptContext,
 } from "./prompt-builders/index.js";
 
 type DiffChunk = import("../git/diff.js").DiffChunk;
@@ -126,6 +130,34 @@ export function getGroupingResponseTokenBudget(
     Math.max(MIN_COMMIT_MESSAGE_TOKENS, GROUPING_BASE_TOKENS) +
       fileCount * TOKENS_PER_FILE,
     MIN_GROUPING_TOKENS,
+  );
+}
+
+/**
+ * Size planner-stage response budgets from their expected JSON payloads so
+ * large cluster reviews and consolidation passes do not truncate mid-plan.
+ */
+export function getPlannerResponseTokenBudget(
+  configuredMaxTokens: number,
+  stage: "cluster" | "consolidate",
+  groups: PlannedCommit[],
+): number {
+  if (stage === "cluster") {
+    return Math.max(
+      configuredMaxTokens,
+      MIN_CLUSTERING_TOKENS,
+      groups.length * TOKENS_PER_CLUSTER_GROUP,
+    );
+  }
+
+  const serializedPlanTokens = estimateTextTokens(JSON.stringify(groups));
+
+  return Math.max(
+    configuredMaxTokens,
+    MIN_GROUPING_TOKENS,
+    Math.ceil(
+      serializedPlanTokens * CONSOLIDATION_RESPONSE_SAFETY_FACTOR,
+    ) + CONSOLIDATION_RESPONSE_OVERHEAD_TOKENS,
   );
 }
 
@@ -253,7 +285,11 @@ function estimatePlanFollowUpSummaries(
         estimateCompletionTokens(
           buildClusterSystemPrompt(),
           buildClusterUserPrompt(currentGroups),
-          cfg.openai.maxTokens,
+          getPlannerResponseTokenBudget(
+            cfg.openai.maxTokens,
+            "cluster",
+            currentGroups,
+          ),
         ),
       ]),
     );
@@ -273,7 +309,11 @@ function estimatePlanFollowUpSummaries(
         estimateCompletionTokens(
           buildConsolidationSystemPrompt(),
           buildConsolidationUserPrompt(files, currentGroups),
-          cfg.openai.maxTokens,
+          getPlannerResponseTokenBudget(
+            cfg.openai.maxTokens,
+            "consolidate",
+            currentGroups,
+          ),
         ),
       ]),
     );

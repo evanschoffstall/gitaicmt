@@ -44,6 +44,18 @@ export const TOKENS_PER_FILE = 256;
 /** Minimum tokens for grouping responses (ensures complete JSON) */
 export const MIN_GROUPING_TOKENS = 2048;
 
+/** Minimum tokens for planner clustering index-array responses. */
+export const MIN_CLUSTERING_TOKENS = 512;
+
+/** Approximate response tokens needed per input group during clustering. */
+export const TOKENS_PER_CLUSTER_GROUP = 24;
+
+/** Extra response headroom for consolidation JSON shape changes. */
+export const CONSOLIDATION_RESPONSE_OVERHEAD_TOKENS = 256;
+
+/** Buffer applied to serialized-plan estimates for consolidation output. */
+export const CONSOLIDATION_RESPONSE_SAFETY_FACTOR = 1.35;
+
 /**
  * Reason: Grouping requires JSON array output with multiple commit objects.
  * Need enough tokens for:

@@ -1197,6 +1197,84 @@ describe("ai coverage", () => {
     );
   });
 
+  test("finalizePlannedGroups increases consolidation output budget beyond the generic max token cap", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidation-output-budget"),
+        maxTokens: 64,
+        model: "gpt-4o-mini",
+      },
+    });
+    const mergedPlan = JSON.stringify([
+      {
+        files: [
+          { path: "src/commit-planning/result-cache.ts" },
+          { path: "tests/ai-coverage.test.ts" },
+        ],
+        message:
+          "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.\n- Keep cache coverage aligned with the grouped rollout.",
+      },
+    ]);
+    const calls = installOpenAiMock({
+      chatQueue: [
+        (payload) => {
+          const requestedMaxTokens =
+            (payload as { max_completion_tokens?: number })
+              .max_completion_tokens ?? 0;
+
+          return {
+            choices: [
+              {
+                message: {
+                  content:
+                    requestedMaxTokens < 512
+                      ? mergedPlan.slice(0, Math.floor(mergedPlan.length / 2))
+                      : mergedPlan,
+                },
+              },
+            ],
+          };
+        },
+      ],
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?consolidation-output-budget-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "tests/ai-coverage.test.ts" }],
+        message:
+          "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+      },
+      {
+        files: [{ path: "src/commit-planning/result-cache.ts" }],
+        message:
+          "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
+      },
+    ];
+    const allFiles = [
+      makeFile("src/commit-planning/result-cache.ts"),
+      makeFile("tests/ai-coverage.test.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+
+    expect(calls.chat).toHaveLength(1);
+    expect(
+      (
+        calls.chat[0]?.payload as { max_completion_tokens?: number }
+      ).max_completion_tokens,
+    ).toBeGreaterThan(64);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.message).toContain(
+      "feat(ai-cache): cache planned commit analysis",
+    );
+  });
+
   test("finalizePlannedGroups merges duplicate file entries inside one consolidated commit", async () => {
     writeLocalConfig({
       openai: {
