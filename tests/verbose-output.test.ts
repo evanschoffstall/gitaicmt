@@ -260,12 +260,12 @@ describe("verbose-output", () => {
     expect(lines[0]).toContain("Consolidation retry scheduled #1 trace");
   });
 
-  test("shows retry-exhausted details on consolidation fallback traces", () => {
+  test("shows retry-exhausted details on consolidation failure traces", () => {
     const lines = formatVerboseAiOutputLines(
       {
         content: JSON.stringify({
           attemptCount: 2,
-          decision: "consolidation-fallback",
+          decision: "consolidation-failed",
           error: "OpenAI API call failed: Request was aborted.",
           inputGroupCount: 5,
           reason: "retry-exhausted-call-failed",
@@ -277,7 +277,7 @@ describe("verbose-output", () => {
       { maxWidth: 84, mode: "trace", sequence: 2 },
     );
 
-    expect(lines[0]).toContain("Consolidation fallback #2 trace");
+    expect(lines[0]).toContain("Consolidation failed #2 trace");
     expect(lines[0]).toContain("\x1b[31m");
     expect(lines.some((line) => line.startsWith("\x1b[31m│\x1b[0m"))).toBe(true);
     expect(lines.some((line) => line.includes('"attemptCount": 2'))).toBe(true);

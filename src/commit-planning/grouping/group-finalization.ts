@@ -17,6 +17,7 @@ import {
   buildConsolidationUserPrompt,
 } from "../prompt-builders/index.js";
 import { validateAndNormalizeGrouping } from "../response-validation.js";
+import { estimateTextTokens } from "../token-estimation.js";
 import {
   groupCoversGroup,
   hasMatchingCoverage,
@@ -43,6 +44,9 @@ import { premergeBySubject } from "./subject-premerge.js";
 
 const MAX_PLANNER_CALL_ATTEMPTS = 2;
 const MIN_CONSOLIDATION_TAIL_GROUP_COUNT = 5;
+const MAX_PLANNER_REVIEW_TIMEOUT_MS = 120_000;
+const PLANNER_RETRY_TIMEOUT_MULTIPLIER = 1.5;
+const PLANNER_TIMEOUT_PER_1K_TOKENS_MS = 4_000;
 
 /** Finalizes batched planner output into stable, coverage-safe commit groups. */
 export async function finalizePlannedGroups(
@@ -300,15 +304,17 @@ async function completePlannerStage(
   inputGroupCount: number,
 ): Promise<null | { parsed: unknown }> {
   let raw: null | string = null;
+  let lastError: unknown;
 
   for (let attempt = 0; attempt < MAX_PLANNER_CALL_ATTEMPTS; attempt++) {
     try {
       raw = await complete(system, input, {
         stage,
-        timeoutMs: getPlannerReviewTimeoutMs(),
+        timeoutMs: getPlannerReviewTimeoutMs(stage, system, input, attempt),
       });
       break;
     } catch (error: unknown) {
+      lastError = error;
       const failedAttemptCount = attempt + 1;
       if (
         failedAttemptCount < MAX_PLANNER_CALL_ATTEMPTS &&
@@ -319,7 +325,7 @@ async function completePlannerStage(
       }
 
       emitPlannerFallbackEvent(
-        `${stage === "cluster" ? "cluster" : "consolidation"}-fallback`,
+        `${stage === "cluster" ? "cluster" : "consolidation"}-failed`,
         failedAttemptCount > 1
           ? "retry-exhausted-call-failed"
           : `${stage === "cluster" ? "cluster" : "consolidation"}-call-failed`,
@@ -330,12 +336,12 @@ async function completePlannerStage(
           inputGroupCount,
         },
       );
-      return null;
+      throw toPlannerStageError(stage, failedAttemptCount, error);
     }
   }
 
   if (raw === null) {
-    return null;
+    throw toPlannerStageError(stage, MAX_PLANNER_CALL_ATTEMPTS, lastError);
   }
 
   const cleaned = raw
@@ -508,9 +514,28 @@ function emitPlannerRetryEvent(
   });
 }
 
-function getPlannerReviewTimeoutMs(): number {
+function getPlannerReviewTimeoutMs(
+  stage: "cluster" | "consolidate",
+  system: string,
+  input: string,
+  attempt: number,
+): number {
   const cfg = loadConfig();
-  return Math.max(cfg.performance.timeoutMs, GROUPING_TIMEOUT_MS);
+  const stageFloor = stage === "consolidate" ? 45_000 : GROUPING_TIMEOUT_MS;
+  const promptTokens = estimateTextTokens(system) + estimateTextTokens(input);
+  const promptBudgetMs =
+    Math.ceil(promptTokens / 1000) * PLANNER_TIMEOUT_PER_1K_TOKENS_MS;
+  const baseTimeout = Math.max(
+    cfg.performance.timeoutMs,
+    GROUPING_TIMEOUT_MS,
+    stageFloor,
+  );
+  const scaledTimeout = baseTimeout + promptBudgetMs;
+  const retryAdjustedTimeout =
+    attempt === 0
+      ? scaledTimeout
+      : Math.ceil(scaledTimeout * PLANNER_RETRY_TIMEOUT_MULTIPLIER);
+  return Math.min(MAX_PLANNER_REVIEW_TIMEOUT_MS, retryAdjustedTimeout);
 }
 
 function harmonizeConsolidatedMessages(
@@ -599,5 +624,19 @@ function shouldRejectUnstableConsolidation(
     consolidatedReduction >= 2 &&
     repartitionedGroups.length > consolidatedGroups.length &&
     effectiveReduction <= 1
+  );
+}
+
+function toPlannerStageError(
+  stage: "cluster" | "consolidate",
+  attemptCount: number,
+  error: unknown,
+): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  return new OpenAIError(
+    `${stage === "cluster" ? "Cluster" : "Consolidation"} planner call failed after ${String(attemptCount)} attempt(s): ${String(error)}`,
   );
 }

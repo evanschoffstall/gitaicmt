@@ -53,6 +53,22 @@ describe("planner-notices", () => {
     );
   });
 
+  test("ignores consolidation failure events that do not degrade into fallback finalization", () => {
+    const state = createPlannerNoticeState();
+
+    recordPlannerNotice(state, {
+      content: JSON.stringify({
+        decision: "consolidation-failed",
+        reason: "retry-exhausted-call-failed",
+      }),
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+
+    expect(getPlannerFallbackNotice(state)).toBeNull();
+  });
+
   test("explains invalid consolidation output distinctly from call failures", () => {
     const state = createPlannerNoticeState();
 

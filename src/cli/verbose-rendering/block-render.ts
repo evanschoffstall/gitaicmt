@@ -142,7 +142,11 @@ export function getEventFrameSeverity(
   parsed: unknown,
 ): TraceFrameSeverity {
   const decision = getPlannerDecisionName(parsed);
-  if (decision?.endsWith("-fallback") || decision === "grouping-fallback") {
+  if (
+    decision?.endsWith("-failed") ||
+    decision?.endsWith("-fallback") ||
+    decision === "grouping-fallback"
+  ) {
     return "error";
   }
   if (
@@ -276,6 +280,9 @@ function describePlannerDecision(parsed: unknown): null | string {
     case "batched-plan-finalization": {
       return "Batched plan finalization";
     }
+    case "cluster-failed": {
+      return "Cluster failed";
+    }
     case "cluster-fallback": {
       return "Cluster fallback";
     }
@@ -284,6 +291,9 @@ function describePlannerDecision(parsed: unknown): null | string {
     }
     case "cluster-stop": {
       return "Cluster stop";
+    }
+    case "consolidation-failed": {
+      return "Consolidation failed";
     }
     case "consolidation-fallback": {
       return "Consolidation fallback";

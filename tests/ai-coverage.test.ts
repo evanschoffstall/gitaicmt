@@ -967,7 +967,7 @@ describe("ai coverage", () => {
     );
   });
 
-  test("finalizePlannedGroups retries one transient consolidation failure before falling back", async () => {
+  test("finalizePlannedGroups retries one transient consolidation failure before succeeding", async () => {
     writeLocalConfig({
       openai: {
         apiKey: validApiKey("consolidation-retry"),
@@ -1041,6 +1041,77 @@ describe("ai coverage", () => {
         event.content.includes('"decision":"consolidation-retry-scheduled"'),
       ),
     ).toBe(true);
+    expect(
+      events.some((event) =>
+        event.content.includes('"decision":"consolidation-failed"'),
+      ),
+    ).toBe(false);
+    observer.setAiOutputObserver(null);
+  });
+
+  test("finalizePlannedGroups rejects exhausted consolidation retries instead of falling back", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidation-retry-exhausted"),
+        model: "gpt-4o-mini",
+      },
+      performance: { timeoutMs: 25 },
+    });
+    const firstAbortError = new Error("Request was aborted.");
+    firstAbortError.name = "AbortError";
+    const secondAbortError = new Error("Request was aborted.");
+    secondAbortError.name = "AbortError";
+    installOpenAiMock({
+      chatQueue: [firstAbortError, secondAbortError],
+    });
+    const observer = await import("../src/commit-planning/openai-client.js");
+    const events: { content: string; kind?: string; stage: string }[] = [];
+    observer.setAiOutputObserver((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?consolidation-retry-exhausted-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ path: "tests/ai-coverage.test.ts" }],
+        message:
+          "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+      },
+      {
+        files: [{ path: "src/commit-planning/result-cache.ts" }],
+        message:
+          "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
+      },
+    ];
+    const allFiles = [
+      makeFile("src/commit-planning/result-cache.ts"),
+      makeFile("tests/ai-coverage.test.ts"),
+    ];
+
+    await expect(finalizePlannedGroups(allFiles, groups)).rejects.toThrow(
+      OpenAIError,
+    );
+
+    expect(
+      events.some((event) =>
+        event.content.includes('"decision":"consolidation-retry-scheduled"'),
+      ),
+    ).toBe(true);
+    expect(
+      events.some((event) =>
+        event.content.includes('"decision":"consolidation-failed"'),
+      ),
+    ).toBe(true);
+    expect(
+      events.some((event) =>
+        event.content.includes('"decision":"consolidation-fallback"'),
+      ),
+    ).toBe(false);
     observer.setAiOutputObserver(null);
   });
 
