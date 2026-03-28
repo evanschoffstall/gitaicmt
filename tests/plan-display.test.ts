@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   formatPlanBodyLine,
+  formatPlanBodyLines,
   wrapDisplayFileLines,
   wrapDisplayText,
 } from "../src/cli/commit-plan-display.js";
@@ -31,6 +32,21 @@ describe("plan display formatting", () => {
     ]);
   });
 
+  test("merges hard-wrapped bullet continuations back into one displayed bullet", () => {
+    expect(
+      formatPlanBodyLines(
+        [
+          "- Extract file legend aliases from the user prompt and carry them on",
+          "model-output observer events for downstream rendering.",
+        ].join("\n"),
+        70,
+      ),
+    ).toEqual([
+      "- Extract file legend aliases from the user prompt and carry them on",
+      "  model-output observer events for downstream rendering.",
+    ]);
+  });
+
   test("wraps file lists at file boundaries with hanging indent", () => {
     expect(
       wrapDisplayFileLines(
@@ -42,9 +58,10 @@ describe("plan display formatting", () => {
         72,
       ),
     ).toEqual([
-      "Files: src/cli/terminal-output-ui.ts, src/cli/verbose-output.ts,",
-      "       src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8,",
-      "       9, 12, 13 / 14]",
+      "- src/cli/terminal-output-ui.ts",
+      "- src/cli/verbose-output.ts",
+      "- src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9,",
+      "  12, 13 / 14]",
     ]);
   });
 
@@ -58,12 +75,11 @@ describe("plan display formatting", () => {
         32,
       ),
     ).toEqual([
-      "Files:",
-      "       src/cli/command-line-",
-      "       interface.ts [hunks 0, 1,",
-      "       2, 3 / 4],",
-      "       src/cli/verbose-output.ts",
-      "       [hunks 0, 1 / 2]",
+      "- src/cli/command-line-",
+      "  interface.ts [hunks 0, 1, 2, 3",
+      "  / 4]",
+      "- src/cli/verbose-output.ts",
+      "  [hunks 0, 1 / 2]",
     ]);
   });
 

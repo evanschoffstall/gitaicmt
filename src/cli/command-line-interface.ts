@@ -39,7 +39,7 @@ import {
 import { stageGroupFiles } from "./commit-group-staging.js";
 import {
   formatCommitFile,
-  formatPlanBodyLine,
+  formatPlanBodyLines,
   wrapDisplayFileLines,
   wrapDisplayText,
 } from "./commit-plan-display.js";
@@ -474,26 +474,28 @@ function displayPlan(
       `${BOLD}${GREEN}Commit ${formatCount(i + 1)}/${formatCount(groups.length)}:${RESET}`,
     );
     for (const line of wrapDisplayText(g.message.split("\n")[0], maxWidth - 2)) {
-      log(`  ${BOLD}${line}${RESET}`);
+      log(`  ${BOLD}${CYAN}${line}${RESET}`);
     }
     const body = g.message.split("\n").slice(1).join("\n").trim();
     if (body) {
-      for (const line of body.split("\n")) {
-        for (const wrappedLine of formatPlanBodyLine(line, maxWidth - 2)) {
-          log(`  ${DIM}${wrappedLine}${RESET}`);
-        }
+      log(`  ${BOLD}${CYAN}Details${RESET}`);
+      for (const wrappedLine of formatPlanBodyLines(body, maxWidth - 2)) {
+        log(`    ${stylePlanListLine(wrappedLine, BLUE)}`);
       }
     }
+    log(`  ${BOLD}${YELLOW}Files${RESET}`);
     const wrappedFileLines = wrapDisplayFileLines(
       g.files.map((f) => formatCommitFile(f, fileDiffs)),
-      maxWidth - 2,
+      maxWidth - 4,
     );
     for (const fileLine of wrappedFileLines) {
-      log(`  ${DIM}${fileLine}${RESET}`);
+      log(`    ${stylePlanListLine(fileLine, YELLOW)}`);
     }
     log("");
   }
 }
+
+// -------- Commands --------
 
 /** Ensure changes are staged. If nothing is staged, auto-stage all changes. */
 function ensureStaged(): void {
@@ -854,6 +856,20 @@ function shouldPromptForHighTokenUsage(
     cfg.analysis.promptOnTokenWarning &&
     isHighTokenEstimate(estimate, cfg.analysis.tokenWarningThreshold)
   );
+}
+
+function stylePlanListLine(line: string, accentColor: string): string {
+  if (line.length === 0) {
+    return "";
+  }
+
+  const bulletMatch = /^(\s*)-\s(.*)$/u.exec(line);
+  if (!bulletMatch) {
+    return `${DIM}${line}${RESET}`;
+  }
+
+  const [, indentation, content] = bulletMatch;
+  return `${DIM}${indentation}${RESET}${accentColor}${BOLD}-${RESET}${DIM} ${content}${RESET}`;
 }
 
 function verbose(msg: string) {

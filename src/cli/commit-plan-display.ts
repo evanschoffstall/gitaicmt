@@ -34,38 +34,45 @@ export function formatPlanBodyLine(line: string, maxWidth: number): string[] {
   });
 }
 
-export function wrapDisplayFileLines(files: string[], maxWidth: number): string[] {
-  const lines: string[] = [];
-  let currentLine = "Files:";
-  const fileLinePrefix = "       ";
+export function formatPlanBodyLines(body: string, maxWidth: number): string[] {
+  const lines = body
+    .split("\n")
+    .map((line) => line.trimEnd());
+  const normalizedLines: string[] = [];
 
-  for (let index = 0; index < files.length; index++) {
-    const fileText = index < files.length - 1 ? `${files[index]},` : files[index];
-    const candidate =
-      currentLine === "Files:" ? `${currentLine} ${fileText}` : `${currentLine} ${fileText}`;
+  for (const line of lines) {
+    const trimmedLine = line.trim();
 
-    if (candidate.length <= maxWidth) {
-      currentLine = candidate;
+    if (trimmedLine.length === 0) {
+      normalizedLines.push("");
       continue;
     }
 
-    if (currentLine.length > 0) {
-      lines.push(currentLine);
+    if (trimmedLine.startsWith("- ")) {
+      normalizedLines.push(trimmedLine);
+      continue;
     }
 
-    const wrappedFileLines = wrapDisplayTextWithPrefix(fileText, {
-      continuationPrefix: fileLinePrefix,
-      firstLinePrefix: fileLinePrefix,
-      maxWidth,
-    });
-    currentLine = wrappedFileLines.pop() ?? fileLinePrefix;
-    lines.push(...wrappedFileLines);
+    const previousLine = normalizedLines.at(-1);
+    if (previousLine?.trim().startsWith("- ")) {
+      normalizedLines[normalizedLines.length - 1] = `${previousLine} ${trimmedLine}`;
+      continue;
+    }
+
+    normalizedLines.push(trimmedLine);
   }
 
-  if (currentLine.length > 0) {
-    lines.push(currentLine);
-  }
-  return lines;
+  return normalizedLines.flatMap((line) => formatPlanBodyLine(line, maxWidth));
+}
+
+export function wrapDisplayFileLines(files: string[], maxWidth: number): string[] {
+  return files.flatMap((file) =>
+    wrapDisplayTextWithPrefix(file, {
+      continuationPrefix: "  ",
+      firstLinePrefix: "- ",
+      maxWidth,
+    }),
+  );
 }
 
 export function wrapDisplayText(text: string, maxWidth: number): string[] {
