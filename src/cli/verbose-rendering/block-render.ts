@@ -160,6 +160,24 @@ export function getEventFrameSeverity(
   return "info";
 }
 
+/**
+ * Returns the stable counter bucket for one verbose event so unrelated event
+ * families do not consume the same sequence numbers.
+ */
+export function getEventSequenceKey(
+  event: AiOutputEvent,
+  parsed: unknown,
+): string {
+  if (event.kind === "planner-decision") {
+    const decision = getPlannerDecisionName(parsed);
+    if (decision) {
+      return `planner:${decision}`;
+    }
+  }
+
+  return `stage:${event.stage}`;
+}
+
 /** Styles a trace-box footer line with dim cyan. */
 export function styleTraceFooter(
   line: string,

@@ -50,7 +50,10 @@ import {
 } from "./planner-notices.js";
 import { resolveTerminalColumns } from "./terminal-columns.js";
 import { withThinkingIndicator, writeTerminalLines } from "./terminal-output-ui.js";
-import { formatVerboseAiOutputLines } from "./verbose-output.js";
+import {
+  formatVerboseAiOutputLines,
+  getVerboseAiOutputSequenceKey,
+} from "./verbose-output.js";
 
 // -------- Helpers --------
 
@@ -69,7 +72,7 @@ const DEFAULT_VERBOSE_WIDTH = 100;
 type OutputMode = "off" | "summary" | "trace";
 
 let outputMode: OutputMode = "off";
-let verboseStageCounts: Record<string, number> = Object.create(null) as Record<
+let verboseEventCounts: Record<string, number> = Object.create(null) as Record<
   string,
   number
 >;
@@ -667,12 +670,12 @@ function logTokenEstimate(
 }
 
 function logVerboseAiOutput(event: AiOutputEvent): void {
-  const stageKey = event.stage;
-  verboseStageCounts[stageKey] = (verboseStageCounts[stageKey] ?? 0) + 1;
+  const eventKey = getVerboseAiOutputSequenceKey(event);
+  verboseEventCounts[eventKey] = (verboseEventCounts[eventKey] ?? 0) + 1;
   const lines = formatVerboseAiOutputLines(event, {
     maxWidth: resolveVerboseWidth(),
     mode: outputMode === "trace" ? "trace" : "summary",
-    sequence: verboseStageCounts[stageKey],
+    sequence: verboseEventCounts[eventKey],
   });
   logVerboseBlock(lines);
 }
@@ -700,7 +703,7 @@ async function main() {
   // Set verbose mode globally
   outputMode = hasTraceFlag ? "trace" : hasVerboseFlag ? "summary" : "off";
   verboseMode = outputMode !== "off";
-  verboseStageCounts = Object.create(null) as Record<string, number>;
+  verboseEventCounts = Object.create(null) as Record<string, number>;
   setAiOutputObserver(observeAiOutput);
 
   // Version flag takes precedence

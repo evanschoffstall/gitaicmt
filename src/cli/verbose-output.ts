@@ -5,6 +5,7 @@ import {
   formatEventStatLines,
   formatTraceBlock,
   getEventFrameSeverity,
+  getEventSequenceKey,
   styleTraceFooter,
   styleTraceHeader,
   styleTraceRail,
@@ -55,6 +56,14 @@ export function formatVerboseAiOutputLines(
     normalizeGenericContent(event.content, parsed),
     maxWidth,
   );
+}
+
+/**
+ * Returns the counter bucket for one verbose event based on the rendered event
+ * family instead of the coarse pipeline stage.
+ */
+export function getVerboseAiOutputSequenceKey(event: AiOutputEvent): string {
+  return getEventSequenceKey(event, parseJson(event.content));
 }
 
 function collectBodyBullets(message: string): string[] {

@@ -1,4 +1,7 @@
-import { formatVerboseAiOutputLines } from "../src/cli/verbose-output.js";
+import {
+  formatVerboseAiOutputLines,
+  getVerboseAiOutputSequenceKey,
+} from "../src/cli/verbose-output.js";
 
 const { describe, expect, test } = await import("bun:test");
 
@@ -220,6 +223,38 @@ describe("verbose-output", () => {
     expect(lines.some((line) => line.includes("transport: internal"))).toBe(true);
     expect(lines.some((line) => line.includes("time: 37ms"))).toBe(true);
     expect(lines.some((line) => line.includes('"decision": "dependency-ordering"'))).toBe(true);
+  });
+
+  test("uses separate sequence buckets for different consolidate event families", () => {
+    const modelOutputKey = getVerboseAiOutputSequenceKey({
+      content: "[]",
+      kind: "model-output",
+      stage: "consolidate",
+      transport: "responses",
+    });
+    const repartitionKey = getVerboseAiOutputSequenceKey({
+      content: JSON.stringify({
+        decision: "repartition-after-consolidation",
+        outputGroupCount: 4,
+        premergedGroupCount: 7,
+      }),
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+    const finalizeKey = getVerboseAiOutputSequenceKey({
+      content: JSON.stringify({
+        decision: "finalize-planned-groups",
+        finalGroupCount: 4,
+      }),
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+
+    expect(modelOutputKey).toBe("stage:consolidate");
+    expect(repartitionKey).toBe("planner:repartition-after-consolidation");
+    expect(finalizeKey).toBe("planner:finalize-planned-groups");
   });
 
   test("uses planner decision titles in trace mode for batch finalization", () => {
