@@ -1,4 +1,5 @@
 /** Terminal block rendering: ANSI styling, line wrapping, and event-stat lines. */
+import { wrapTokenizedTextBySeparatorPreference } from "../token-splitting.js";
 import { formatJsonTraceValue } from "./json-trace.js";
 
 type AiOutputEvent = import("../../commit-planning/openai-client.js").AiOutputEvent;
@@ -219,40 +220,14 @@ export function wrapLine(
   firstPrefix: string,
   continuationPrefix: string,
 ): string[] {
-  const trimmedText = text.trim();
-  if (trimmedText.length === 0) {
+  const wrappedContentLines = wrapTokenizedTextBySeparatorPreference(text, maxWidth);
+  if (wrappedContentLines.length === 1 && wrappedContentLines[0].length === 0) {
     return [firstPrefix.trimEnd()];
   }
 
-  const words = trimmedText.split(/\s+/u);
-  const lines: string[] = [];
-  let currentLine = "";
-  let prefix = firstPrefix;
-
-  for (const word of words) {
-    const candidate =
-      currentLine.length === 0 ? word : `${currentLine} ${word}`;
-    if (candidate.length <= maxWidth) {
-      currentLine = candidate;
-      continue;
-    }
-
-    if (currentLine.length > 0) {
-      lines.push(`${prefix}${currentLine}`);
-      prefix = continuationPrefix;
-      currentLine = word;
-      continue;
-    }
-
-    lines.push(`${prefix}${word}`);
-    prefix = continuationPrefix;
-  }
-
-  if (currentLine.length > 0) {
-    lines.push(`${prefix}${currentLine}`);
-  }
-
-  return lines;
+  return wrappedContentLines.map((line, index) =>
+    `${index === 0 ? firstPrefix : continuationPrefix}${line}`,
+  );
 }
 
 /**

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   formatPlanBodyLine,
   wrapDisplayFileLines,
+  wrapDisplayText,
 } from "../src/cli/commit-plan-display.js";
 
 describe("plan display formatting", () => {
@@ -42,7 +43,36 @@ describe("plan display formatting", () => {
       ),
     ).toEqual([
       "Files: src/cli/terminal-output-ui.ts, src/cli/verbose-output.ts,",
-      "       src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
+      "       src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8,",
+      "       9, 12, 13 / 14]",
+    ]);
+  });
+
+  test("splits long file entries with stable hanging indent on narrow widths", () => {
+    expect(
+      wrapDisplayFileLines(
+        [
+          "src/cli/command-line-interface.ts [hunks 0, 1, 2, 3 / 4]",
+          "src/cli/verbose-output.ts [hunks 0, 1 / 2]",
+        ],
+        32,
+      ),
+    ).toEqual([
+      "Files:",
+      "       src/cli/command-line-",
+      "       interface.ts [hunks 0, 1,",
+      "       2, 3 / 4],",
+      "       src/cli/verbose-output.ts",
+      "       [hunks 0, 1 / 2]",
+    ]);
+  });
+
+  test("splits long unbroken display tokens when needed", () => {
+    expect(wrapDisplayText("src/cli/command-line-interface.ts", 12)).toEqual([
+      "src/cli/",
+      "command-",
+      "line-",
+      "interface.ts",
     ]);
   });
 });

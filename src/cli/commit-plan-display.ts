@@ -1,5 +1,6 @@
 import { type PlannedCommitFile } from "../commit-planning/orchestration.js";
 import { type FileDiff } from "../git/diff.js";
+import { wrapTokenizedTextBySeparatorPreference } from "./token-splitting.js";
 
 export function formatCommitFile(
   file: PlannedCommitFile,
@@ -36,6 +37,7 @@ export function formatPlanBodyLine(line: string, maxWidth: number): string[] {
 export function wrapDisplayFileLines(files: string[], maxWidth: number): string[] {
   const lines: string[] = [];
   let currentLine = "Files:";
+  const fileLinePrefix = "       ";
 
   for (let index = 0; index < files.length; index++) {
     const fileText = index < files.length - 1 ? `${files[index]},` : files[index];
@@ -47,45 +49,27 @@ export function wrapDisplayFileLines(files: string[], maxWidth: number): string[
       continue;
     }
 
-    lines.push(currentLine);
-    currentLine = `       ${fileText}`;
-  }
-
-  lines.push(currentLine);
-  return lines;
-}
-
-export function wrapDisplayText(text: string, maxWidth: number): string[] {
-  const trimmedText = text.trim();
-  if (trimmedText.length === 0) {
-    return [""];
-  }
-
-  const parts = trimmedText.split(/\s+/u).filter((part) => part.length > 0);
-  const lines: string[] = [];
-  let currentLine = "";
-
-  for (const part of parts) {
-    const candidate = currentLine.length === 0 ? part : `${currentLine} ${part}`;
-    if (candidate.length <= maxWidth) {
-      currentLine = candidate;
-      continue;
-    }
-
     if (currentLine.length > 0) {
       lines.push(currentLine);
-      currentLine = part;
-      continue;
     }
 
-    lines.push(part);
+    const wrappedFileLines = wrapDisplayTextWithPrefix(fileText, {
+      continuationPrefix: fileLinePrefix,
+      firstLinePrefix: fileLinePrefix,
+      maxWidth,
+    });
+    currentLine = wrappedFileLines.pop() ?? fileLinePrefix;
+    lines.push(...wrappedFileLines);
   }
 
   if (currentLine.length > 0) {
     lines.push(currentLine);
   }
-
   return lines;
+}
+
+export function wrapDisplayText(text: string, maxWidth: number): string[] {
+  return wrapTokenizedTextBySeparatorPreference(text, maxWidth);
 }
 
 function wrapDisplayTextWithPrefix(
