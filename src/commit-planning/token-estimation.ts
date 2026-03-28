@@ -174,7 +174,7 @@ function buildPlaceholderPlanGroupsForEstimate(
 function combineSummaries(
   summaries: TokenEstimateSummary[],
 ): TokenEstimateSummary {
-  return summaries.reduce<TokenEstimateSummary>(
+  return summaries.reduce(
     (combined, summary) => ({
       minimumRequestCount:
         combined.minimumRequestCount + summary.minimumRequestCount,
@@ -393,7 +393,7 @@ function getTopLevelArea(path: string): string {
 }
 
 function summarizeRequests(requests: TokenEstimate[]): TokenEstimateSummary {
-  return requests.reduce<TokenEstimateSummary>(
+  return requests.reduce(
     (summary, request) => ({
       minimumRequestCount: summary.minimumRequestCount + 1,
       minimumTotalTokens: summary.minimumTotalTokens + request.totalTokens,
