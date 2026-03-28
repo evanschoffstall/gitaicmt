@@ -141,7 +141,7 @@ export function buildReadyPromptLines(
       },
       {
         label: "action",
-        value: "reply y to commit or n to abort",
+        value: "y commits, n aborts",
       },
     ],
     maxWidth,
@@ -262,6 +262,10 @@ function normalizeStatusValueLines(
 ): string[] {
   if (!Array.isArray(value)) {
     return wrapDisplayText(value, valueWidth);
+  }
+
+  if (value.length === 1) {
+    return wrapDisplayText(value[0] ?? "", valueWidth);
   }
 
   const normalizedLines: string[] = [];

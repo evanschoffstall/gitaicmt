@@ -49,6 +49,23 @@ describe("output-presentation", () => {
     expect(lines[2]).toContain("- final-consolidation=2764 (1 req)");
   });
 
+  test("renders a single staged usage line without an unnecessary bullet", () => {
+    const lines = buildStatusSectionLines(
+      "Usage Summary",
+      [
+        {
+          label: "stages",
+          value: ["grouping=8387 (1 req)"],
+        },
+      ],
+      72,
+    ).map((line) => stripAnsi(line));
+
+    expect(lines[1]).toContain("stages:");
+    expect(lines[1]).toContain("grouping=8387 (1 req)");
+    expect(lines[1]).not.toContain("- grouping=8387 (1 req)");
+  });
+
   test("renders ready prompt copy with action guidance", () => {
     const lines = buildReadyPromptLines(2, 72).map((line) => stripAnsi(line));
 
@@ -56,7 +73,7 @@ describe("output-presentation", () => {
     expect(lines.some((line) => line.includes("2 planned commits ready"))).toBe(
       true,
     );
-    expect(lines.some((line) => line.includes("reply y to commit or n to abort"))).toBe(
+    expect(lines.some((line) => line.includes("y commits, n aborts"))).toBe(
       true,
     );
     expect(lines.at(-1)).toBe("Proceed?");
