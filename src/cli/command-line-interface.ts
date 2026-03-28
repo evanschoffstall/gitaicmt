@@ -39,10 +39,13 @@ import {
 import { stageGroupFiles } from "./commit-group-staging.js";
 import {
   formatCommitFile,
-  formatPlanBodyLines,
-  wrapDisplayFileLines,
-  wrapDisplayText,
 } from "./commit-plan-display.js";
+import {
+  buildPlanCardLines,
+  buildReadyPromptLines,
+  buildStatusSectionLines,
+  type PresentationStatusRow,
+} from "./output-presentation.js";
 import {
   createPlannerNoticeState,
   getPlannerFallbackNotice,
@@ -64,9 +67,7 @@ let verboseMode = false;
 const RED = "\x1b[31m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
-const BLUE = "\x1b[34m";
 const CYAN = "\x1b[36m";
-const WHITE = "\x1b[37m";
 const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
@@ -139,36 +140,7 @@ async function analyzeCommitPlan(tokenCheckOptions: TokenCheckOptions) {
 }
 
 function buildReadyToCommitPrompt(plannedCommitCount: number): string {
-  return buildStatusSectionLines(
-    "Ready to commit",
-    [
-      {
-        label: "commits",
-        value: `${formatCount(plannedCommitCount)} planned ${plannedCommitCount === 1 ? "commit" : "commits"} ready`,
-      },
-    ],
-    resolveLogWidth(),
-    `${BOLD}${YELLOW}Proceed?${RESET}`,
-  ).join("\n");
-}
-
-function buildStatusSectionLines(
-  title: string,
-  rows: StatusRow[],
-  maxWidth: number,
-  trailingLine?: string,
-): string[] {
-  const sectionLines = [`${BOLD}${WHITE}${title}${RESET}`];
-
-  for (const row of rows) {
-    sectionLines.push(...formatStatusRowLines(row, maxWidth));
-  }
-
-  if (trailingLine) {
-    sectionLines.push(trailingLine);
-  }
-
-  return sectionLines;
+  return buildReadyPromptLines(plannedCommitCount, resolveLogWidth()).join("\n");
 }
 
 /** Analyze, split, and execute multiple commits */
@@ -513,28 +485,17 @@ function displayPlan(
 
   for (let i = 0; i < groups.length; i++) {
     const g = groups[i];
-    log(
-      `${BOLD}${GREEN}Commit ${formatCount(i + 1)}/${formatCount(groups.length)}:${RESET}`,
+    writeTerminalLines(
+      buildPlanCardLines({
+        fileDiffs,
+        files: g.files,
+        index: i + 1,
+        maxWidth,
+        message: g.message,
+        total: groups.length,
+      }),
     );
-    for (const line of wrapDisplayText(g.message.split("\n")[0], maxWidth - 2)) {
-      log(`  ${BOLD}${CYAN}${line}${RESET}`);
-    }
-    const body = g.message.split("\n").slice(1).join("\n").trim();
-    if (body) {
-      log(`  ${BOLD}${CYAN}Details${RESET}`);
-      for (const wrappedLine of formatPlanBodyLines(body, maxWidth - 2)) {
-        log(`    ${stylePlanListLine(wrappedLine, BLUE)}`);
-      }
-    }
-    log(`  ${BOLD}${YELLOW}Files${RESET}`);
-    const wrappedFileLines = wrapDisplayFileLines(
-      g.files.map((f) => formatCommitFile(f, fileDiffs)),
-      maxWidth - 4,
-    );
-    for (const fileLine of wrappedFileLines) {
-      log(`    ${stylePlanListLine(fileLine, YELLOW)}`);
-    }
-    log("");
+    writeTerminalLines([""]);
   }
 }
 
@@ -600,25 +561,6 @@ function formatStageUsageLabel(stage: string): string {
       return stage;
     }
   }
-}
-
-function formatStatusRowLines(row: StatusRow, maxWidth: number): string[] {
-  const labelText = `${row.label}:`;
-  const labelColumnWidth = 12;
-  const firstLinePrefix = `${labelText.padEnd(labelColumnWidth)} `;
-  const continuationPrefix = `${" ".repeat(labelColumnWidth)} `;
-  const contentWidth = Math.max(12, maxWidth - 3 - firstLinePrefix.length);
-  const wrappedValueLines = wrapDisplayText(row.value, contentWidth);
-  const labelColor = row.tone === "warning" ? YELLOW : WHITE;
-
-  return wrappedValueLines.map((line, index) => {
-    const prefix = index === 0 ? firstLinePrefix : continuationPrefix;
-    const styledPrefix =
-      index === 0
-        ? `${labelColor}${BOLD}${prefix}${RESET}`
-        : `${DIM}${prefix}${RESET}`;
-    return `  ${styledPrefix}${DIM}${line}${RESET}`;
-  });
 }
 
 function formatTokenWarning(tokenWarningThreshold: number): string {
@@ -692,10 +634,17 @@ function logGenerationContext(
   tokenWarningThreshold?: number,
   suppressWarning = false,
 ) {
-  log(
-    `${DIM}${formatCount(stats.filesChanged)} file(s), +${formatCount(stats.additions)}/-${formatCount(stats.deletions)}, ${formatCount(stats.chunks)} chunk(s)${RESET}`,
-  );
-  log(`${DIM}model: ${model}${RESET}`);
+  log("");
+  logStatusSection("Generating Message", [
+    {
+      label: "model",
+      value: model,
+    },
+    {
+      label: "scope",
+      value: `${formatCount(stats.filesChanged)} file(s) · +${formatCount(stats.additions)}/-${formatCount(stats.deletions)} · ${formatCount(stats.chunks)} chunk(s)`,
+    },
+  ]);
   if (tokenEstimate) {
     logTokenEstimate(
       tokenEstimate,
@@ -710,14 +659,27 @@ function logPlannedCommits(
   elapsed: string,
 ): void {
   log("");
-  log(
-    `${BOLD}${CYAN}Planned ${formatCount(groups.length)} commit(s):${RESET} ${DIM}(${elapsed}s)${RESET}`,
-  );
+  logStatusSection("Plan Summary", [
+    {
+      label: "commits",
+      value: `${formatCount(groups.length)} planned ${groups.length === 1 ? "commit" : "commits"}`,
+    },
+    {
+      label: "elapsed",
+      value: `${elapsed}s analysis time`,
+    },
+  ]);
   log("");
 }
 
 function logStatusSection(title: string, rows: StatusRow[]): void {
-  writeTerminalLines(buildStatusSectionLines(title, rows, resolveLogWidth()));
+  writeTerminalLines(
+    buildStatusSectionLines(
+      title,
+      rows as PresentationStatusRow[],
+      resolveLogWidth(),
+    ),
+  );
 }
 
 function logTokenEstimate(
@@ -729,7 +691,7 @@ function logTokenEstimate(
     return;
   }
 
-  logStatusSection("estimated tokens:", [
+  logStatusSection("Token Estimate", [
     ...(estimate.minimumRequestCount < estimate.requestCount ||
     estimate.minimumTotalTokens < estimate.totalTokens
       ? [
@@ -948,20 +910,6 @@ function shouldPromptForHighTokenUsage(
     cfg.analysis.promptOnTokenWarning &&
     isHighTokenEstimate(estimate, cfg.analysis.tokenWarningThreshold)
   );
-}
-
-function stylePlanListLine(line: string, accentColor: string): string {
-  if (line.length === 0) {
-    return "";
-  }
-
-  const bulletMatch = /^(\s*)-\s(.*)$/u.exec(line);
-  if (!bulletMatch) {
-    return `${DIM}${line}${RESET}`;
-  }
-
-  const [, indentation, content] = bulletMatch;
-  return `${DIM}${indentation}${RESET}${accentColor}${BOLD}-${RESET}${DIM} ${content}${RESET}`;
 }
 
 function verbose(msg: string) {

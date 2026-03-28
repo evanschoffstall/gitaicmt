@@ -373,7 +373,7 @@ describe("CLI", () => {
         },
       });
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("estimated tokens:");
+      expect(stderr).toContain("Token Estimate");
       expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
       expect(stderr).toContain("No OpenAI API key");
 
