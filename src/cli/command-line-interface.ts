@@ -597,7 +597,7 @@ function logActualTokenUsage(usage: {
     );
 
   log("");
-  logStatusSection("Usage summary", [
+  logStatusSection("Usage Summary", [
     {
       label: "tokens used",
       value: `${formatCount(usage.totalTokens)} total across ${formatRequestCount(usage.requestCount)}`,
