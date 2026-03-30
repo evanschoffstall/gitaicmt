@@ -22,9 +22,11 @@ import {
   getPlannerResponseTokenBudget,
 } from "../token-estimation.js";
 import {
+  getCoverageMismatchDiagnostics,
   groupCoversGroup,
   groupsSharePaths,
- hasMatchingCoverage } from "./commit-coverage.js";
+  hasMatchingCoverage,
+} from "./commit-coverage.js";
 import { orderCommitsByDependencies } from "./dependency-ordering.js";
 import { buildFileChangeSignals } from "./file-signals.js";
 import {
@@ -452,12 +454,18 @@ async function consolidateOnce(
     return null;
   }
 
-  if (!hasMatchingCoverage(groups, consolidated, fileByPath)) {
+  const coverageMismatch = getCoverageMismatchDiagnostics(
+    groups,
+    consolidated,
+    fileByPath,
+  );
+  if (coverageMismatch) {
     emitPlannerFallbackEvent(
       "consolidation-fallback",
       "coverage-mismatch",
       "consolidate",
       {
+        ...coverageMismatch,
         inputGroupCount: groups.length,
         outputGroupCount: consolidated.length,
       },
@@ -539,7 +547,7 @@ function emitPlannerFallbackEvent(
   decision: string,
   reason: string,
   stage: "cluster" | "consolidate",
-  extra: Record<string, number | string>,
+  extra: Record<string, number | string | string[]>,
 ): void {
   emitAiOutputEvent({
     content: JSON.stringify({

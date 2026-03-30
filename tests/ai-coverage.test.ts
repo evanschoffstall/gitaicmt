@@ -1115,6 +1115,82 @@ describe("ai coverage", () => {
     observer.setAiOutputObserver(null);
   });
 
+  test("finalizePlannedGroups emits missing coverage diagnostics when consolidation drops a hunk", async () => {
+    writeLocalConfig({
+      openai: {
+        apiKey: validApiKey("consolidation-coverage-mismatch"),
+        model: "gpt-4o-mini",
+      },
+    });
+    installOpenAiMock({
+      chatQueue: [
+        {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify([
+                  {
+                    files: [{ hunks: [0], path: "src/commit-planning/result-cache.ts" }],
+                    message:
+                      "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
+                  },
+                  {
+                    files: [{ path: "tests/ai-coverage.test.ts" }],
+                    message:
+                      "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+                  },
+                ]),
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const observer = await import("../src/commit-planning/openai-client.js");
+    const events: { content: string; kind?: string; stage: string }[] = [];
+    observer.setAiOutputObserver((event: (typeof events)[number]) => {
+      events.push(event);
+    });
+    const { finalizePlannedGroups } = await import(
+      new URL(
+        `../src/commit-planning/grouping/index.js?consolidation-coverage-mismatch-${Math.random()}`,
+        import.meta.url,
+      ).href
+    );
+
+    const groups = [
+      {
+        files: [{ hunks: [0, 1], path: "src/commit-planning/result-cache.ts" }],
+        message:
+          "feat(ai-cache): cache planned commit analysis\n\n- Reuse grouped plans for identical diff inputs.",
+      },
+      {
+        files: [{ path: "tests/ai-coverage.test.ts" }],
+        message:
+          "test(ai): cover plan cache reuse\n\n- Verify cache hits and stage reporting.",
+      },
+    ];
+    const allFiles = [
+      makeFile("src/commit-planning/result-cache.ts", 2),
+      makeFile("tests/ai-coverage.test.ts"),
+    ];
+
+    const result = await finalizePlannedGroups(allFiles, groups);
+    const fallbackEvent = events.find((event) =>
+      event.content.includes('"decision":"consolidation-fallback"'),
+    );
+
+    expect(result).toEqual(groups);
+    expect(fallbackEvent).toBeDefined();
+    expect(fallbackEvent?.content).toContain('"reason":"coverage-mismatch"');
+    expect(fallbackEvent?.content).toContain('"missingCoverageCount":1');
+    expect(fallbackEvent?.content).toContain(
+      '"missingCoverageSample":["src/commit-planning/result-cache.ts#1"]',
+    );
+    expect(fallbackEvent?.content).toContain('"extraCoverageCount":0');
+    observer.setAiOutputObserver(null);
+  });
+
   test("finalizePlannedGroups uses the extended planner timeout for slow consolidation reviews", async () => {
     writeLocalConfig({
       openai: {

@@ -1,6 +1,47 @@
 import { ValidationError } from "../../application/errors.js";
 import { type FileDiff, type PlannedCommit } from "./grouping-types.js";
 
+const COVERAGE_MISMATCH_SAMPLE_LIMIT = 5;
+
+export interface CoverageMismatchDiagnostics {
+  afterCoverageCount: number;
+  beforeCoverageCount: number;
+  extraCoverageCount: number;
+  extraCoverageSample: string[];
+  missingCoverageCount: number;
+  missingCoverageSample: string[];
+}
+
+/**
+ * Returns a concise diff when regrouping changes drops or invents coverage.
+ */
+export function getCoverageMismatchDiagnostics(
+  before: PlannedCommit[],
+  after: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+): CoverageMismatchDiagnostics | null {
+  const beforeSet = new Set(getCoverageKeys(before, fileByPath));
+  const afterSet = new Set(getCoverageKeys(after, fileByPath));
+  const missingCoverage = [...beforeSet].filter((key) => !afterSet.has(key));
+  const extraCoverage = [...afterSet].filter((key) => !beforeSet.has(key));
+
+  if (missingCoverage.length === 0 && extraCoverage.length === 0) {
+    return null;
+  }
+
+  return {
+    afterCoverageCount: afterSet.size,
+    beforeCoverageCount: beforeSet.size,
+    extraCoverageCount: extraCoverage.length,
+    extraCoverageSample: extraCoverage.slice(0, COVERAGE_MISMATCH_SAMPLE_LIMIT),
+    missingCoverageCount: missingCoverage.length,
+    missingCoverageSample: missingCoverage.slice(
+      0,
+      COVERAGE_MISMATCH_SAMPLE_LIMIT,
+    ),
+  };
+}
+
 /** Returns true when the candidate fully covers the original group's hunks. */
 export function groupCoversGroup(
   candidate: PlannedCommit,
@@ -67,20 +108,7 @@ export function hasMatchingCoverage(
   after: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
 ): boolean {
-  const beforeSet = new Set(getCoverageKeys(before, fileByPath));
-  const afterSet = new Set(getCoverageKeys(after, fileByPath));
-
-  if (beforeSet.size !== afterSet.size) {
-    return false;
-  }
-
-  for (const key of beforeSet) {
-    if (!afterSet.has(key)) {
-      return false;
-    }
-  }
-
-  return true;
+  return getCoverageMismatchDiagnostics(before, after, fileByPath) === null;
 }
 
 /** Returns canonical coverage keys for every file and hunk a plan touches. */
