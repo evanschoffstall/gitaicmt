@@ -5,7 +5,7 @@ import {
   formatPlanBodyLines,
   wrapDisplayFileLines,
   wrapDisplayText,
-} from "../src/cli/commit-plan-display.js";
+} from "../src/cli/commit/plan-display.js";
 
 describe("plan display formatting", () => {
   test("keeps bullet continuation lines aligned under the bullet text", () => {

@@ -1,4 +1,4 @@
-import { stripAnsi } from "../src/cli/terminal-line-wrapping.js";
+import { stripAnsi } from "../src/cli/terminal/line-wrapping.js";
 import {
   formatVerboseAiOutputLines,
   getVerboseAiOutputSequenceKey,

@@ -5,7 +5,7 @@ import {
   THINKING_MESSAGES,
   withThinkingIndicator,
   writeTerminalLines,
-} from "../src/cli/terminal-output-ui.js";
+} from "../src/cli/terminal/output-ui.js";
 
 const { describe, expect, test } = await import("bun:test");
 

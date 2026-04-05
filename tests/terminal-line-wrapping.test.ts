@@ -5,7 +5,7 @@ import {
   visibleLineLength,
   wrapTerminalTextBlock,
   wrapTerminalTextLine,
-} from "../src/cli/terminal-line-wrapping.js";
+} from "../src/cli/terminal/line-wrapping.js";
 
 describe("terminal line wrapping", () => {
   test("measures visible width without ANSI escapes", () => {

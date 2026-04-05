@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { stripAnsi } from "../src/cli/terminal-line-wrapping.js";
+import { stripAnsi } from "../src/cli/terminal/line-wrapping.js";
 import {
   plannedCommitFilesOverlap,
   resolveOverlappingCommits,

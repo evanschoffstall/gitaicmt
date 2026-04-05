@@ -1,5 +1,10 @@
 /** Terminal block rendering: ANSI styling, line wrapping, and event-stat lines. */
-import { wrapTokenizedTextBySeparatorPreference } from "../token-splitting.js";
+import { wrapTokenizedTextBySeparatorPreference } from "../token/splitting.js";
+import {
+  collectEventStatParts,
+  describePlannerDecision,
+  getPlannerDecisionName,
+} from "./event-stats.js";
 import { formatJsonTraceValue } from "./json-trace.js";
 
 type AiOutputEvent = import("../../commit-planning/openai-client.js").AiOutputEvent;
@@ -70,30 +75,7 @@ export function formatEventStatLines(
   maxWidth: number,
   severity: TraceFrameSeverity = "info",
 ): string[] {
-  const summaryParts: string[] = [];
-  const usageParts: string[] = [];
-
-  if (event.kind) {
-    summaryParts.push(event.kind);
-  }
-  if (event.transport) {
-    summaryParts.push(event.transport);
-  }
-  if (typeof event.durationMs === "number") {
-    summaryParts.push(formatDuration(event.durationMs));
-  }
-  if (typeof event.requestCountDelta === "number") {
-    usageParts.push(`${String(event.requestCountDelta)} req`);
-  }
-  if (typeof event.inputTokens === "number") {
-    usageParts.push(`${String(event.inputTokens)} in`);
-  }
-  if (typeof event.outputTokens === "number") {
-    usageParts.push(`${String(event.outputTokens)} out`);
-  }
-  if (typeof event.totalTokens === "number") {
-    usageParts.push(`${String(event.totalTokens)} tok`);
-  }
+  const { summaryParts, usageParts } = collectEventStatParts(event);
 
   if (summaryParts.length === 0 && usageParts.length === 0) {
     return [];
@@ -102,25 +84,11 @@ export function formatEventStatLines(
   const lines: string[] = [];
 
   if (summaryParts.length > 0) {
-    lines.push(
-      ...wrapLine(
-        `stats: ${summaryParts.join(" · ")}`,
-        maxWidth - 4,
-        "│   ",
-        "│     ",
-      ).map((line) => styleTraceMutedRail(line, severity)),
-    );
+    lines.push(...formatWrappedStatLine("stats", summaryParts, maxWidth, severity));
   }
 
   if (usageParts.length > 0) {
-    lines.push(
-      ...wrapLine(
-        `usage: ${usageParts.join(" · ")}`,
-        maxWidth - 4,
-        "│   ",
-        "│     ",
-      ).map((line) => styleTraceMutedRail(line, severity)),
-    );
+    lines.push(...formatWrappedStatLine("usage", usageParts, maxWidth, severity));
   }
 
   return lines;
@@ -303,88 +271,18 @@ export function wrapTraceLine(
   ).map((line) => styleTraceRail(line, severity));
 }
 
-function describePlannerDecision(parsed: unknown): null | string {
-  const decision = getPlannerDecisionName(parsed);
-  if (!decision) {
-    return null;
-  }
-
-  switch (decision) {
-    case "batched-plan-finalization": {
-      return "Batched plan finalization";
-    }
-    case "cluster-failed": {
-      return "Cluster failed";
-    }
-    case "cluster-fallback": {
-      return "Cluster fallback";
-    }
-    case "cluster-pass": {
-      return "Cluster pass";
-    }
-    case "cluster-stop": {
-      return "Cluster stop";
-    }
-    case "consolidation-failed": {
-      return "Consolidation failed";
-    }
-    case "consolidation-fallback": {
-      return "Consolidation fallback";
-    }
-    case "consolidation-noop": {
-      return "Consolidation noop";
-    }
-    case "consolidation-pass": {
-      return "Consolidation pass";
-    }
-    case "consolidation-retry-scheduled": {
-      return "Consolidation retry scheduled";
-    }
-    case "consolidation-stop": {
-      return "Consolidation stop";
-    }
-    case "dependency-ordering": {
-      return "Dependency ordering";
-    }
-    case "finalize-planned-groups": {
-      return "Finalize planned groups";
-    }
-    case "repartition-after-consolidation": {
-      return "Repartition after consolidation";
-    }
-    case "skip-consolidation": {
-      return "Skip consolidation";
-    }
-    default: {
-      return decision
-        .split("-")
-        .map((segment) => segment[0].toUpperCase() + segment.slice(1))
-        .join(" ");
-    }
-  }
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs > 0 && durationMs < 1) {
-    return "<1ms";
-  }
-
-  return durationMs >= 1000
-    ? `${(durationMs / 1000).toFixed(2)}s`
-    : `${Math.round(durationMs)}ms`;
-}
-
-function getPlannerDecisionName(parsed: unknown): null | string {
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("decision" in parsed) ||
-    typeof parsed.decision !== "string"
-  ) {
-    return null;
-  }
-
-  return parsed.decision;
+function formatWrappedStatLine(
+  label: "stats" | "usage",
+  parts: string[],
+  maxWidth: number,
+  severity: TraceFrameSeverity,
+): string[] {
+  return wrapLine(
+    `${label}: ${parts.join(" · ")}`,
+    maxWidth - 4,
+    "│   ",
+    "│     ",
+  ).map((line) => styleTraceMutedRail(line, severity));
 }
 
 function getSeverityColor(severity: TraceFrameSeverity): string {

@@ -7,7 +7,7 @@ import {
   buildReadyPromptLines,
   buildStatusSectionLines,
 } from "../src/cli/output-presentation.js";
-import { stripAnsi } from "../src/cli/terminal-line-wrapping.js";
+import { stripAnsi } from "../src/cli/terminal/line-wrapping.js";
 
 describe("output-presentation", () => {
   test("renders compact status sections with aligned wrapped values", () => {

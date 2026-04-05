@@ -15,8 +15,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resetConfigCache } from "../src/application/config.js";
-import { stageGroupFiles } from "../src/cli/commit-group-staging.js";
+import { resetConfigCache } from "../src/application/config/index.js";
+import { stageGroupFiles } from "../src/cli/commit/group-staging.js";
 import { resolveOverlappingCommits } from "../src/commit-planning/overlap-resolution.js";
 import { parseDiff } from "../src/git/diff.js";
 import {

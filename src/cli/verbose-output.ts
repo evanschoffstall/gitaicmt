@@ -19,6 +19,13 @@ export interface VerboseOutputOptions {
   sequence?: number;
 }
 
+interface TraceWrapContext {
+  continuationPrefix: string;
+  firstPrefix: string;
+  severity: ReturnType<typeof getEventFrameSeverity>;
+  wrapOffset: number;
+}
+
 interface VerboseCommitFile {
   hunks?: number[];
   path: string;
@@ -75,19 +82,16 @@ function buildCommitSubjectPreviewLines(
   commit: VerboseCommitPlanItem,
   index: number,
   maxWidth: number,
-  severity: ReturnType<typeof getEventFrameSeverity>,
-  firstPrefix: string,
-  continuationPrefix: string,
-  wrapOffset: number,
+  context: TraceWrapContext,
 ): string[] {
   const subject = commit.message.split("\n")[0]?.trim() ?? "(missing subject)";
   return buildTraceWrappedLines(
     `${String(index + 1)}. ${subject}`,
     maxWidth,
-    severity,
-    firstPrefix,
-    continuationPrefix,
-    wrapOffset,
+    context.severity,
+    context.firstPrefix,
+    context.continuationPrefix,
+    context.wrapOffset,
   );
 }
 
@@ -213,10 +217,12 @@ function formatCommitPlanBlock(
         commit,
         index,
         maxWidth,
-        severity,
-        "│ ",
-        "│    ",
-        2,
+        {
+          continuationPrefix: "│    ",
+          firstPrefix: "│ ",
+          severity,
+          wrapOffset: 2,
+        },
       ),
       ...buildTraceWrappedLines(
         `impact: ${impactSummary}`,
@@ -292,10 +298,12 @@ function formatConsolidationTraceSummary(
         commit,
         index,
         maxWidth,
-        severity,
-        "│   ",
-        "│      ",
-        4,
+        {
+          continuationPrefix: "│      ",
+          firstPrefix: "│   ",
+          severity,
+          wrapOffset: 4,
+        },
       ),
     );
   }

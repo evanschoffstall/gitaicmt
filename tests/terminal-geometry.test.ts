@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { resolveTerminalColumns } from "../src/cli/terminal-columns.js";
+import { resolveTerminalColumns } from "../src/cli/terminal/columns.js";
 
 describe("terminal geometry", () => {
   test("prefers direct stream columns when available", () => {
