@@ -1,8 +1,24 @@
 import OpenAI from "openai";
 
-import { loadConfig } from "../application/config.js";
-import { ConfigError, OpenAIError, OpenAITimeoutError } from "../application/errors.js";
+import { loadConfig } from "../application/config/index.js";
+import { ConfigError, OpenAIError } from "../application/errors.js";
 import { type AiOutputFileAliasMap, extractAiOutputFileAliasMap } from "./ai-output-aliases.js";
+import {
+  buildCompletionRequest,
+  isNonChatModelError,
+  readChatContent,
+  rethrowTimeoutError,
+  supportsTemperature,
+  toOpenAiCallError,
+  validateModelName,
+} from "./client-support.js";
+import { extractResponseText } from "./output-text.js";
+import {
+  createEmptyTokenUsageByStage,
+  createEmptyTokenUsageSummary,
+  extractTokenUsage,
+  mergeTokenUsageSummary,
+} from "./usage-tracking.js";
 
 let cachedClient: null | OpenAI = null;
 let lastApiKey: null | string = null;
@@ -38,9 +54,9 @@ export interface TokenUsageSummary {
   totalTokens: number;
 }
 
-let currentTokenUsage: TokenUsageSummary = emptyTokenUsageSummary();
+let currentTokenUsage: TokenUsageSummary = createEmptyTokenUsageSummary();
 let currentTokenUsageByStage: Record<TokenUsageStage, TokenUsageSummary> =
-  emptyTokenUsageByStage();
+  createEmptyTokenUsageByStage();
 let aiOutputObserver: ((event: AiOutputEvent) => void) | null = null;
 
 export interface CompleteOptions {
@@ -56,97 +72,35 @@ export async function complete(
   options?: CompleteOptions,
 ): Promise<string> {
   const cfg = loadConfig();
-  const timeoutMs = options?.timeoutMs ?? cfg.performance.timeoutMs;
-  const signal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
-  const maxTokens = options?.maxTokens ?? cfg.openai.maxTokens;
-  const stage = options?.stage;
-  const temperature = options?.temperature ?? cfg.openai.temperature;
+  const request = buildCompletionRequest(cfg, options);
   const startedAtMs = performance.now();
   const fileAliasMap = extractAiOutputFileAliasMap(user);
 
-  const chatPayload = {
-    max_completion_tokens: maxTokens,
-    model: cfg.openai.model,
-    ...(supportsTemperature(cfg.openai.model) ? { temperature } : {}),
-    messages: [
-      { content: system, role: "system" as const },
-      { content: user, role: "user" as const },
-    ],
-  };
-
   try {
-    const res = await client().chat.completions.create(chatPayload, { signal });
-    const usage = recordTokenUsage(res, stage);
-    const content = res.choices[0]?.message?.content;
-    if (typeof content === "string" && content.trim()) {
-      const trimmedContent = content.trim();
-      notifyModelOutputEvent(trimmedContent, {
-        durationMs: performance.now() - startedAtMs,
-        fileAliasMap,
-        stage,
-        transport: "chat",
-        usage,
-      });
-      return trimmedContent;
-    }
-    throw new OpenAIError("API returned empty or invalid response");
+    return await completeViaChat(
+      system,
+      user,
+      request,
+      startedAtMs,
+      fileAliasMap,
+    );
   } catch (err: unknown) {
-    if (err instanceof Error) {
-      if (err.name === "AbortError" || err.message.includes("timeout")) {
-        throw new OpenAITimeoutError(timeoutMs);
-      }
-    }
+    rethrowTimeoutError(err, request.timeoutMs);
 
     if (!isNonChatModelError(err)) {
-      if (err instanceof Error) {
-        throw new OpenAIError(`OpenAI API call failed: ${err.message}`, err);
-      }
-      throw new OpenAIError(`OpenAI API call failed: ${String(err)}`);
+      throw toOpenAiCallError(err);
     }
 
     try {
-      const fallbackStartedAtMs = performance.now();
-      const res = await client().responses.create(
-        {
-          input: user,
-          instructions: system,
-          max_output_tokens: maxTokens,
-          model: cfg.openai.model,
-          ...(supportsTemperature(cfg.openai.model) ? { temperature } : {}),
-        },
-        { signal },
-      );
-
-      const usage = recordTokenUsage(res, stage);
-
-      const content = extractResponseText(res);
-      if (!content) {
-        throw new OpenAIError(
-          "Responses API returned empty or invalid response",
-        );
-      }
-      notifyModelOutputEvent(content, {
-        durationMs: performance.now() - fallbackStartedAtMs,
+      return await completeViaResponses(
+        system,
+        user,
+        request,
         fileAliasMap,
-        stage,
-        transport: "responses",
-        usage,
-      });
-      return content;
+      );
     } catch (fallbackErr: unknown) {
-      if (fallbackErr instanceof Error) {
-        if (
-          fallbackErr.name === "AbortError" ||
-          fallbackErr.message.includes("timeout")
-        ) {
-          throw new OpenAITimeoutError(timeoutMs);
-        }
-        throw new OpenAIError(
-          `OpenAI API call failed: ${fallbackErr.message}`,
-          fallbackErr,
-        );
-      }
-      throw new OpenAIError(`OpenAI API call failed: ${String(fallbackErr)}`);
+      rethrowTimeoutError(fallbackErr, request.timeoutMs);
+      throw toOpenAiCallError(fallbackErr);
     }
   }
 }
@@ -173,8 +127,8 @@ export function getTokenUsageSummary(): TokenUsageSummary {
 }
 
 export function resetTokenUsageSummary(): void {
-  currentTokenUsage = emptyTokenUsageSummary();
-  currentTokenUsageByStage = emptyTokenUsageByStage();
+  currentTokenUsage = createEmptyTokenUsageSummary();
+  currentTokenUsageByStage = createEmptyTokenUsageByStage();
 }
 
 /**
@@ -228,97 +182,82 @@ function client(): OpenAI {
   return cachedClient;
 }
 
-function emptyTokenUsageByStage(): Record<TokenUsageStage, TokenUsageSummary> {
-  return {
-    cluster: emptyTokenUsageSummary(),
-    consolidate: emptyTokenUsageSummary(),
-    generate: emptyTokenUsageSummary(),
-    group: emptyTokenUsageSummary(),
-    merge: emptyTokenUsageSummary(),
-  };
-}
-
-function emptyTokenUsageSummary(): TokenUsageSummary {
-  return {
-    inputTokens: 0,
-    outputTokens: 0,
-    requestCount: 0,
-    totalTokens: 0,
-  };
-}
-
-function extractResponseText(raw: unknown): string {
-  const asObj = raw as {
-    output?: {
-      content?: { text?: string; type?: string }[];
-    }[];
-    output_text?: string;
-  };
-
-  if (typeof asObj.output_text === "string" && asObj.output_text.trim()) {
-    return asObj.output_text.trim();
-  }
-
-  const parts: string[] = [];
-  for (const item of asObj.output ?? []) {
-    for (const content of item.content ?? []) {
-      if (
-        (content.type === "output_text" || content.type === "text") &&
-        typeof content.text === "string"
-      ) {
-        parts.push(content.text);
-      }
-    }
-  }
-  return parts.join("\n").trim();
-}
-
-function extractTokenUsage(
-  raw: unknown,
-): null | Omit<TokenUsageSummary, "requestCount"> {
-  const withUsage = raw as {
-    usage?: {
-      completion_tokens?: unknown;
-      input_tokens?: unknown;
-      output_tokens?: unknown;
-      prompt_tokens?: unknown;
-      total_tokens?: unknown;
-    };
-  };
-
-  const usage = withUsage.usage;
-  if (!usage || typeof usage !== "object") {
-    return null;
-  }
-
-  const inputTokens =
-    readUsageNumber(usage.input_tokens ?? usage.prompt_tokens) ?? 0;
-  const outputTokens =
-    readUsageNumber(usage.output_tokens ?? usage.completion_tokens) ?? 0;
-  const totalTokens =
-    readUsageNumber(usage.total_tokens) ?? inputTokens + outputTokens;
-
-  if (inputTokens === 0 && outputTokens === 0 && totalTokens === 0) {
-    return null;
-  }
-
-  return {
-    inputTokens,
-    outputTokens,
-    totalTokens,
-  };
-}
-
-function isNonChatModelError(err: unknown): boolean {
-  const message =
-    typeof err === "object" && err !== null && "message" in err
-      ? err.message
-      : err;
-  const msg = String(message).toLowerCase();
-  return (
-    msg.includes("not a chat model") ||
-    msg.includes("not supported in the v1/chat/completions")
+async function completeViaChat(
+  system: string,
+  user: string,
+  request: {
+    maxTokens: number;
+    signal: AbortSignal | undefined;
+    stage?: TokenUsageStage;
+    temperature: number;
+  },
+  startedAtMs: number,
+  fileAliasMap: AiOutputFileAliasMap,
+): Promise<string> {
+  const cfg = loadConfig();
+  const res = await client().chat.completions.create(
+    {
+      max_completion_tokens: request.maxTokens,
+      model: cfg.openai.model,
+      ...(supportsTemperature(cfg.openai.model)
+        ? { temperature: request.temperature }
+        : {}),
+      messages: [
+        { content: system, role: "system" as const },
+        { content: user, role: "user" as const },
+      ],
+    },
+    { signal: request.signal },
   );
+  const content = readChatContent(res);
+  notifyModelOutputEvent(content, {
+    durationMs: performance.now() - startedAtMs,
+    fileAliasMap,
+    stage: request.stage,
+    transport: "chat",
+    usage: recordTokenUsage(res, request.stage),
+  });
+  return content;
+}
+
+async function completeViaResponses(
+  system: string,
+  user: string,
+  request: {
+    maxTokens: number;
+    signal: AbortSignal | undefined;
+    stage?: TokenUsageStage;
+    temperature: number;
+  },
+  fileAliasMap: AiOutputFileAliasMap,
+): Promise<string> {
+  const cfg = loadConfig();
+  const startedAtMs = performance.now();
+  const res = await client().responses.create(
+    {
+      input: user,
+      instructions: system,
+      max_output_tokens: request.maxTokens,
+      model: cfg.openai.model,
+      ...(supportsTemperature(cfg.openai.model)
+        ? { temperature: request.temperature }
+        : {}),
+    },
+    { signal: request.signal },
+  );
+
+  const content = extractResponseText(res);
+  if (!content) {
+    throw new OpenAIError("Responses API returned empty or invalid response");
+  }
+  notifyModelOutputEvent(content, {
+    durationMs: performance.now() - startedAtMs,
+    fileAliasMap,
+    stage: request.stage,
+    transport: "responses",
+    usage: recordTokenUsage(res, request.stage),
+  });
+  return content;
 }
 
 function notifyAiOutputObserver(event: AiOutputEvent): void {
@@ -359,10 +298,6 @@ function notifyModelOutputEvent(
   });
 }
 
-function readUsageNumber(value: unknown): null | number {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function recordTokenUsage(
   raw: unknown,
   stage?: TokenUsageStage,
@@ -372,43 +307,17 @@ function recordTokenUsage(
     return null;
   }
 
-  currentTokenUsage = {
-    inputTokens: currentTokenUsage.inputTokens + usage.inputTokens,
-    outputTokens: currentTokenUsage.outputTokens + usage.outputTokens,
-    requestCount: currentTokenUsage.requestCount + 1,
-    totalTokens: currentTokenUsage.totalTokens + usage.totalTokens,
-  };
+  currentTokenUsage = mergeTokenUsageSummary(currentTokenUsage, usage);
 
   if (!stage) {
     return usage;
   }
 
-  const stageUsage = currentTokenUsageByStage[stage];
-  currentTokenUsageByStage[stage] = {
-    inputTokens: stageUsage.inputTokens + usage.inputTokens,
-    outputTokens: stageUsage.outputTokens + usage.outputTokens,
-    requestCount: stageUsage.requestCount + 1,
-    totalTokens: stageUsage.totalTokens + usage.totalTokens,
-  };
+  currentTokenUsageByStage[stage] = mergeTokenUsageSummary(
+    currentTokenUsageByStage[stage],
+    usage,
+  );
 
   return usage;
 }
 
-function supportsTemperature(model: string): boolean {
-  return !/^(o1|o2|o3|o4|gpt-5)/i.test(model);
-}
-
-function validateModelName(modelName: string): void {
-  const model = modelName.trim();
-  if (!model || model.length === 0) {
-    throw new ConfigError("OpenAI model name cannot be empty");
-  }
-  if (model.length > 100) {
-    throw new ConfigError(
-      `OpenAI model name too long (max 100 chars): ${model.slice(0, 50)}...`,
-    );
-  }
-  if (!/^[a-zA-Z0-9._-]+$/.test(model)) {
-    throw new ConfigError(`Invalid characters in OpenAI model name: ${model}`);
-  }
-}
