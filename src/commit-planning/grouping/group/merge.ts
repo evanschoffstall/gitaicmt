@@ -2,8 +2,8 @@ import {
   type FileDiff,
   type PlannedCommit,
   type PlannedCommitFile,
-} from "./grouping-types.js";
-import { isSupportLikeType, parseSubjectWords } from "./subject-analysis.js";
+} from "../grouping-types.js";
+import { isSupportLikeType, parseSubjectWords } from "../subject/analysis.js";
 
 /** Merge AI-produced commit clusters into commit groups. */
 export function mergeCommitClusters(
@@ -39,42 +39,13 @@ export function mergeCommitFiles(
 
   for (const commit of commits) {
     for (const fileRef of commit.files) {
-      if (!fileRef.hunks || fileRef.hunks.length === 0) {
-        fileHunkMap.set(fileRef.path, null);
-        continue;
-      }
-
-      if (!fileHunkMap.has(fileRef.path)) {
-        fileHunkMap.set(fileRef.path, new Set(fileRef.hunks));
-        continue;
-      }
-
-      const existingHunkIndexes = fileHunkMap.get(fileRef.path);
-      if (existingHunkIndexes === null || existingHunkIndexes === undefined) {
-        continue;
-      }
-
-      for (const hunkIndex of fileRef.hunks) {
-        existingHunkIndexes.add(hunkIndex);
-      }
+      mergeCommitFileReference(fileHunkMap, fileRef);
     }
   }
 
-  const mergedFiles: PlannedCommitFile[] = [];
-  for (const [path, hunkIndexes] of fileHunkMap) {
-    const file = fileByPath.get(path);
-    if (!file || file.hunks.length === 0 || hunkIndexes === null) {
-      mergedFiles.push({ path });
-      continue;
-    }
-
-    mergedFiles.push({
-      hunks: [...hunkIndexes].sort((left, right) => left - right),
-      path,
-    });
-  }
-
-  return mergedFiles;
+  return [...fileHunkMap.entries()].map(([path, hunkIndexes]) =>
+    toMergedCommitFile(path, hunkIndexes, fileByPath),
+  );
 }
 
 /** Combine subjects and bullet blocks from multiple commit messages. */
@@ -85,36 +56,8 @@ export function mergeCommitMessages(commits: PlannedCommit[]): string {
 
   const orderedCommits = prioritizeMergedCommits(commits);
   const firstSubject = orderedCommits[0].message.split("\n")[0].trim();
-  const bulletBlocks: string[][] = [];
-  let currentBlock: string[] = [];
-
-  for (const commit of orderedCommits) {
-    const lines = commit.message.split("\n");
-    for (let index = 2; index < lines.length; index++) {
-      const line = lines[index];
-      if (/^\s*-\s+\S/.test(line)) {
-        if (currentBlock.length > 0) {
-          bulletBlocks.push(currentBlock);
-        }
-        currentBlock = [line];
-        continue;
-      }
-
-      if (/^\s{2,}\S/.test(line) && currentBlock.length > 0) {
-        currentBlock.push(line);
-      }
-    }
-  }
-
-  if (currentBlock.length > 0) {
-    bulletBlocks.push(currentBlock);
-  }
-
-  const dedupedBlocks = bulletBlocks.filter(
-    (block, index, blocks) =>
-      blocks.findIndex(
-        (candidate) => candidate.join("\n") === block.join("\n"),
-      ) === index,
+  const dedupedBlocks = dedupeBulletBlocks(
+    collectCommitMessageBulletBlocks(orderedCommits),
   );
 
   if (dedupedBlocks.length === 0) {
@@ -161,4 +104,89 @@ export function prioritizeMergedCommits(
 
     return left.message.localeCompare(right.message);
   });
+}
+
+function collectCommitMessageBulletBlocks(
+  commits: PlannedCommit[],
+): string[][] {
+  const bulletBlocks: string[][] = [];
+  let currentBlock: string[] = [];
+
+  for (const commit of commits) {
+    for (const line of commit.message.split("\n").slice(2)) {
+      if (isBulletLine(line)) {
+        if (currentBlock.length > 0) {
+          bulletBlocks.push(currentBlock);
+        }
+        currentBlock = [line];
+        continue;
+      }
+
+      if (isBulletContinuationLine(line) && currentBlock.length > 0) {
+        currentBlock.push(line);
+      }
+    }
+  }
+
+  if (currentBlock.length > 0) {
+    bulletBlocks.push(currentBlock);
+  }
+
+  return bulletBlocks;
+}
+
+function dedupeBulletBlocks(blocks: string[][]): string[][] {
+  return blocks.filter(
+    (block, index, allBlocks) =>
+      allBlocks.findIndex(
+        (candidate) => candidate.join("\n") === block.join("\n"),
+      ) === index,
+  );
+}
+
+function isBulletContinuationLine(line: string): boolean {
+  return /^\s{2,}\S/.test(line);
+}
+
+function isBulletLine(line: string): boolean {
+  return /^\s*-\s+\S/.test(line);
+}
+
+function mergeCommitFileReference(
+  fileHunkMap: Map<string, null | Set<number>>,
+  fileRef: PlannedCommitFile,
+): void {
+  if (!fileRef.hunks || fileRef.hunks.length === 0) {
+    fileHunkMap.set(fileRef.path, null);
+    return;
+  }
+
+  const existingHunkIndexes = fileHunkMap.get(fileRef.path);
+  if (existingHunkIndexes === null) {
+    return;
+  }
+  if (existingHunkIndexes === undefined) {
+    fileHunkMap.set(fileRef.path, new Set(fileRef.hunks));
+    return;
+  }
+
+  for (const hunkIndex of fileRef.hunks) {
+    existingHunkIndexes.add(hunkIndex);
+  }
+}
+
+function toMergedCommitFile(
+  path: string,
+  hunkIndexes: null | Set<number>,
+  fileByPath: Map<string, FileDiff>,
+): PlannedCommitFile {
+  const file = fileByPath.get(path);
+  if (!file || file.hunks.length === 0 || hunkIndexes === null) {
+    return { path };
+  }
+
+  return {
+    hunks: [...hunkIndexes].sort((left, right) => left - right),
+    path,
+  };
 }

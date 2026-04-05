@@ -1,4 +1,4 @@
-import { loadConfig } from "../application/config.js";
+import { loadConfig } from "../application/config/index.js";
 import {
   DEFAULT_EMPTY_COMMIT_MESSAGE,
   GROUPING_TIMEOUT_MS,
@@ -6,16 +6,14 @@ import {
 import { ValidationError } from "../application/errors.js";
 import {
   formatLabeledDiff,
-  formatScalar,
   validateCommitMessage,
 } from "../commit-messages/formatting.js";
-import { formatSelectedFileDiff } from "../git/diff.js";
 import {
   batchFilesForGrouping,
   batchingMakesProgress,
   shouldBatchFiles,
 } from "./file-batching.js";
-import { finalizePlannedGroups, premergeBySubject } from "./grouping/index.js";
+import { finalizePlannedGroups } from "./grouping/index.js";
 import { complete, emitAiOutputEvent } from "./openai-client.js";
 import {
   buildGroupingSystemPrompt,
@@ -28,13 +26,20 @@ import {
 import { validateAndNormalizeGrouping } from "./response-validation.js";
 import {
   getCachedMessage,
-  getCachedPlan,
-  serializePlanCacheInput,
   setCachedMessage,
   setCachedPlan,
 } from "./result-cache.js";
 import { getGroupingResponseTokenBudget } from "./token-estimation.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./types.js";
+import {
+  buildMissedFilesChunk,
+  buildPlanCacheContext,
+  collectMissedPlannedFiles,
+  finalizePlannedCommitGroups,
+  getEmittedCachedPlan,
+  parseGroupingResponse,
+  validatePlanRecursionDepth,
+} from "./workflow-support.js";
 
 type DiffChunk = import("../git/diff.js").DiffChunk;
 type DiffStats = import("../git/diff.js").DiffStats;
@@ -111,208 +116,81 @@ export async function planCommits(
   }
 
   const cfg = loadConfig();
-  const maxRecursionDepth = 5;
-  const formattedDiffs = files.map((file) => formatFileDiff(file));
-  const planCacheInput = serializePlanCacheInput(
+  const { formattedDiffs, planCacheInput } = buildPlanCacheContext(
     files,
-    formattedDiffs,
+    formatFileDiff,
     promptContext,
   );
-  const cachedPlan = getCachedPlan(planCacheInput);
+  const cachedPlan = getEmittedCachedPlan(planCacheInput, files.length);
   if (cachedPlan) {
-    emitAiOutputEvent({
-      content: JSON.stringify({
-        cachedCommitCount: cachedPlan.length,
-        cacheKeyFiles: files.length,
-        decision: "plan-cache-hit",
-      }),
-      kind: "cache",
-      stage: "group",
-      transport: "internal",
-    });
     return cachedPlan;
   }
+  validatePlanRecursionDepth(recursionDepth, files.length);
 
-  if (recursionDepth > maxRecursionDepth) {
-    throw new ValidationError(
-      `Maximum recursion depth exceeded while planning commits. Too many files (${formatScalar(files.length)}) to process safely.`,
-      { depth: recursionDepth, fileCount: files.length },
-    );
-  }
-
-  if (files.length === 1 && files[0].hunks.length <= 1) {
-    const chunk: DiffChunk = {
-      content: formattedDiffs[0] ?? formatFileDiff(files[0]),
-      files: [files[0].path],
-      id: 0,
-      lineCount: (formattedDiffs[0] ?? formatFileDiff(files[0])).split("\n")
-        .length,
-    };
-    const msg = await generateForChunk(chunk);
-    const singlePlan = [{ files: [{ path: files[0].path }], message: msg }];
-    setCachedPlan(planCacheInput, singlePlan);
-    return singlePlan;
-  }
-
-  if (files.length > 1 && shouldBatchFiles(files)) {
-    const batches = batchFilesForGrouping(files);
-    if (batchingMakesProgress(files, batches)) {
-      const batchStartedAtMs = performance.now();
-      const batchResults = await Promise.all(
-        batches.map((batch, batchIndex) =>
-          planCommits(batch, formatFileDiff, recursionDepth + 1, {
-            allFiles: promptContext?.allFiles ?? files,
-            batchCount: batches.length,
-            batchIndex,
-            deferFinalization: true,
-          }),
-        ),
-      );
-      const finalized = await finalizePlannedGroups(files, batchResults.flat());
-      emitAiOutputEvent({
-        content: JSON.stringify({
-          batchCount: batches.length,
-          decision: "batched-plan-finalization",
-          deferredFinalization: true,
-          finalCommitCount: finalized.length,
-          inputFileCount: files.length,
-          intermediateCommitCount: batchResults.flat().length,
-        }),
-        durationMs: performance.now() - batchStartedAtMs,
-        kind: "planner-decision",
-        stage: "group",
-        transport: "internal",
-      });
-      setCachedPlan(planCacheInput, finalized);
-      return finalized;
-    }
-  }
-
-  const sys = buildGroupingSystemPrompt();
-  const usr = buildGroupingUserPrompt(files, formatFileDiff, promptContext);
-  const groupingTokens = getGroupingResponseTokenBudget(
-    cfg.openai.maxTokens,
-    files.length,
+  const incrementalPlan = await maybePlanIncrementally(
+    files,
+    formattedDiffs,
+    formatFileDiff,
+    recursionDepth,
+    promptContext,
   );
-  const groupingTimeout = Math.max(
-    cfg.performance.timeoutMs,
-    GROUPING_TIMEOUT_MS,
-  );
-  const raw = await complete(sys, usr, {
-    maxTokens: groupingTokens,
-    stage: "group",
-    temperature: Math.min(cfg.openai.temperature, 0.3),
-    timeoutMs: groupingTimeout,
-  });
+  if (incrementalPlan) {
+    setCachedPlan(planCacheInput, incrementalPlan);
+    return incrementalPlan;
+  }
 
+  const groups = await buildRequestedGroupingPlan(
+    files,
+    formatFileDiff,
+    promptContext,
+    cfg,
+  );
+  const finalized = await finalizePlannedCommitGroups(
+    files,
+    groups,
+    promptContext?.deferFinalization === true,
+  );
+  setCachedPlan(planCacheInput, finalized);
+  return finalized;
+}
+
+async function buildFallbackGroupingPlan(
+  files: FileDiff[],
+  formatFileDiff: (f: FileDiff) => string,
+): Promise<PlannedCommit[]> {
+  const allContent = files
+    .map((file) => formatLabeledDiff(file, formatFileDiff))
+    .join("\n");
+  const allChunk: DiffChunk = {
+    content: allContent,
+    files: files.map((file) => file.path),
+    id: 0,
+    lineCount: allContent.split("\n").length,
+  };
+  const msg = await generateForChunk(allChunk);
+
+  return [
+    { files: files.map((file) => ({ path: file.path })), message: msg },
+  ];
+}
+
+async function buildRequestedGroupingPlan(
+  files: FileDiff[],
+  formatFileDiff: (f: FileDiff) => string,
+  promptContext: GroupingPromptContext | undefined,
+  cfg: ReturnType<typeof loadConfig>,
+): Promise<PlannedCommit[]> {
+  const raw = await requestGroupingPlan(
+    buildGroupingSystemPrompt(),
+    buildGroupingUserPrompt(files, formatFileDiff, promptContext),
+    getGroupingResponseTokenBudget(cfg.openai.maxTokens, files.length),
+    Math.max(cfg.performance.timeoutMs, GROUPING_TIMEOUT_MS),
+    cfg,
+  );
   const fileByPath = new Map(files.map((file) => [file.path, file]));
 
-  let groups: PlannedCommit[];
   try {
-    const cleaned = raw
-      .replace(/^```(?:json)?\s*/m, "")
-      .replace(/\s*```$/m, "");
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch (parseErr) {
-      throw new ValidationError(
-        `AI returned invalid JSON: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
-      );
-    }
-
-    groups = validateAndNormalizeGrouping(parsed, fileByPath);
-
-    // Track file-level assignment separately from hunk assignment so zero-hunk
-    // entries such as mode-only and rename-only changes do not get duplicated
-    // into a synthetic "missed files" commit.
-    const assignedFiles = new Set<string>();
-    const assignedHunks = new Map<string, Set<number>>();
-    for (const group of groups) {
-      for (const fileRef of group.files) {
-        assignedFiles.add(fileRef.path);
-        let assigned = assignedHunks.get(fileRef.path);
-        if (!assigned) {
-          assigned = new Set<number>();
-          assignedHunks.set(fileRef.path, assigned);
-        }
-        const file = fileByPath.get(fileRef.path);
-        if (!file) {
-          throw new ValidationError(
-            `Unknown file in commit group: ${fileRef.path}`,
-          );
-        }
-        if (fileRef.hunks) {
-          for (const hunk of fileRef.hunks) {
-            assigned.add(hunk);
-          }
-        } else {
-          for (let i = 0; i < file.hunks.length; i++) {
-            assigned.add(i);
-          }
-        }
-      }
-    }
-
-    const missedFiles: PlannedCommitFile[] = [];
-    for (const file of files) {
-      if (!assignedFiles.has(file.path)) {
-        missedFiles.push({ path: file.path });
-        continue;
-      }
-
-      if (file.hunks.length === 0) {
-        continue;
-      }
-
-      const assigned = assignedHunks.get(file.path);
-      if (!assigned || assigned.size === 0) {
-        continue;
-      }
-      if (assigned.size >= file.hunks.length) {
-        continue;
-      }
-
-      const missedHunks: number[] = [];
-      for (let i = 0; i < file.hunks.length; i++) {
-        if (!assigned.has(i)) {
-          missedHunks.push(i);
-        }
-      }
-      if (missedHunks.length > 0) {
-        missedFiles.push({ hunks: missedHunks, path: file.path });
-      }
-    }
-
-    if (missedFiles.length > 0) {
-      const missedContent = missedFiles
-        .map((missedFile) => {
-          const file = fileByPath.get(missedFile.path);
-          if (!file) {
-            throw new ValidationError(
-              `Unknown missed file: ${missedFile.path}`,
-            );
-          }
-          if (missedFile.hunks) {
-            return formatSelectedFileDiff(
-              file,
-              missedFile.hunks.map((index) => file.hunks[index]),
-            );
-          }
-          return formatFileDiff(file);
-        })
-        .join("\n");
-
-      const missedChunk: DiffChunk = {
-        content: missedContent,
-        files: missedFiles.map((file) => file.path),
-        id: 999,
-        lineCount: missedContent.split("\n").length,
-      };
-      const missedMsg = await generateForChunk(missedChunk);
-      groups.push({ files: missedFiles, message: missedMsg });
-    }
+    return await buildValidatedGroupingPlan(raw, files, formatFileDiff, fileByPath);
   } catch (error: unknown) {
     if (!(error instanceof ValidationError)) {
       throw error;
@@ -330,41 +208,126 @@ export async function planCommits(
       transport: "internal",
     });
 
-    const allContent = files
-      .map((file) => formatLabeledDiff(file, formatFileDiff))
-      .join("\n");
-    const allChunk: DiffChunk = {
-      content: allContent,
-      files: files.map((file) => file.path),
-      id: 0,
-      lineCount: allContent.split("\n").length,
-    };
-    const msg = await generateForChunk(allChunk);
-    groups = [
-      { files: files.map((file) => ({ path: file.path })), message: msg },
-    ];
+    return buildFallbackGroupingPlan(files, formatFileDiff);
+  }
+}
+
+async function buildValidatedGroupingPlan(
+  raw: string,
+  files: FileDiff[],
+  formatFileDiff: (f: FileDiff) => string,
+  fileByPath: Map<string, FileDiff>,
+): Promise<PlannedCommit[]> {
+  const groups = validateAndNormalizeGrouping(parseGroupingResponse(raw), fileByPath);
+  const missedFiles = collectMissedPlannedFiles(groups, files, fileByPath);
+
+  if (missedFiles.length === 0) {
+    return groups;
   }
 
-  if (promptContext?.deferFinalization) {
-    const premerged = premergeBySubject(groups, fileByPath);
-    setCachedPlan(planCacheInput, premerged);
-    return premerged;
+  const missedMessage = await generateForChunk(
+    buildMissedFilesChunk(missedFiles, fileByPath, formatFileDiff),
+  );
+  return [...groups, { files: missedFiles, message: missedMessage }];
+}
+
+async function maybePlanIncrementally(
+  files: FileDiff[],
+  formattedDiffs: string[],
+  formatFileDiff: (f: FileDiff) => string,
+  recursionDepth: number,
+  promptContext: GroupingPromptContext | undefined,
+): Promise<PlannedCommit[] | undefined> {
+  if (files.length === 1 && files[0].hunks.length <= 1) {
+    return planSingleFileCommit(files[0], formattedDiffs[0], formatFileDiff);
   }
 
-  const finalizationStartedAtMs = performance.now();
-  const finalized = await finalizePlannedGroups(files, groups);
+  if (files.length <= 1 || !shouldBatchFiles(files)) {
+    return undefined;
+  }
+
+  const batches = batchFilesForGrouping(files);
+  if (!batchingMakesProgress(files, batches)) {
+    return undefined;
+  }
+
+  return planBatchedCommits(
+    files,
+    batches,
+    formatFileDiff,
+    recursionDepth,
+    promptContext,
+  );
+}
+
+async function planBatchedCommits(
+  files: FileDiff[],
+  batches: FileDiff[][],
+  formatFileDiff: (f: FileDiff) => string,
+  recursionDepth: number,
+  promptContext: GroupingPromptContext | undefined,
+): Promise<PlannedCommit[]> {
+  const batchStartedAtMs = performance.now();
+  const batchResults = await Promise.all(
+    batches.map((batch, batchIndex) =>
+      planCommits(batch, formatFileDiff, recursionDepth + 1, {
+        allFiles: promptContext?.allFiles ?? files,
+        batchCount: batches.length,
+        batchIndex,
+        deferFinalization: true,
+      }),
+    ),
+  );
+  const mergedGroups = batchResults.flat();
+  const finalized = await finalizePlannedGroups(files, mergedGroups);
+
   emitAiOutputEvent({
     content: JSON.stringify({
-      decision: "plan-finalization",
+      batchCount: batches.length,
+      decision: "batched-plan-finalization",
+      deferredFinalization: true,
       finalCommitCount: finalized.length,
-      generatedGroupCount: groups.length,
       inputFileCount: files.length,
+      intermediateCommitCount: mergedGroups.length,
     }),
-    durationMs: performance.now() - finalizationStartedAtMs,
+    durationMs: performance.now() - batchStartedAtMs,
     kind: "planner-decision",
-    stage: "consolidate",
+    stage: "group",
     transport: "internal",
   });
-  setCachedPlan(planCacheInput, finalized);
+
   return finalized;
 }
+
+async function planSingleFileCommit(
+  file: FileDiff,
+  formattedDiff: string | undefined,
+  formatFileDiff: (f: FileDiff) => string,
+): Promise<PlannedCommit[]> {
+  const content = formattedDiff ?? formatFileDiff(file);
+  const chunk: DiffChunk = {
+    content,
+    files: [file.path],
+    id: 0,
+    lineCount: content.split("\n").length,
+  };
+  const msg = await generateForChunk(chunk);
+
+  return [{ files: [{ path: file.path }], message: msg }];
+}
+
+async function requestGroupingPlan(
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number,
+  timeoutMs: number,
+  cfg: ReturnType<typeof loadConfig>,
+): Promise<string> {
+  return complete(systemPrompt, userPrompt, {
+    maxTokens,
+    stage: "group",
+    temperature: Math.min(cfg.openai.temperature, 0.3),
+    timeoutMs,
+  });
+}
+

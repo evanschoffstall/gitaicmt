@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 
-import { loadConfig } from "../application/config.js";
+import { loadConfig } from "../application/config/index.js";
 import { CACHE_MAX_SIZE } from "../application/constants.js";
 
 type GroupingPromptContext =

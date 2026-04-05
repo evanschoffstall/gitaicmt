@@ -1,4 +1,4 @@
-import { loadConfig } from "../../application/config.js";
+import { loadConfig } from "../../application/config/index.js";
 import { formatScalar } from "../../commit-messages/formatting.js";
 
 /**

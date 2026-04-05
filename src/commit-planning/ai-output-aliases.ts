@@ -23,24 +23,15 @@ export function extractAiOutputFileAliasMap(prompt: string): Map<string, string>
   const fileAliasMap = new Map<string, string>();
   for (let index = legendStartIndex + 1; index < promptLines.length; index++) {
     const promptLine = promptLines[index]?.trim() ?? "";
-
-    if (promptLine.length === 0) {
-      if (fileAliasMap.size > 0) {
+    const aliasEntry = parseLegendAliasLine(promptLine);
+    if (!aliasEntry) {
+      if (shouldStopLegendScan(promptLine, fileAliasMap.size > 0)) {
         break;
       }
       continue;
     }
 
-    const aliasMatch = /^(F\d+)\s*=\s*(.+)$/u.exec(promptLine);
-    if (!aliasMatch) {
-      if (fileAliasMap.size > 0) {
-        break;
-      }
-      continue;
-    }
-
-    const [, alias, canonicalPath] = aliasMatch;
-    fileAliasMap.set(alias, canonicalPath.trim());
+    fileAliasMap.set(aliasEntry.alias, aliasEntry.canonicalPath);
   }
 
   return fileAliasMap;
@@ -110,4 +101,23 @@ function normalizeAiOutputValue(
   }
 
   return normalizedObject;
+}
+
+function parseLegendAliasLine(
+  promptLine: string,
+): null | { alias: string; canonicalPath: string } {
+  const aliasMatch = /^(F\d+)\s*=\s*(.+)$/u.exec(promptLine);
+  if (!aliasMatch) {
+    return null;
+  }
+
+  const [, alias, canonicalPath] = aliasMatch;
+  return { alias, canonicalPath: canonicalPath.trim() };
+}
+
+function shouldStopLegendScan(
+  promptLine: string,
+  hasCollectedAliases: boolean,
+): boolean {
+  return hasCollectedAliases && promptLine.length === 0;
 }
