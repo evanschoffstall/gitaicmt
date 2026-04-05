@@ -1,5 +1,5 @@
 {
-  "entry": ["scripts/check.ts"],
+  "entry": ["check-suite.config.ts"],
   "project": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"],
   "ignoreExportsUsedInFile": true,
   "ignoreDependencies": [

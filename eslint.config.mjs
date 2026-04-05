@@ -21,6 +21,7 @@ const sourceFiles = ["src/**"];
 const testFiles = ["tests/**"];
 const scriptFiles = ["scripts/**"];
 const rootConfigFiles = [
+  "check-suite.config.ts",
   "drizzle.config.ts",
   "eslint.config.mjs",
   "next.config.ts",
