@@ -202,7 +202,7 @@ function handleDiffLine(
     return;
   }
   if (applyFileMetadataLine(state.current, line)) {
-    state.sawFileLevelChange = true;
+    state.sawFileLevelChange ||= isMeaningfulFileMetadataLine(line);
     return;
   }
   if (isBinaryMarker(line)) {
@@ -217,6 +217,10 @@ function handleDiffLine(
 
 function isBinaryMarker(line: string): boolean {
   return line.startsWith("Binary files");
+}
+
+function isMeaningfulFileMetadataLine(line: string): boolean {
+  return !line.startsWith("index ");
 }
 
 function parseHunkHeader(line: string): DiffHunk | null {
