@@ -40,21 +40,37 @@ interface CliOptions {
 type CommandHandler = () => Promise<void> | void;
 
 function cmdHelp() {
-  log(`${BOLD}gitaicmt${RESET} — AI-powered git commits\n`);
+  log(`${BOLD}gitaicmt${RESET} — AI-powered git commits`);
+  log("");
+  log(`${CYAN}Usage:${RESET}`);
+  log("  gitaicmt [command] [flags]");
+  log("");
   log(`${CYAN}Commands:${RESET}`);
-  log(
-    "  gitaicmt              Auto-detect, split & commit (shows plan, asks y/n)",
-  );
-  log("  gitaicmt -y           Same as above, but skip confirmation");
-  log(
-    "  gitaicmt -y                      Detect, analyze & commit (no prompt)",
-  );
-  log("  gitaicmt -v plan                 Show verbose logs during planning");
+  log("  gitaicmt         Detect changes, show the plan, confirm, then commit");
+  log("  plan             Preview planned commit groups without committing");
+  log("  single           Generate one commit for all staged changes");
+  log("  gen              Generate one commit message to stdout");
+  log("  init             Create gitaicmt.config.json in the current directory");
+  log("  help             Show this help output");
+  log("  version          Show the installed version");
+  log("");
+  log(`${CYAN}Flags:${RESET}`);
+  log("  -y, --yes             Skip confirmation prompts");
+  log("  -v, --verbose         Show concise planning diagnostics");
+  log("  --trace               Show raw intermediate AI payloads");
+  log("  --no-token-check      Skip the high-token confirmation prompt for one run");
+  log("  -h, --help            Show help");
+  log("  --version             Show version information");
+  log("");
+  log(`${CYAN}Config:${RESET}`);
+  log("  OPENAI_API_KEY        Preferred API key source");
+  log("  gitaicmt.config.json  Project-local configuration file");
+  log("  .gitaicmt.json        Legacy local configuration file name");
 }
 
 function cmdInit() {
-  initConfig();
-  log(`${GREEN}Created .gitaicmt.json${RESET}`);
+  const configPath = initConfig();
+  log(`${GREEN}Created config:${RESET} ${configPath}`);
 }
 
 function cmdVersion() {
