@@ -8,7 +8,7 @@
 
 <img src="logo.svg" width="112" height="112" alt="gitaicmt logo" />
 
-<p><em>Run it. Done.</em></p>
+<p><em>High quality AI-Powered conventional commits</em></p>
 
 <p>
   <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5" /></a>
@@ -18,9 +18,7 @@
 </p>
 
 <p>
-  High quality AI-powered git commit messages that actually make sense.<br/>
-  Reads your staged diff, splits logical changes across files and hunks, previews the plan, then writes Conventional Commits automatically.<br/>
-  If nothing is staged, it stages tracked changes for you first.
+  A tool that reads your git diff and turns it into impressive conventional commits across files and hunks alike.<br/>
 </p>
 
 <p>
