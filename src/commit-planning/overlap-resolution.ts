@@ -36,68 +36,81 @@ export function resolveOverlappingCommits(
   const resolvedGroups: PlannedCommit[] = [];
 
   for (const group of groups) {
-    const survivingFiles: PlannedCommitFile[] = [];
-
-    for (const fileRef of group.files) {
-      let remainingFileRef: null | PlannedCommitFile = { ...fileRef };
-
-      for (
-        let groupIndex = 0;
-        groupIndex < resolvedGroups.length && remainingFileRef !== null;
-        groupIndex++
-      ) {
-        const acceptedFileRef = acceptedFileRefs[groupIndex]?.get(fileRef.path);
-        if (!acceptedFileRef) {
-          continue;
-        }
-        if (!plannedCommitFilesOverlap(acceptedFileRef, remainingFileRef)) {
-          continue;
-        }
-
-        const { existingPromotion, incomingRemainder } = resolveFileConflict(
-          acceptedFileRef,
-          remainingFileRef,
-        );
-
-        if (existingPromotion !== null) {
-          const acceptedFileIndex = resolvedGroups[groupIndex]?.files.findIndex(
-            (candidate) => candidate.path === fileRef.path,
-          );
-          if (
-            acceptedFileIndex >= 0 &&
-            resolvedGroups[groupIndex]
-          ) {
-            resolvedGroups[groupIndex].files[acceptedFileIndex] =
-              existingPromotion;
-          }
-          acceptedFileRefs[groupIndex]?.set(fileRef.path, existingPromotion);
-        }
-
-        remainingFileRef = incomingRemainder;
-      }
-
-      if (remainingFileRef !== null) {
-        survivingFiles.push(remainingFileRef);
-      }
-    }
+    const survivingFiles = collectSurvivingFiles(
+      group,
+      resolvedGroups,
+      acceptedFileRefs,
+    );
 
     if (survivingFiles.length === 0) {
       continue;
     }
 
-    resolvedGroups.push({
-      files: survivingFiles,
-      message: group.message,
-    });
-
-    const fileRefsByPath = new Map<string, PlannedCommitFile>();
-    for (const survivingFile of survivingFiles) {
-      fileRefsByPath.set(survivingFile.path, { ...survivingFile });
-    }
-    acceptedFileRefs.push(fileRefsByPath);
+    addResolvedGroup(group.message, survivingFiles, resolvedGroups, acceptedFileRefs);
   }
 
   return resolvedGroups;
+}
+
+function addResolvedGroup(
+  message: string,
+  survivingFiles: PlannedCommitFile[],
+  resolvedGroups: PlannedCommit[],
+  acceptedFileRefs: Map<string, PlannedCommitFile>[],
+): void {
+  resolvedGroups.push({ files: survivingFiles, message });
+  acceptedFileRefs.push(buildAcceptedFileRefMap(survivingFiles));
+}
+
+function applyExistingPromotion(
+  path: string,
+  groupIndex: number,
+  existingPromotion: PlannedCommitFile,
+  resolvedGroups: PlannedCommit[],
+  acceptedFileRefs: Map<string, PlannedCommitFile>[],
+): void {
+  const resolvedGroup = resolvedGroups[groupIndex];
+  const acceptedFileIndex = resolvedGroup.files.findIndex(
+    (candidate) => candidate.path === path,
+  );
+  if (acceptedFileIndex < 0) {
+    return;
+  }
+
+  resolvedGroup.files[acceptedFileIndex] = existingPromotion;
+  acceptedFileRefs[groupIndex]?.set(path, existingPromotion);
+}
+
+function buildAcceptedFileRefMap(
+  survivingFiles: PlannedCommitFile[],
+): Map<string, PlannedCommitFile> {
+  return new Map(
+    survivingFiles.map((survivingFile) => [
+      survivingFile.path,
+      { ...survivingFile },
+    ]),
+  );
+}
+
+function collectSurvivingFiles(
+  group: PlannedCommit,
+  resolvedGroups: PlannedCommit[],
+  acceptedFileRefs: Map<string, PlannedCommitFile>[],
+): PlannedCommitFile[] {
+  const survivingFiles: PlannedCommitFile[] = [];
+
+  for (const fileRef of group.files) {
+    const remainingFileRef = trimOverlappingFileRef(
+      fileRef,
+      resolvedGroups,
+      acceptedFileRefs,
+    );
+    if (remainingFileRef) {
+      survivingFiles.push(remainingFileRef);
+    }
+  }
+
+  return survivingFiles;
 }
 
 /**
@@ -141,4 +154,41 @@ function resolveFileConflict(
     existingPromotion: null,
     incomingRemainder: { ...incoming, hunks: remainingHunkIndexes },
   };
+}
+
+function trimOverlappingFileRef(
+  fileRef: PlannedCommitFile,
+  resolvedGroups: PlannedCommit[],
+  acceptedFileRefs: Map<string, PlannedCommitFile>[],
+): null | PlannedCommitFile {
+  let remainingFileRef: null | PlannedCommitFile = { ...fileRef };
+
+  for (
+    let groupIndex = 0;
+    groupIndex < resolvedGroups.length && remainingFileRef !== null;
+    groupIndex++
+  ) {
+    const acceptedFileRef = acceptedFileRefs[groupIndex]?.get(fileRef.path);
+    if (!acceptedFileRef || !plannedCommitFilesOverlap(acceptedFileRef, remainingFileRef)) {
+      continue;
+    }
+
+    const { existingPromotion, incomingRemainder } = resolveFileConflict(
+      acceptedFileRef,
+      remainingFileRef,
+    );
+    if (existingPromotion !== null) {
+      applyExistingPromotion(
+        fileRef.path,
+        groupIndex,
+        existingPromotion,
+        resolvedGroups,
+        acceptedFileRefs,
+      );
+    }
+
+    remainingFileRef = incomingRemainder;
+  }
+
+  return remainingFileRef;
 }
