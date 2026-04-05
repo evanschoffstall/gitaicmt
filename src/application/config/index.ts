@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ZodError } from "zod";
 
-import { type Config, ConfigSchema } from "./config-schema.js";
-import { ConfigError } from "./errors.js";
+import { ConfigError } from "../errors.js";
+import { type Config, ConfigSchema } from "./schema.js";
 
 // Re-export Config type for external use
 export type { Config };
@@ -93,53 +93,10 @@ export function loadConfig(cwd?: string): Config {
     return structuredClone(cached);
   }
 
-  let merged: Record<string, unknown> = structuredClone(DEFAULTS) as Record<
-    string,
-    unknown
-  >;
-
-  // 1. Global config
-  const globalRaw = readJsonConfig(globalConfigPath());
-  if (globalRaw) {
-    merged = deepMerge(merged, globalRaw);
-  }
-
-  // 2. User config
-  const userRaw = readJsonConfig(userConfigPath());
-  if (userRaw) {
-    merged = deepMerge(merged, userRaw);
-  }
-
-  // 3. Local config (project-level)
-  const localFile = findLocalConfig(dir);
-  if (localFile) {
-    const localRaw = readJsonConfig(localFile);
-    if (localRaw) {
-      merged = deepMerge(merged, localRaw);
-    }
-  }
-
-  // 4. Env override for API key (HIGHEST priority - overrides all configs)
-  merged = applyEnvironmentOverrides(merged);
-
-  // 5. Validate with Zod schema
-  try {
-    const parsedConfig = ConfigSchema.parse(merged);
-    configCache.set(dir, structuredClone(parsedConfig));
-    return structuredClone(parsedConfig);
-  } catch (err: unknown) {
-    if (err instanceof ZodError) {
-      const errors = err.issues
-        .map((issue) => {
-          const path = issue.path.join(".");
-          const label = path.length > 0 ? path : "(root)";
-          return `  - ${label}: ${issue.message}`;
-        })
-        .join("\n");
-      throw new ConfigError(`Configuration validation failed:\n${errors}`);
-    }
-    throw new ConfigError(`Configuration validation failed: ${String(err)}`);
-  }
+  const merged = applyEnvironmentOverrides(loadMergedConfigSources(dir));
+  const parsedConfig = parseConfigOrThrow(merged);
+  configCache.set(dir, structuredClone(parsedConfig));
+  return structuredClone(parsedConfig);
 }
 
 export function resetConfigCache(): void {
@@ -174,8 +131,6 @@ function applyEnvironmentOverrides(
   };
 }
 
-/* ── Read a JSON config file (returns null on missing, throws on invalid) */
-
 function deepMerge<T extends Record<string, unknown>>(
   base: T,
   override: Record<string, unknown>,
@@ -193,8 +148,6 @@ function deepMerge<T extends Record<string, unknown>>(
   return out as T;
 }
 
-/* ── loadConfig ───────────────────────────────────────────────── */
-
 /** Find a local (project-level) config in `cwd` */
 function findLocalConfig(cwd: string): null | string {
   for (const name of LOCAL_CONFIG_NAMES) {
@@ -204,6 +157,23 @@ function findLocalConfig(cwd: string): null | string {
   return null;
 }
 
+function formatConfigValidationError(err: unknown): string {
+  if (!(err instanceof ZodError)) {
+    return `Configuration validation failed: ${String(err)}`;
+  }
+
+  const errors = err.issues
+    .map((issue) => {
+      const path = issue.path.join(".");
+      const label = path.length > 0 ? path : "(root)";
+      return `  - ${label}: ${issue.message}`;
+    })
+    .join("\n");
+  return `Configuration validation failed:\n${errors}`;
+}
+
+/* ── Read a JSON config file (returns null on missing, throws on invalid) */
+
 /** Check if value is a plain object (not array, null, or built-in) */
 function isPlainObject(val: unknown): val is Record<string, unknown> {
   return (
@@ -212,6 +182,36 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
     !Array.isArray(val) &&
     Object.getPrototypeOf(val) === Object.prototype
   );
+}
+
+/* ── loadConfig ───────────────────────────────────────────────── */
+
+function loadMergedConfigSources(cwd: string): Record<string, unknown> {
+  let merged: Record<string, unknown> = structuredClone(DEFAULTS) as Record<
+    string,
+    unknown
+  >;
+
+  for (const configPath of [globalConfigPath(), userConfigPath(), findLocalConfig(cwd)]) {
+    if (!configPath) {
+      continue;
+    }
+
+    const configValue = readJsonConfig(configPath);
+    if (configValue) {
+      merged = deepMerge(merged, configValue);
+    }
+  }
+
+  return merged;
+}
+
+function parseConfigOrThrow(merged: Record<string, unknown>): Config {
+  try {
+    return ConfigSchema.parse(merged);
+  } catch (err: unknown) {
+    throw new ConfigError(formatConfigValidationError(err));
+  }
 }
 
 function readJsonConfig(path: string): null | Record<string, unknown> {

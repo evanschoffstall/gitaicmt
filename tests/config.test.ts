@@ -17,7 +17,7 @@ import {
   loadConfig,
   resetConfigCache,
   userConfigPath,
-} from "../src/application/config.js";
+} from "../src/application/config/index.js";
 
 const { afterEach, beforeEach, describe, expect, test } =
   await import("bun:test");
