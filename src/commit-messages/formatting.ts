@@ -52,19 +52,47 @@ export function validateCommitMessage(message: string): string {
     throw new ValidationError("Commit message body is required");
   }
 
+  validateCommitMessageBody(bodyLines);
+
+  return [subject, "", ...bodyLines].join("\n");
+}
+
+function isBulletContinuationLine(
+  line: string,
+  previousLineWasBullet: boolean,
+): boolean {
+  return /^\s{2,}\S/.test(line) && previousLineWasBullet;
+}
+
+function isBulletLine(line: string): boolean {
+  return /^\s*-\s+\S/.test(line);
+}
+
+function trimTrailingBlankLines(lines: string[]): string[] {
+  const trimmed = [...lines];
+  while (trimmed.length > 0 && trimmed.at(-1)?.trim() === "") {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+function validateCommitMessageBody(bodyLines: string[]): void {
   let bulletCount = 0;
   let previousLineWasBullet = false;
+
   for (const line of bodyLines) {
     if (line.trim().length === 0) {
       previousLineWasBullet = false;
       continue;
     }
-    if (/^\s*-\s+\S/.test(line)) {
+
+    if (isBulletLine(line)) {
       bulletCount++;
       previousLineWasBullet = true;
       continue;
     }
-    if (/^\s{2,}\S/.test(line) && previousLineWasBullet) {
+
+    if (isBulletContinuationLine(line, previousLineWasBullet)) {
       continue;
     }
 
@@ -76,14 +104,4 @@ export function validateCommitMessage(message: string): string {
       "Commit message body must include at least one bullet point",
     );
   }
-
-  return [subject, "", ...bodyLines].join("\n");
-}
-
-function trimTrailingBlankLines(lines: string[]): string[] {
-  const trimmed = [...lines];
-  while (trimmed.length > 0 && trimmed.at(-1)?.trim() === "") {
-    trimmed.pop();
-  }
-  return trimmed;
 }

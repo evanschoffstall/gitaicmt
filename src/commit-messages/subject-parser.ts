@@ -9,38 +9,27 @@ export function parseConventionalSubject(
 ): ParsedConventionalSubject {
   const colonIdx = subject.indexOf(":");
   if (colonIdx <= 0 || colonIdx > 50) {
-    return { description: subject, scope: "", type: "" };
+    return createPlainSubject(subject);
   }
 
-  const rawPrefix = subject.slice(0, colonIdx);
-  const prefix = rawPrefix.endsWith("!") ? rawPrefix.slice(0, -1) : rawPrefix;
-  const openParen = prefix.indexOf("(");
-  const closeParen = prefix.endsWith(")") ? prefix.lastIndexOf(")") : -1;
-
-  if (openParen === -1) {
-    return isConventionalToken(prefix)
-      ? {
-          description: subject.slice(colonIdx + 1).trim(),
-          scope: "",
-          type: prefix.toLowerCase(),
-        }
-      : { description: subject, scope: "", type: "" };
+  const parsedPrefix = parseSubjectPrefix(subject.slice(0, colonIdx));
+  if (!parsedPrefix) {
+    return createPlainSubject(subject);
   }
 
-  if (
-    closeParen !== prefix.length - 1 ||
-    !isConventionalToken(prefix.slice(0, openParen))
-  ) {
-    return { description: subject, scope: "", type: "" };
+  const description = subject.slice(colonIdx + 1).trim();
+  if (!parsedPrefix.scope) {
+    return {
+      description,
+      scope: "",
+      type: parsedPrefix.type,
+    };
   }
 
   return {
-    description: subject.slice(colonIdx + 1).trim(),
-    scope: prefix
-      .slice(openParen + 1, closeParen)
-      .trim()
-      .toLowerCase(),
-    type: prefix.slice(0, openParen).toLowerCase(),
+    description,
+    scope: parsedPrefix.scope,
+    type: parsedPrefix.type,
   };
 }
 
@@ -67,6 +56,10 @@ export function sanitizeSubjectWords(input: string): string[] {
   return words;
 }
 
+function createPlainSubject(subject: string): ParsedConventionalSubject {
+  return { description: subject, scope: "", type: "" };
+}
+
 function isConventionalToken(value: string): boolean {
   if (value.length === 0) {
     return false;
@@ -82,4 +75,33 @@ function isConventionalToken(value: string): boolean {
   }
 
   return true;
+}
+
+function parseSubjectPrefix(
+  rawPrefix: string,
+): null | Omit<ParsedConventionalSubject, "description"> {
+  const prefix = rawPrefix;
+  const openParen = prefix.indexOf("(");
+  const closeParen = prefix.endsWith(")") ? prefix.lastIndexOf(")") : -1;
+
+  if (openParen === -1) {
+    return isConventionalToken(prefix)
+      ? { scope: "", type: prefix.toLowerCase() }
+      : null;
+  }
+
+  if (
+    closeParen !== prefix.length - 1 ||
+    !isConventionalToken(prefix.slice(0, openParen))
+  ) {
+    return null;
+  }
+
+  return {
+    scope: prefix
+      .slice(openParen + 1, closeParen)
+      .trim()
+      .toLowerCase(),
+    type: prefix.slice(0, openParen).toLowerCase(),
+  };
 }
