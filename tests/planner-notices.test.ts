@@ -117,4 +117,42 @@ describe("planner-notices", () => {
 
     expect(getPlannerFallbackNotice(state)).toBeNull();
   });
+
+  test("ignores non planner-decision events and non-consolidate stages", () => {
+    const state = createPlannerNoticeState();
+
+    recordPlannerNotice(state, {
+      content: JSON.stringify({ decision: "consolidation-fallback" }),
+      kind: "model-output",
+      stage: "consolidate",
+      transport: "internal",
+    });
+    recordPlannerNotice(state, {
+      content: JSON.stringify({ decision: "consolidation-fallback", reason: "coverage-mismatch" }),
+      kind: "planner-decision",
+      stage: "group",
+      transport: "internal",
+    });
+
+    expect(getPlannerFallbackNotice(state)).toBeNull();
+  });
+
+  test("treats invalid planner decision payloads as unrelated", () => {
+    const state = createPlannerNoticeState();
+
+    recordPlannerNotice(state, {
+      content: "not json",
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+    recordPlannerNotice(state, {
+      content: JSON.stringify({ decision: 42, reason: 99 }),
+      kind: "planner-decision",
+      stage: "consolidate",
+      transport: "internal",
+    });
+
+    expect(getPlannerFallbackNotice(state)).toBeNull();
+  });
 });

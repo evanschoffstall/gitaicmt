@@ -13,11 +13,12 @@ import { resetAiCache } from "../src/commit-planning/result-cache.js";
 type DiffChunk = import("../src/git/diff.js").DiffChunk;
 type DiffStats = import("../src/git/diff.js").DiffStats;
 type FileDiff = import("../src/git/diff.js").FileDiff;
-
 type MockHandler = (
   payload: unknown,
   mockOptions: unknown,
 ) => Promise<unknown> | unknown;
+
+type PlannedCommit = import("../src/commit-planning/types.js").PlannedCommit;
 
 const { afterEach, beforeEach, describe, expect, mock, setSystemTime, test } =
   await import("bun:test");
@@ -894,7 +895,7 @@ describe("ai coverage", () => {
 
     expect(calls.chat).toHaveLength(0);
     expect(
-      result.map((group) => group.message.split("\n")[0]),
+      result.map((group: PlannedCommit) => group.message.split("\n")[0]),
     ).toEqual([
       "fix(planned-commit-grouping): narrow support merge gating",
       "fix(token-estimation): buffer consolidation budgets",
@@ -1201,7 +1202,7 @@ describe("ai coverage", () => {
     });
     const calls = installOpenAiMock({
       chatQueue: [
-        async (_payload, mockOptions) => {
+        async (_payload: unknown, mockOptions: unknown) => {
           const signal = (mockOptions as { signal?: AbortSignal }).signal;
 
           return await new Promise<unknown>((resolve, reject) => {
@@ -1293,7 +1294,7 @@ describe("ai coverage", () => {
     ]);
     const calls = installOpenAiMock({
       chatQueue: [
-        (payload) => {
+        (payload: unknown) => {
           const requestedMaxTokens =
             (payload as { max_completion_tokens?: number })
               .max_completion_tokens ?? 0;
@@ -1584,16 +1585,16 @@ describe("ai coverage", () => {
     expect(calls.chat).toHaveLength(1);
     expect(result).toHaveLength(4);
     expect(
-      result.map((group) => group.message.split("\n")[0]),
+      result.map((group: PlannedCommit) => group.message.split("\n")[0]),
     ).toContain("feat(ai-cache): cache planned commit analysis");
     expect(
-      result.map((group) => group.message.split("\n")[0]),
+      result.map((group: PlannedCommit) => group.message.split("\n")[0]),
     ).toContain("fix(prompts): tighten consolidation ownership rules");
     expect(
-      result.map((group) => group.message.split("\n")[0]),
+      result.map((group: PlannedCommit) => group.message.split("\n")[0]),
     ).toContain("fix(token-estimation): buffer consolidation budgeting");
     expect(
-      result.map((group) => group.message.split("\n")[0]),
+      result.map((group: PlannedCommit) => group.message.split("\n")[0]),
     ).toContain("test(prompts): lock consolidation ownership guidance");
     expect(
       events.some((event) =>

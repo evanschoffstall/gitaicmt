@@ -40,4 +40,30 @@ describe("terminal geometry", () => {
       }),
     ).toBe(100);
   });
+
+  test("ignores invalid environment COLUMNS values", () => {
+    expect(
+      resolveTerminalColumns({
+        environment: { COLUMNS: "abc" },
+        fallbackColumns: 77,
+        streams: [],
+      }),
+    ).toBe(77);
+  });
+
+  test("ignores getWindowSize failures and keeps searching later streams", () => {
+    expect(
+      resolveTerminalColumns({
+        fallbackColumns: 77,
+        streams: [
+          {
+            getWindowSize: () => {
+              throw new Error("tty unavailable");
+            },
+          },
+          { columns: 88 },
+        ],
+      }),
+    ).toBe(88);
+  });
 });

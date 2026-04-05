@@ -826,6 +826,20 @@ describe("buildPatch", () => {
     expect(patch).not.toContain("--- ");
     expect(patch).not.toContain("+++ ");
   });
+
+  test("returns an empty patch for binary files", () => {
+    expect(
+      buildPatch({
+        additions: 0,
+        deletions: 0,
+        hunks: [],
+        isBinary: true,
+        oldPath: null,
+        path: "assets/logo.png",
+        status: "modified",
+      }),
+    ).toBe("");
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════

@@ -29,6 +29,33 @@ function makeFile(path: string, hunks = 2): FileDiff {
 }
 
 describe("validateAndNormalizeGrouping", () => {
+  test("rejects a non-array AI payload", () => {
+    expect(() =>
+      validateAndNormalizeGrouping({ files: [] }, new Map()),
+    ).toThrow(ValidationError);
+  });
+
+  test("rejects an empty AI group array", () => {
+    expect(() => validateAndNormalizeGrouping([], new Map())).toThrow(
+      ValidationError,
+    );
+  });
+
+  test("rejects suspiciously many groups", () => {
+    const file = makeFile("src/app.ts", 1);
+    const fileByPath = new Map([[file.path, file]]);
+
+    expect(() =>
+      validateAndNormalizeGrouping(
+        Array.from({ length: 101 }, (_, index) => ({
+          files: [file.path],
+          message: commitMessage(`chore(app): group ${String(index)}`),
+        })),
+        fileByPath,
+      ),
+    ).toThrow(ValidationError);
+  });
+
   test("rejects non-integer hunk indices instead of treating them as valid", () => {
     const file = makeFile("src/app.ts", 2);
     const fileByPath = new Map([[file.path, file]]);
@@ -61,6 +88,45 @@ describe("validateAndNormalizeGrouping", () => {
             message: commitMessage("fix(app): reject mixed invalid entries"),
           },
         ],
+        fileByPath,
+      ),
+    ).toThrow(ValidationError);
+  });
+
+  test("rejects invalid group objects and invalid files payloads", () => {
+    const file = makeFile("src/app.ts", 1);
+    const fileByPath = new Map([[file.path, file]]);
+
+    expect(() =>
+      validateAndNormalizeGrouping([null], fileByPath),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateAndNormalizeGrouping(
+        [{ files: "src/app.ts", message: commitMessage("fix(app): invalid files payload") }],
+        fileByPath,
+      ),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateAndNormalizeGrouping(
+        [{ files: [], message: commitMessage("fix(app): empty files payload") }],
+        fileByPath,
+      ),
+    ).toThrow(ValidationError);
+  });
+
+  test("rejects invalid group messages", () => {
+    const file = makeFile("src/app.ts", 1);
+    const fileByPath = new Map([[file.path, file]]);
+
+    expect(() =>
+      validateAndNormalizeGrouping([{ files: [file.path], message: 42 }], fileByPath),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateAndNormalizeGrouping([{ files: [file.path], message: "   " }], fileByPath),
+    ).toThrow(ValidationError);
+    expect(() =>
+      validateAndNormalizeGrouping(
+        [{ files: [file.path], message: "x".repeat(1001) }],
         fileByPath,
       ),
     ).toThrow(ValidationError);
@@ -197,6 +263,63 @@ describe("validateAndNormalizeGrouping", () => {
       {
         files: [{ path: file.path }],
         message: commitMessage("fix(app): normalize whole-file hunk selector"),
+      },
+    ]);
+  });
+
+  test("merges duplicate file entries by unioning hunks and preserving order", () => {
+    const file = makeFile("src/app.ts", 3);
+    const other = makeFile("src/other.ts", 1);
+    const fileByPath = new Map([
+      [file.path, file],
+      [other.path, other],
+    ]);
+
+    const groups = validateAndNormalizeGrouping(
+      [
+        {
+          files: [
+            { hunks: [2, 0], path: file.path },
+            { hunks: [1, 2], path: file.path },
+            { path: other.path },
+          ],
+          message: commitMessage("refactor(app): merge duplicate planner entries"),
+        },
+      ],
+      fileByPath,
+    );
+
+    expect(groups).toEqual([
+      {
+        files: [
+          { hunks: [0, 1, 2], path: file.path },
+          { path: other.path },
+        ],
+        message: commitMessage("refactor(app): merge duplicate planner entries"),
+      },
+    ]);
+  });
+
+  test("duplicate whole-file entries dominate hunk-specific entries", () => {
+    const file = makeFile("src/app.ts", 2);
+    const fileByPath = new Map([[file.path, file]]);
+
+    const groups = validateAndNormalizeGrouping(
+      [
+        {
+          files: [{ hunks: [0], path: file.path }, { path: file.path }],
+          message: commitMessage("fix(app): keep whole-file ownership when planner duplicates entries"),
+        },
+      ],
+      fileByPath,
+    );
+
+    expect(groups).toEqual([
+      {
+        files: [{ path: file.path }],
+        message: commitMessage(
+          "fix(app): keep whole-file ownership when planner duplicates entries",
+        ),
       },
     ]);
   });
