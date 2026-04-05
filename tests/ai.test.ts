@@ -1,4 +1,4 @@
-import { resetConfigCache } from "../src/application/config.js";
+import { resetConfigCache } from "../src/application/config/index.js";
 import { resetAiCache } from "../src/commit-planning/result-cache.js";
 import { formatFileDiff } from "../src/git/diff.js";
 

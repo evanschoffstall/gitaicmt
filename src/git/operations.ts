@@ -1,27 +1,19 @@
-/**
- * Git operations module - isolates all git command execution
- * Provides safe, testable interface for git interactions
- */
-
 import { spawnSync } from "node:child_process";
 
 import {
   DIFF_CONTEXT_LINES,
-  GIT_MAX_BUFFER,
-  MAX_PATH_LENGTH,
 } from "../application/constants.js";
-import { GitCommandError, InvalidPathError } from "../application/errors.js";
-import { validateCommitMessage } from "../commit-messages/formatting.js";
+import { GitCommandError } from "../application/errors.js";
+import {
+  createCommitFailure,
+  createGitCommandFailure,
+  runGitCommand,
+  sanitizeFilePath,
+  sanitizeGitOutput,
+  validateCommitInput,
+} from "./operation-support.js";
 
-const ANSI_ESCAPE_SEQUENCE = new RegExp(
-  `${String.fromCodePoint(0x1b)}\\[[0-9;]*[A-Za-z]`,
-  "gu",
-);
-const CONTROL_CHARACTER = /\p{Cc}/gu;
-const FORBIDDEN_PATH_CONTROL_CHARACTERS = /\p{Cc}/u;
-const SAFE_LINE_CONTROL_CHARACTERS = new Set(["\t", "\n", "\r"]);
 const CANONICAL_DIFF_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"];
-const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[/\\]/u;
 
 // ============================================================================
 // Repository Validation
@@ -37,20 +29,7 @@ export function commitWithMessage(
   message: string,
   cwd?: string,
 ): { stderr: string; stdout: string } {
-  if (!message || message.trim().length === 0) {
-    throw new GitCommandError("Cannot commit with empty message", "git commit");
-  }
-
-  let validatedMessage: string;
-  try {
-    validatedMessage = validateCommitMessage(message);
-  } catch (error: unknown) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new GitCommandError(
-      `Cannot commit with invalid message: ${reason}`,
-      "git commit -F -",
-    );
-  }
+  const validatedMessage = validateCommitInput(message);
 
   const dir = cwd ?? process.cwd();
   const result = spawnSync("git", ["commit", "-F", "-"], {
@@ -61,15 +40,7 @@ export function commitWithMessage(
   });
 
   if (result.status !== 0) {
-    const exitCode = result.status ?? 1;
-    const errorMessage = [result.stderr.trim(), result.error?.message]
-      .filter((part) => part && part.length > 0)
-      .join("\n");
-    throw new GitCommandError(
-      `Git commit failed (exit ${String(exitCode)}): ${errorMessage.length > 0 ? errorMessage : "unknown error"}`,
-      "git commit -F -",
-      exitCode,
-    );
+    throw createCommitFailure(result.status, result.stderr.trim(), result.error?.message);
   }
 
   return {
@@ -77,10 +48,6 @@ export function commitWithMessage(
     stdout: result.stdout,
   };
 }
-
-// ============================================================================
-// Path Validation
-// ============================================================================
 
 /**
  * Get staged diff with specified context lines
@@ -113,6 +80,10 @@ export function getStagedFiles(cwd?: string): string[] {
   return out.trim().split("\n").filter(Boolean);
 }
 
+// ============================================================================
+// Path Validation
+// ============================================================================
+
 /**
  * Get an exact staged patch including binary payloads for recovery.
  * @param cwd - Optional working directory (defaults to process.cwd())
@@ -133,10 +104,6 @@ export function getStagedPatch(cwd?: string): string {
     },
   );
 }
-
-// ============================================================================
-// Safe Git Execution
-// ============================================================================
 
 /**
  * Check whether the current repository already has at least one commit.
@@ -169,6 +136,10 @@ export function hasStagedChanges(cwd?: string): boolean {
   return out.trim().length > 0;
 }
 
+// ============================================================================
+// Safe Git Execution
+// ============================================================================
+
 /**
  * Check if the current directory is inside a git repository
  * @param cwd - Optional working directory (defaults to process.cwd())
@@ -190,10 +161,6 @@ export function isGitRepository(cwd?: string): boolean {
     return false;
   }
 }
-
-// ============================================================================
-// Diff Operations
-// ============================================================================
 
 /**
  * Unstage all changes (reset HEAD)
@@ -234,7 +201,7 @@ export function restoreStagedPatch(patchContent: string, cwd?: string): void {
 }
 
 // ============================================================================
-// Staging Operations
+// Diff Operations
 // ============================================================================
 
 /**
@@ -264,6 +231,10 @@ export function stageFiles(paths: string[], cwd?: string): void {
   execGit(["add", "--", ...safe], { cwd });
 }
 
+// ============================================================================
+// Staging Operations
+// ============================================================================
+
 /**
  * Stage a specific hunk by applying a patch via `git apply --cached`
  * Used for selective hunk-level staging
@@ -279,10 +250,6 @@ export function stagePatch(patchContent: string, cwd?: string): void {
     cwd,
     input: patchContent,
   });
-}
-
-function containsForbiddenPathControlCharacters(path: string): boolean {
-  return FORBIDDEN_PATH_CONTROL_CHARACTERS.test(path);
 }
 
 /**
@@ -302,26 +269,9 @@ function execGit(
 ): string {
   const dir = options?.cwd ?? process.cwd();
   try {
-    const result = spawnSync("git", args, {
-      cwd: dir,
-      encoding: "utf-8",
-      input: options?.input,
-      maxBuffer: options?.maxBuffer ?? GIT_MAX_BUFFER,
-      stdio: options?.input ? ["pipe", "pipe", "pipe"] : "pipe",
-    });
+    const result = runGitCommand(args, dir, options);
     if (result.status !== 0) {
-      const exitCode = result.status ?? 1;
-      const stderr = result.stderr;
-      const errorMessage =
-        stderr.length > 0
-          ? stderr
-          : (result.error?.message ?? "Git command failed");
-
-      throw new GitCommandError(
-        `Git command failed (exit ${String(exitCode)}): git ${args.join(" ")}\n${errorMessage}`,
-        `git ${args.join(" ")}`,
-        exitCode,
-      );
+      throw createGitCommandFailure(args, result.status, result.stderr, result.error?.message);
     }
     // Sanitize output to remove malicious escape sequences
     return sanitizeGitOutput(result.stdout);
@@ -331,111 +281,7 @@ function execGit(
     }
 
     const e = err as { message?: string; status?: number; stderr?: string };
-    const stderr = e.stderr ?? e.message ?? "";
-    const status = e.status ?? 1;
-    throw new GitCommandError(
-      `Git command failed (exit ${String(status)}): git ${args.join(" ")}\n${stderr}`,
-      `git ${args.join(" ")}`,
-      status,
-    );
+    throw createGitCommandFailure(args, e.status, e.stderr ?? e.message ?? "");
   }
 }
 
-/**
- * Normalize a path by resolving relative segments and removing redundancies.
- * Does NOT resolve symlinks (we want to preserve git's view).
- */
-function normalizePath(path: string): string {
-  // Split into segments and resolve .. and .
-  const segments = path.split(/[\\/]+/).filter(Boolean);
-  const resolved: string[] = [];
-
-  for (const seg of segments) {
-    if (seg === "..") {
-      // Attempting to go above root is suspicious
-      if (resolved.length === 0) {
-        throw new InvalidPathError(
-          `Path traversal attempt detected: ${path}`,
-          path,
-        );
-      }
-      resolved.pop();
-    } else if (seg !== ".") {
-      resolved.push(seg);
-    }
-  }
-
-  return resolved.join("/");
-}
-
-/**
- * Validate and sanitize file paths to prevent command injection and path traversal.
- * @throws {InvalidPathError} If path contains dangerous characters or patterns
- */
-function sanitizeFilePath(path: string): string {
-  if (path.trim().length === 0) {
-    throw new InvalidPathError(`Invalid file path is empty`, path);
-  }
-
-  // Prevent all forms of null bytes and control characters
-  if (containsForbiddenPathControlCharacters(path)) {
-    throw new InvalidPathError(
-      `Invalid file path contains control characters`,
-      path,
-    );
-  }
-
-  // Prevent absolute paths (git staging should be relative to repo root)
-  if (path.startsWith("/") || WINDOWS_ABSOLUTE_PATH.test(path)) {
-    throw new InvalidPathError(
-      `Invalid file path (absolute path not allowed)`,
-      path,
-    );
-  }
-
-  // Prevent leading dash (could be interpreted as flags)
-  if (path.startsWith("-")) {
-    throw new InvalidPathError(`Invalid file path starts with dash`, path);
-  }
-
-  // Maximum path length check (prevent DoS)
-  if (path.length > MAX_PATH_LENGTH) {
-    throw new InvalidPathError(`File path exceeds maximum length`, path);
-  }
-
-  // Normalize to resolve .. and . segments, catching traversal attempts
-  const normalized = normalizePath(path);
-
-  if (normalized.length === 0) {
-    throw new InvalidPathError(`Invalid file path is empty`, path);
-  }
-
-  // Final check: ensure no attempts to escape repo root
-  if (normalized.startsWith("..")) {
-    throw new InvalidPathError(`Path traversal attempt detected`, path);
-  }
-
-  return normalized;
-}
-
-/**
- * Sanitize git command output to remove potentially malicious escape sequences.
- * Git output can contain ANSI codes, control characters, and other terminal escapes.
- */
-function sanitizeGitOutput(output: string): string {
-  return stripUnsafeControlCharacters(stripAnsiEscapeSequences(output));
-}
-
-// ============================================================================
-// Commit Operations
-// ============================================================================
-
-function stripAnsiEscapeSequences(output: string): string {
-  return output.replace(ANSI_ESCAPE_SEQUENCE, "");
-}
-
-function stripUnsafeControlCharacters(output: string): string {
-  return output.replace(CONTROL_CHARACTER, (char) =>
-    SAFE_LINE_CONTROL_CHARACTERS.has(char) ? char : "",
-  );
-}

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DEFAULTS, resetConfigCache } from "../src/application/config.js";
+import { DEFAULTS, resetConfigCache } from "../src/application/config/index.js";
 import {
     OpenAIError,
     OpenAITimeoutError,

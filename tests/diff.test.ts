@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resetConfigCache } from "../src/application/config.js";
+import { resetConfigCache } from "../src/application/config/index.js";
 import {
   buildPatch,
   chunkDiffs,

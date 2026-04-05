@@ -6,7 +6,7 @@ const {
   estimatePlanOperationTokens,
   estimateTextTokens,
 } = await import("../src/commit-planning/token-estimation.js");
-const { DEFAULTS } = await import("../src/application/config.js");
+const { DEFAULTS } = await import("../src/application/config/index.js");
 
 function makeFileDiff(path: string, hunkCount = 1): FileDiff {
   return {
