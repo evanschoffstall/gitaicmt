@@ -1,13 +1,20 @@
 import { sanitizeSubjectWords } from "../../commit-messages/subject-parser.js";
 import { type FileChangeSignals, type PlannedCommit } from "./grouping-types.js";
 import {
+  collectCommonWords,
+  filterDistinctWords,
+  getCommitActionWords,
+  getCommitArtifactWords,
+  getDistinctActionWords,
+  getDistinctScore,
+} from "./scoring-support.js";
+import {
   countSharedSubjectWords,
   filterSignificantWords,
-  getOrderedSubjectWords,
   hasHighWordOverlap,
   parseSubjectWords,
   scopesRelated,
-} from "./subject-analysis.js";
+} from "./subject/analysis.js";
 
 /** Collects words that describe what a commit is doing and where. */
 export function getCommitIntentWords(
@@ -17,32 +24,8 @@ export function getCommitIntentWords(
   const intentWords = new Set<string>();
   const subject = parseSubjectWords(group.message.split("\n")[0] ?? "");
 
-  for (const word of subject.words) {
-    intentWords.add(word);
-  }
-  for (const scopeWord of filterSignificantWords(
-    sanitizeSubjectWords(subject.scope),
-  )) {
-    intentWords.add(scopeWord);
-  }
-
-  for (const file of group.files) {
-    const signals = fileSignals.get(file.path);
-    if (!signals) {
-      continue;
-    }
-
-    if (signals.isCoordinatorLike && group.files.length > 1) {
-      continue;
-    }
-
-    for (const word of signals.pathWords) {
-      intentWords.add(word);
-    }
-    for (const word of signals.intentWords) {
-      intentWords.add(word);
-    }
-  }
+  addSubjectIntentWords(intentWords, subject);
+  addFileIntentWords(intentWords, group, fileSignals);
 
   return intentWords;
 }
@@ -81,7 +64,10 @@ export function getDistinctArtifactScore(
   commonIntentWords: Set<string>,
 ): number {
   return getDistinctScore(left, right, (group) =>
-    getDistinctArtifactWords(group, fileSignals, commonIntentWords),
+    filterDistinctWords(
+      getCommitArtifactWords(group, fileSignals, getCommitIntentWords),
+      commonIntentWords,
+    ),
   );
 }
 
@@ -93,7 +79,10 @@ export function getDistinctIntentScore(
   commonIntentWords: Set<string>,
 ): number {
   return getDistinctScore(left, right, (group) =>
-    getDistinctIntentWords(group, fileSignals, commonIntentWords),
+    filterDistinctWords(
+      getCommitIntentWords(group, fileSignals),
+      commonIntentWords,
+    ),
   );
 }
 
@@ -125,108 +114,42 @@ export function getSharedIntentScore(
   return score;
 }
 
-function collectCommonWords(
-  groups: PlannedCommit[],
-  minimumCount: number,
-  selectWords: (group: PlannedCommit) => Set<string>,
-): Set<string> {
-  const counts = new Map<string, number>();
-
-  for (const group of groups) {
-    for (const word of selectWords(group)) {
-      counts.set(word, (counts.get(word) ?? 0) + 1);
-    }
-  }
-
-  const commonWords = new Set<string>();
-  for (const [word, count] of counts) {
-    if (count >= minimumCount) {
-      commonWords.add(word);
-    }
-  }
-
-  return commonWords;
-}
-
-/** Treat the first significant subject word as the commit's primary action. */
-function getCommitActionWords(group: PlannedCommit): Set<string> {
-  return new Set(
-    getOrderedSubjectWords(group.message.split("\n")[0] ?? "").slice(0, 1),
-  );
-}
-
-/** Collects artifact words from subject, scope, and file-level intent. */
-function getCommitArtifactWords(
+function addFileIntentWords(
+  intentWords: Set<string>,
   group: PlannedCommit,
   fileSignals: Map<string, FileChangeSignals>,
-): Set<string> {
-  const artifactWords = new Set<string>();
-  const subject = parseSubjectWords(group.message.split("\n")[0] ?? "");
-  const subjectWords = getOrderedSubjectWords(
-    group.message.split("\n")[0] ?? "",
-  );
-  const actionWords = getCommitActionWords(group);
-
-  for (const word of subjectWords) {
-    if (!actionWords.has(word)) {
-      artifactWords.add(word);
+): void {
+  for (const file of group.files) {
+    const signals = fileSignals.get(file.path);
+    if (!signals || shouldSkipCoordinatorSignals(signals, group)) {
+      continue;
     }
-  }
 
-  for (const scopeWord of filterSignificantWords(
-    sanitizeSubjectWords(subject.scope),
-  )) {
-    artifactWords.add(scopeWord);
+    addWords(intentWords, signals.pathWords);
+    addWords(intentWords, signals.intentWords);
   }
-
-  for (const word of getCommitIntentWords(group, fileSignals)) {
-    if (!actionWords.has(word)) {
-      artifactWords.add(word);
-    }
-  }
-
-  return artifactWords;
 }
 
-function getDistinctActionWords(
-  group: PlannedCommit,
-  commonActionWords: Set<string>,
-): Set<string> {
-  return new Set(
-    [...getCommitActionWords(group)].filter(
-      (word) => !commonActionWords.has(word),
-    ),
+function addSubjectIntentWords(
+  intentWords: Set<string>,
+  subject: ReturnType<typeof parseSubjectWords>,
+): void {
+  addWords(intentWords, subject.words);
+  addWords(
+    intentWords,
+    filterSignificantWords(sanitizeSubjectWords(subject.scope)),
   );
 }
 
-function getDistinctArtifactWords(
-  group: PlannedCommit,
-  fileSignals: Map<string, FileChangeSignals>,
-  commonIntentWords: Set<string>,
-): Set<string> {
-  return new Set(
-    [...getCommitArtifactWords(group, fileSignals)].filter(
-      (word) => !commonIntentWords.has(word),
-    ),
-  );
+function addWords(target: Set<string>, words: Iterable<string>): void {
+  for (const word of words) {
+    target.add(word);
+  }
 }
 
-function getDistinctIntentWords(
+function shouldSkipCoordinatorSignals(
+  signals: FileChangeSignals,
   group: PlannedCommit,
-  fileSignals: Map<string, FileChangeSignals>,
-  commonIntentWords: Set<string>,
-): Set<string> {
-  return new Set(
-    [...getCommitIntentWords(group, fileSignals)].filter(
-      (word) => !commonIntentWords.has(word),
-    ),
-  );
-}
-
-function getDistinctScore(
-  left: PlannedCommit,
-  right: PlannedCommit,
-  selectWords: (group: PlannedCommit) => Set<string>,
-): number {
-  return countSharedSubjectWords(selectWords(left), selectWords(right));
+): boolean {
+  return signals.isCoordinatorLike && group.files.length > 1;
 }
