@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { absorbIncidentalAdjacentGroups } from "../src/commit-planning/grouping/group-finalization.js";
+import { absorbIncidentalAdjacentGroups } from "../src/commit-planning/grouping/group/finalization.js";
 import { type FileDiff } from "../src/git/diff.js";
 
 function makeFileDiff(path: string, hunkCount: number): FileDiff {

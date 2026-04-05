@@ -1,10 +1,19 @@
 import { emitAiOutputEvent } from "../openai-client.js";
 import { type FileChangeSignals, type PlannedCommit } from "./grouping-types.js";
 import {
+  buildCommitOrderingProfile,
+  buildDependencyContext,
+  buildReadyQueue,
+  chooseDependencyOrderIndex,
+  type CommitOrderingProfile,
+  type DependencyGraph,
+  enqueueReadyDependents,
+  scoreDependencyForFile,
+} from "./ordering-support.js";
+import {
   countSharedSubjectWords,
-  isSupportLikeType,
   parseSubjectWords,
-} from "./subject-analysis.js";
+} from "./subject/analysis.js";
 
 export {
   getCommonActionWords,
@@ -15,11 +24,6 @@ export {
   getSharedIntentScore,
 } from "./intent-scoring.js";
 
-interface CommitOrderingProfile {
-  hasImplementationFiles: boolean;
-  priorityBucket: number;
-}
-
 /** Scores whether one planned commit should run before another. */
 export function getCommitDependencyScore(
   dependent: PlannedCommit,
@@ -27,74 +31,22 @@ export function getCommitDependencyScore(
   fileSignals: Map<string, FileChangeSignals>,
 ): number {
   let score = 0;
-  const dependencyPaths = new Set(dependency.files.map((file) => file.path));
-  const dependencyHasImplementationFiles = dependency.files.some(
-    (file) => !isTestLikePath(file.path),
-  );
-  const dependencyImplementationPathWords = new Set<string>();
-  const dependencyProvidedSymbols = new Set<string>();
-  const dependencyPathWords = new Set<string>();
-  const dependencySubject = parseSubjectWords(
-    dependency.message.split("\n")[0] ?? "",
-  );
+  const dependencyContext = buildDependencyContext(dependency, fileSignals);
   const dependentSubject = parseSubjectWords(
     dependent.message.split("\n")[0] ?? "",
   );
 
-  for (const file of dependency.files) {
-    const signals = fileSignals.get(file.path);
-    if (!signals) {
-      continue;
-    }
-
-    for (const symbol of signals.providedSymbols) {
-      dependencyProvidedSymbols.add(symbol);
-    }
-    for (const word of signals.pathWords) {
-      dependencyPathWords.add(word);
-      if (!isTestLikePath(file.path)) {
-        dependencyImplementationPathWords.add(word);
-      }
-    }
-  }
-
   for (const file of dependent.files) {
-    const signals = fileSignals.get(file.path);
-    if (!signals) {
-      continue;
-    }
-
-    for (const importedPath of signals.importedPaths) {
-      if (dependencyPaths.has(importedPath)) {
-        score +=
-          isTestLikePath(file.path) && dependencyHasImplementationFiles ? 8 : 6;
-      }
-    }
-
-    for (const symbol of signals.referencedSymbols) {
-      if (dependencyProvidedSymbols.has(symbol)) {
-        score += 4;
-      }
-    }
-
-    if (isTestLikePath(file.path) && dependencyHasImplementationFiles) {
-      const sharedValidatedPathWordCount = countSharedSubjectWords(
-        signals.pathWords,
-        dependencyImplementationPathWords,
-      );
-      if (sharedValidatedPathWordCount > 0) {
-        score += Math.min(sharedValidatedPathWordCount + 2, 4);
-      }
-    }
+    score += scoreDependencyForFile(file.path, fileSignals, dependencyContext);
   }
 
   const sharedPathWordCount = countSharedSubjectWords(
     dependentSubject.words,
-    dependencyPathWords,
+    dependencyContext.dependencyPathWords,
   );
   const sharedSubjectWordCount = countSharedSubjectWords(
     dependentSubject.words,
-    dependencySubject.words,
+    dependencyContext.dependencySubject.words,
   );
 
   if (sharedPathWordCount > 0 && sharedSubjectWordCount > 0) {
@@ -126,91 +78,19 @@ export function orderCommitsByDependencies(
   }
 
   const orderingProfiles = groups.map(buildCommitOrderingProfile);
-  const edges = new Map<number, Set<number>>();
-  const edgeWeights = new Map<string, number>();
-  const indegree = groups.map(() => 0);
-
-  for (let dependentIndex = 0; dependentIndex < groups.length; dependentIndex++) {
-    for (
-      let dependencyIndex = 0;
-      dependencyIndex < groups.length;
-      dependencyIndex++
-    ) {
-      if (dependentIndex === dependencyIndex) {
-        continue;
-      }
-
-      const dependencyScore = getCommitDependencyScore(
-        groups[dependentIndex],
-        groups[dependencyIndex],
-        fileSignals,
-      );
-      if (dependencyScore < 4) {
-        continue;
-      }
-
-      const existing = edges.get(dependencyIndex);
-      if (existing?.has(dependentIndex)) {
-        continue;
-      }
-
-      if (existing) {
-        existing.add(dependentIndex);
-      } else {
-        edges.set(dependencyIndex, new Set([dependentIndex]));
-      }
-      edgeWeights.set(
-        `${String(dependencyIndex)}:${String(dependentIndex)}`,
-        dependencyScore,
-      );
-      indegree[dependentIndex]++;
-    }
-  }
-
-  const queue = indegree
-    .map((degree, index) => ({ degree, index }))
-    .filter((entry) => entry.degree === 0)
-    .map((entry) => entry.index)
-    .sort((left, right) =>
-      compareReadyIndexes(left, right, orderingProfiles, edges, edgeWeights),
-    );
-  const orderedIndexes: number[] = [];
-  const remainingIndexes = new Set(groups.map((_, index) => index));
-
-  while (orderedIndexes.length < groups.length) {
-    const index =
-      queue.shift() ??
-      chooseDependencyOrderIndex(
-        remainingIndexes,
-        orderingProfiles,
-        indegree,
-        edges,
-        edgeWeights,
-      );
-    if (index === undefined) {
-      break;
-    }
-    if (!remainingIndexes.has(index)) {
-      continue;
-    }
-
-    remainingIndexes.delete(index);
-    orderedIndexes.push(index);
-    const outgoing = edges.get(index);
-    if (!outgoing) {
-      continue;
-    }
-
-    for (const nextIndex of outgoing) {
-      indegree[nextIndex]--;
-      if (indegree[nextIndex] === 0) {
-        queue.push(nextIndex);
-        queue.sort((left, right) =>
-          compareReadyIndexes(left, right, orderingProfiles, edges, edgeWeights),
-        );
-      }
-    }
-  }
+  const { edges, edgeWeights, indegree } = buildDependencyGraph(
+    groups,
+    fileSignals,
+  );
+  const queue = buildReadyQueue(indegree, orderingProfiles, edges, edgeWeights);
+  const orderedIndexes = consumeDependencyOrderQueue(
+    groups.length,
+    queue,
+    orderingProfiles,
+    indegree,
+    edges,
+    edgeWeights,
+  );
 
   if (orderedIndexes.length !== groups.length) {
     return groups;
@@ -232,174 +112,115 @@ export function orderCommitsByDependencies(
   return ordered;
 }
 
-function buildCommitOrderingProfile(
-  group: PlannedCommit,
-): CommitOrderingProfile {
-  const subject = parseSubjectWords(group.message.split("\n")[0] ?? "");
-  const hasImplementationFiles = group.files.some(
-    (file) => !isTestLikePath(file.path),
+function addDependencyEdge(
+  graph: DependencyGraph,
+  fileSignals: Map<string, FileChangeSignals>,
+  groups: PlannedCommit[],
+  dependentIndex: number,
+  dependencyIndex: number,
+): void {
+  const dependencyScore = getCommitDependencyScore(
+    groups[dependentIndex],
+    groups[dependencyIndex],
+    fileSignals,
   );
-  const hasOnlyTestFiles = group.files.every((file) => isTestLikePath(file.path));
-  const supportLike = isSupportLikeType(subject.type);
+  if (dependencyScore < 4) {
+    return;
+  }
 
-  return {
-    hasImplementationFiles,
-    priorityBucket:
-      hasOnlyTestFiles || (supportLike && !hasImplementationFiles)
-        ? 2
-        : supportLike
-          ? 1
-          : 0,
-  };
+  const existing = graph.edges.get(dependencyIndex);
+  if (existing?.has(dependentIndex)) {
+    return;
+  }
+
+  (existing ?? new Set<number>()).add(dependentIndex);
+  if (!existing) {
+    graph.edges.set(dependencyIndex, new Set([dependentIndex]));
+  }
+  graph.edgeWeights.set(
+    `${String(dependencyIndex)}:${String(dependentIndex)}`,
+    dependencyScore,
+  );
+  graph.indegree[dependentIndex]++;
 }
 
-function chooseDependencyOrderIndex(
+function buildDependencyGraph(
+  groups: PlannedCommit[],
+  fileSignals: Map<string, FileChangeSignals>,
+): DependencyGraph {
+  const graph: DependencyGraph = {
+    edges: new Map<number, Set<number>>(),
+    edgeWeights: new Map<string, number>(),
+    indegree: groups.map(() => 0),
+  };
+
+  for (let dependentIndex = 0; dependentIndex < groups.length; dependentIndex++) {
+    for (let dependencyIndex = 0; dependencyIndex < groups.length; dependencyIndex++) {
+      if (dependentIndex === dependencyIndex) {
+        continue;
+      }
+
+      addDependencyEdge(
+        graph,
+        fileSignals,
+        groups,
+        dependentIndex,
+        dependencyIndex,
+      );
+    }
+  }
+
+  return graph;
+}
+
+function consumeDependencyOrderQueue(
+  groupCount: number,
+  queue: number[],
+  orderingProfiles: CommitOrderingProfile[],
+  indegree: number[],
+  edges: Map<number, Set<number>>,
+  edgeWeights: Map<string, number>,
+): number[] {
+  const orderedIndexes: number[] = [];
+  const remainingIndexes = new Set(Array.from({ length: groupCount }, (_, index) => index));
+
+  while (orderedIndexes.length < groupCount) {
+    const index = takeNextDependencyIndex(
+      queue,
+      remainingIndexes,
+      orderingProfiles,
+      indegree,
+      edges,
+      edgeWeights,
+    );
+    if (index === undefined) {
+      break;
+    }
+    if (!remainingIndexes.has(index)) {
+      continue;
+    }
+
+    remainingIndexes.delete(index);
+    orderedIndexes.push(index);
+    enqueueReadyDependents(index, indegree, edges, queue, orderingProfiles, edgeWeights);
+  }
+
+  return orderedIndexes;
+}
+
+function takeNextDependencyIndex(
+  queue: number[],
   remainingIndexes: Set<number>,
   orderingProfiles: CommitOrderingProfile[],
   indegree: number[],
   edges: Map<number, Set<number>>,
   edgeWeights: Map<string, number>,
 ): number | undefined {
-  let selectedIndex: number | undefined;
-  let selectedIndegree = Number.POSITIVE_INFINITY;
-  let selectedIncomingWeight = Number.POSITIVE_INFINITY;
-  let selectedOutgoingWeight = Number.NEGATIVE_INFINITY;
-
-  for (const index of remainingIndexes) {
-    const incomingWeight = getIncomingDependencyWeight(
-      index,
-      remainingIndexes,
-      edgeWeights,
-    );
-    const outgoingWeight = getOutgoingDependencyWeight(
-      index,
-      remainingIndexes,
-      edges,
-      edgeWeights,
-    );
-
-    if (indegree[index] < selectedIndegree) {
-      selectedIndex = index;
-      selectedIndegree = indegree[index];
-      selectedIncomingWeight = incomingWeight;
-      selectedOutgoingWeight = outgoingWeight;
-      continue;
-    }
-    if (indegree[index] > selectedIndegree) {
-      continue;
-    }
-
-    if (incomingWeight < selectedIncomingWeight) {
-      selectedIndex = index;
-      selectedIncomingWeight = incomingWeight;
-      selectedOutgoingWeight = outgoingWeight;
-      continue;
-    }
-    if (incomingWeight > selectedIncomingWeight) {
-      continue;
-    }
-
-    if (outgoingWeight > selectedOutgoingWeight) {
-      selectedIndex = index;
-      selectedOutgoingWeight = outgoingWeight;
-      continue;
-    }
-    if (outgoingWeight < selectedOutgoingWeight) {
-      continue;
-    }
-
-    if (
-      selectedIndex === undefined ||
-      compareCommitOrderingProfile(
-        orderingProfiles[index],
-        orderingProfiles[selectedIndex],
-      ) < 0
-    ) {
-      selectedIndex = index;
-    }
-  }
-
-  return selectedIndex;
-}
-
-function compareCommitOrderingProfile(
-  left: CommitOrderingProfile,
-  right: CommitOrderingProfile,
-): number {
-  if (left.priorityBucket !== right.priorityBucket) {
-    return left.priorityBucket - right.priorityBucket;
-  }
-
-  if (left.hasImplementationFiles !== right.hasImplementationFiles) {
-    return left.hasImplementationFiles ? -1 : 1;
-  }
-
-  return 0;
-}
-
-function compareReadyIndexes(
-  left: number,
-  right: number,
-  orderingProfiles: CommitOrderingProfile[],
-  edges: Map<number, Set<number>>,
-  edgeWeights: Map<string, number>,
-): number {
-  const profileComparison = compareCommitOrderingProfile(
-    orderingProfiles[left],
-    orderingProfiles[right],
-  );
-  if (profileComparison !== 0) {
-    return profileComparison;
-  }
-
-  const outgoingWeightDifference =
-    getOutgoingDependencyWeight(left, new Set([left, right]), edges, edgeWeights) -
-    getOutgoingDependencyWeight(right, new Set([left, right]), edges, edgeWeights);
-  if (outgoingWeightDifference !== 0) {
-    return outgoingWeightDifference > 0 ? -1 : 1;
-  }
-
-  return left - right;
-}
-
-function getIncomingDependencyWeight(
-  targetIndex: number,
-  remainingIndexes: Set<number>,
-  edgeWeights: Map<string, number>,
-): number {
-  let weight = 0;
-
-  for (const index of remainingIndexes) {
-    weight += edgeWeights.get(`${String(index)}:${String(targetIndex)}`) ?? 0;
-  }
-
-  return weight;
-}
-
-function getOutgoingDependencyWeight(
-  sourceIndex: number,
-  remainingIndexes: Set<number>,
-  edges: Map<number, Set<number>>,
-  edgeWeights: Map<string, number>,
-): number {
-  let weight = 0;
-
-  for (const targetIndex of edges.get(sourceIndex) ?? []) {
-    if (!remainingIndexes.has(targetIndex)) {
-      continue;
-    }
-
-    weight +=
-      edgeWeights.get(`${String(sourceIndex)}:${String(targetIndex)}`) ?? 0;
-  }
-
-  return weight;
-}
-
-function isTestLikePath(path: string): boolean {
-  return (
-    path.startsWith("tests/") ||
-    path.startsWith("test/") ||
-    /(?:^|\/)[^.]+\.(?:spec|test)\.[^.]+$/u.test(path)
+  return queue.shift() ?? chooseDependencyOrderIndex(
+    remainingIndexes,
+    orderingProfiles,
+    indegree,
+    edges,
+    edgeWeights,
   );
 }
