@@ -5,7 +5,7 @@ import {
   formatPlanBodyLines,
   wrapDisplayFileLines,
   wrapDisplayText,
-} from "./commit-plan-display.js";
+} from "./commit/plan-display.js";
 
 const ANSI_BLUE = "\x1b[34m";
 const ANSI_BOLD = "\x1b[1m";

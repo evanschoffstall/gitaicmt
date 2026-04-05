@@ -1,6 +1,6 @@
-import { type PlannedCommitFile } from "../commit-planning/orchestration.js";
-import { type FileDiff } from "../git/diff.js";
-import { wrapTokenizedTextBySeparatorPreference } from "./token-splitting.js";
+import { type PlannedCommitFile } from "../../commit-planning/orchestration.js";
+import { type FileDiff } from "../../git/diff.js";
+import { wrapTokenizedTextBySeparatorPreference } from "../token/splitting.js";
 
 export function formatCommitFile(
   file: PlannedCommitFile,

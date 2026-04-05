@@ -4,13 +4,13 @@
  * Extracted from command-line-interface.ts so tests can import this module
  * without triggering command-line-interface.ts's unconditional `main()` invocation.
  */
-import { ValidationError } from "../application/errors.js";
-import { buildPatch, type FileDiff } from "../git/diff.js";
-import { stageFiles, stagePatch } from "../git/operations.js";
-import { resolveTerminalColumns } from "./terminal-columns.js";
-import { wrapTerminalTextBlock } from "./terminal-line-wrapping.js";
+import { ValidationError } from "../../application/errors.js";
+import { buildPatch, type FileDiff } from "../../git/diff.js";
+import { stageFiles, stagePatch } from "../../git/operations.js";
+import { resolveTerminalColumns } from "../terminal/columns.js";
+import { wrapTerminalTextBlock } from "../terminal/line-wrapping.js";
 
-type PlannedCommitFile = import("../commit-planning/orchestration.js").PlannedCommitFile;
+type PlannedCommitFile = import("../../commit-planning/orchestration.js").PlannedCommitFile;
 
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
