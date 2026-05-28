@@ -1,9 +1,7 @@
 import type { PlannedCommit } from "../grouping-types.js";
 
 import { loadConfig } from "../../../application/config/index.js";
-import {
-  GROUPING_TIMEOUT_MS,
-} from "../../../application/constants.js";
+import { GROUPING_TIMEOUT_MS } from "../../../application/constants.js";
 import {
   OpenAIError,
   OpenAITimeoutError,
@@ -19,6 +17,10 @@ const MAX_PLANNER_REVIEW_TIMEOUT_MS = 120_000;
 const PLANNER_RETRY_TIMEOUT_MULTIPLIER = 1.5;
 const PLANNER_TIMEOUT_PER_1K_TOKENS_MS = 4_000;
 
+/**
+ * Runs the clustering stage and normalizes the returned cluster indexes into
+ * a complete non-overlapping cluster list.
+ */
 export async function callCluster(
   groups: PlannedCommit[],
   buildUserPrompt: (groups: PlannedCommit[]) => string,
@@ -37,6 +39,7 @@ export async function callCluster(
   return normalizeClusters(result.parsed, groups.length);
 }
 
+/** Executes one planner stage request and parses the raw JSON payload. */
 export async function completePlannerStage(
   input: string,
   stage: "cluster" | "consolidate",
@@ -45,7 +48,11 @@ export async function completePlannerStage(
 ): Promise<null | { parsed: unknown }> {
   const cfg = loadConfig();
   const inputGroupCount = groups.length;
-  const maxTokens = getPlannerResponseTokenBudget(cfg.openai.maxTokens, stage, groups);
+  const maxTokens = getPlannerResponseTokenBudget(
+    cfg.openai.maxTokens,
+    stage,
+    groups,
+  );
   let raw: null | string = null;
   let lastError: unknown;
 
@@ -61,7 +68,12 @@ export async function completePlannerStage(
       lastError = error;
       const failedAttemptCount = attempt + 1;
       if (shouldRetryPlannerCall(failedAttemptCount, error)) {
-        emitPlannerRetryEvent(stage, inputGroupCount, failedAttemptCount, error);
+        emitPlannerRetryEvent(
+          stage,
+          inputGroupCount,
+          failedAttemptCount,
+          error,
+        );
         continue;
       }
 
@@ -77,10 +89,12 @@ export async function completePlannerStage(
   return parsePlannerStageResponse(raw, stage, inputGroupCount);
 }
 
+/** Converts unknown planner failures into a stable trace string. */
 export function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Emits a structured internal planner decision event for fallback handling. */
 export function emitPlannerFallbackEvent(
   decision: string,
   reason: string,
