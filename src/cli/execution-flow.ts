@@ -18,9 +18,7 @@ import {
   getStats,
   parseDiff,
 } from "../git/diff.js";
-import {
-  getStagedDiff,
-} from "../git/operations.js";
+import { getStagedDiff, getStagedPatch } from "../git/operations.js";
 import {
   executePlannedCommits,
   executeSingleCommitMessage,
@@ -29,6 +27,11 @@ import { formatCount } from "./counts.js";
 import { die } from "./fatal.js";
 import { buildPlanCardLines } from "./output-presentation.js";
 import { getPlannerFallbackNotice } from "./planner-notices.js";
+import {
+  buildResumeStatusRows,
+  logResumeHashCheckMessages,
+  resolveResumeExecutionPlan,
+} from "./resume-execution.js";
 import {
   log,
   logCommitPlanAnalysis,

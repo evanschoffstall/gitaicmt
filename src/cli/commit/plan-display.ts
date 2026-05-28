@@ -6,13 +6,16 @@ export function formatCommitFile(
   file: PlannedCommitFile,
   fileDiffs?: Map<string, FileDiff>,
 ): string {
-  if (!file.hunks || file.hunks.length === 0) return file.path;
+  const displayPath = normalizeDisplayPath(file.path);
+  if (!file.hunks || file.hunks.length === 0) return displayPath;
   const total = fileDiffs?.get(file.path)?.hunks.length;
   const idx = file.hunks.join(", ");
   const word = file.hunks.length === 1 ? "hunk" : "hunks";
   const suffix =
-    total !== undefined ? `[${word} ${idx} / ${String(total)}]` : `[${word} ${idx}]`;
-  return `${file.path} ${suffix}`;
+    total !== undefined
+      ? `[${word} ${idx} / ${String(total)}]`
+      : `[${word} ${idx}]`;
+  return `${displayPath} ${suffix}`;
 }
 
 export function formatPlanBodyLine(line: string, maxWidth: number): string[] {
@@ -65,9 +68,12 @@ export function formatPlanBodyLines(body: string, maxWidth: number): string[] {
   return normalizedLines.flatMap((line) => formatPlanBodyLine(line, maxWidth));
 }
 
-export function wrapDisplayFileLines(files: string[], maxWidth: number): string[] {
+export function wrapDisplayFileLines(
+  files: string[],
+  maxWidth: number,
+): string[] {
   return files.flatMap((file) =>
-    wrapDisplayTextWithPrefix(file, {
+    wrapDisplayTextWithPrefix(normalizeDisplayPath(file), {
       continuationPrefix: "  ",
       firstLinePrefix: "- ",
       maxWidth,
@@ -77,6 +83,17 @@ export function wrapDisplayFileLines(files: string[], maxWidth: number): string[
 
 export function wrapDisplayText(text: string, maxWidth: number): string[] {
   return wrapTokenizedTextBySeparatorPreference(text, maxWidth);
+}
+
+function normalizeDisplayPath(text: string): string {
+  for (const rootName of ["src/", "tests/", "scripts/"]) {
+    const rootIndex = text.indexOf(rootName);
+    if (rootIndex >= 0) {
+      return text.slice(rootIndex);
+    }
+  }
+
+  return text;
 }
 
 function wrapDisplayTextWithPrefix(

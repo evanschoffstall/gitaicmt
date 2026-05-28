@@ -1,16 +1,21 @@
 /**
  * Hunk-level file staging helpers.
  *
- * Extracted from command-line-interface.ts so tests can import this module
- * without triggering command-line-interface.ts's unconditional `main()` invocation.
+ * Extracted from main.ts so tests can import this module
+ * without triggering main.ts's unconditional `main()` invocation.
  */
 import { ValidationError } from "../../application/errors.js";
 import { buildPatch, type FileDiff } from "../../git/diff.js";
-import { stageFiles, stagePatch } from "../../git/operations.js";
+import {
+  isPathTrackedInIndex,
+  stageFiles,
+  stagePatch,
+} from "../../git/operations.js";
 import { resolveTerminalColumns } from "../terminal/columns.js";
 import { wrapTerminalTextBlock } from "../terminal/line-wrapping.js";
 
-type PlannedCommitFile = import("../../commit-planning/orchestration.js").PlannedCommitFile;
+type PlannedCommitFile =
+  import("../../commit-planning/orchestration.js").PlannedCommitFile;
 
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
@@ -54,7 +59,8 @@ export function stageGroupFiles(
   // Stage all entries via patch (git apply --cached)
   for (const { file, hunkIndices } of entries) {
     const selectedHunks = hunkIndices.map((i) => file.hunks[i]);
-    const patch = buildPatch(file, selectedHunks);
+    const patchFile = resolvePatchFileForCurrentIndex(file, cwd);
+    const patch = buildPatch(patchFile, selectedHunks);
     if (!patch.trim()) {
       if (file.hunks.length === 0) {
         stageFiles([file.path], cwd);
@@ -107,7 +113,40 @@ function log(msg: string) {
     fallbackColumns: 100,
     streams: [process.stderr],
   });
-  for (const line of wrapTerminalTextBlock(msg, Math.max(20, terminalColumns - 1))) {
+  for (const line of wrapTerminalTextBlock(
+    msg,
+    Math.max(20, terminalColumns - 1),
+  )) {
     process.stderr.write(`${line}\n`);
   }
+}
+
+/**
+ * Re-anchor later rename hunks to the current path after an earlier split
+ * commit has already recorded the rename in history.
+ */
+function resolvePatchFileForCurrentIndex(
+  file: FileDiff,
+  cwd?: string,
+): FileDiff {
+  if (!cwd || file.status !== "renamed" || !file.oldPath) {
+    return file;
+  }
+
+  const oldPathTracked = isPathTrackedInIndex(file.oldPath, cwd);
+  if (oldPathTracked) {
+    return file;
+  }
+
+  const newPathTracked = isPathTrackedInIndex(file.path, cwd);
+  if (!newPathTracked) {
+    return file;
+  }
+
+  return {
+    ...file,
+    metadataLines: [],
+    oldPath: file.path,
+    status: "modified",
+  };
 }

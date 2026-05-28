@@ -1,3 +1,12 @@
-export * from "./execution.js";
-export * from "./group-staging.js";
-export * from "./plan-display.js";
+export {
+  executePlannedCommits,
+  executeSingleCommitMessage,
+} from "./execution.js";
+export { stageGroupFiles } from "./group-staging.js";
+export {
+  formatCommitFile,
+  formatPlanBodyLine,
+  formatPlanBodyLines,
+  wrapDisplayFileLines,
+  wrapDisplayText,
+} from "./plan-display.js";
