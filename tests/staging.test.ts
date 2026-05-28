@@ -31,7 +31,8 @@ import {
 const { afterEach, beforeEach, describe, expect, test } =
   await import("bun:test");
 
-type PlannedCommit = import("../src/commit-planning/orchestration.js").PlannedCommit;
+type PlannedCommit =
+  import("../src/commit-planning/orchestration.js").PlannedCommit;
 
 function commitMessage(subject: string, ...bullets: string[]): string {
   const body = bullets.length > 0 ? bullets : ["- Summarize the change."];
@@ -372,7 +373,9 @@ describe("stageGroupFiles — hunk-level staging", () => {
       stageGroupFiles([{ path: relativePath }], fileMap, dir);
 
       const staged = getStagedDiff(dir);
-      expect(staged).toContain(`diff --git a/${relativePath} b/${relativePath}`);
+      expect(staged).toContain(
+        `diff --git a/${relativePath} b/${relativePath}`,
+      );
       expect(staged).toContain("-export const value = 1;");
       expect(staged).toContain("+export const value = 2;");
     } finally {
