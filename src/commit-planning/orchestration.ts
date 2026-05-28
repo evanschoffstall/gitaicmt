@@ -57,12 +57,18 @@ export {
   getTokenUsageSummary,
   resetTokenUsageSummary,
   setAiOutputObserver,
-  validateOpenAIConfiguration
+  validateOpenAIConfiguration,
 } from "./openai-client.js";
 export type { AiOutputEvent } from "./openai-client.js";
 export {
+  getBundleFileDiffs,
+  loadPlanBundle,
+  preparePlanBundleForResume,
+  savePlanBundle,
+} from "./plan-bundles/index.js";
+export {
   estimateGenerateOperationTokens,
-  estimatePlanOperationTokens
+  estimatePlanOperationTokens,
 } from "./token-estimation.js";
 export type { TokenEstimateSummary } from "./token-estimation.js";
 export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
@@ -381,4 +387,3 @@ async function requestGroupingPlan(
     timeoutMs,
   });
 }
-
