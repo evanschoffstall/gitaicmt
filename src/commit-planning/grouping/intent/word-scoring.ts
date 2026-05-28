@@ -1,11 +1,14 @@
-import { sanitizeSubjectWords } from "../../commit-messages/subject-parser.js";
-import { type FileChangeSignals, type PlannedCommit } from "./grouping-types.js";
+import { sanitizeSubjectWords } from "../../../commit-messages/subject-parser.js";
+import {
+  type FileChangeSignals,
+  type PlannedCommit,
+} from "../grouping-types.js";
 import {
   countSharedSubjectWords,
   filterSignificantWords,
   getOrderedSubjectWords,
   parseSubjectWords,
-} from "./subject/analysis.js";
+} from "../subject/analysis.js";
 
 export function collectCommonWords(
   groups: PlannedCommit[],
@@ -53,7 +56,9 @@ export function getCommitArtifactWords(
 ): Set<string> {
   const artifactWords = new Set<string>();
   const subject = parseSubjectWords(group.message.split("\n")[0] ?? "");
-  const subjectWords = getOrderedSubjectWords(group.message.split("\n")[0] ?? "");
+  const subjectWords = getOrderedSubjectWords(
+    group.message.split("\n")[0] ?? "",
+  );
   const actionWords = getCommitActionWords(group);
 
   for (const word of subjectWords) {

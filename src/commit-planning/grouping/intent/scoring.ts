@@ -1,5 +1,15 @@
-import { sanitizeSubjectWords } from "../../commit-messages/subject-parser.js";
-import { type FileChangeSignals, type PlannedCommit } from "./grouping-types.js";
+import { sanitizeSubjectWords } from "../../../commit-messages/subject-parser.js";
+import {
+  type FileChangeSignals,
+  type PlannedCommit,
+} from "../grouping-types.js";
+import {
+  countSharedSubjectWords,
+  filterSignificantWords,
+  hasHighWordOverlap,
+  parseSubjectWords,
+  scopesRelated,
+} from "../subject/analysis.js";
 import {
   collectCommonWords,
   filterDistinctWords,
@@ -7,14 +17,7 @@ import {
   getCommitArtifactWords,
   getDistinctActionWords,
   getDistinctScore,
-} from "./scoring-support.js";
-import {
-  countSharedSubjectWords,
-  filterSignificantWords,
-  hasHighWordOverlap,
-  parseSubjectWords,
-  scopesRelated,
-} from "./subject/analysis.js";
+} from "./word-scoring.js";
 
 /** Collects words that describe what a commit is doing and where. */
 export function getCommitIntentWords(
