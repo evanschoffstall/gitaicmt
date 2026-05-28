@@ -60,7 +60,9 @@ function readPromptAnswer(
     };
 
     process.stdin.once("end", onEnd);
-    const [promptLine = "", ...leadingLines] = wrappedQuestionLines.slice().reverse();
+    const [promptLine = "", ...leadingLines] = wrappedQuestionLines
+      .slice()
+      .reverse();
     if (leadingLines.length > 0) {
       writeTerminalLines(leadingLines.reverse());
     }

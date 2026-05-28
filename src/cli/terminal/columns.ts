@@ -17,7 +17,9 @@ export function resolveTerminalColumns(
     return streamColumns;
   }
 
-  const envColumns = resolveEnvironmentColumns(options.environment ?? process.env);
+  const envColumns = resolveEnvironmentColumns(
+    options.environment ?? process.env,
+  );
   if (envColumns !== null) {
     return envColumns;
   }
@@ -60,9 +62,7 @@ function resolveStreamColumns(
   return null;
 }
 
-function resolveWindowSizeColumns(
-  stream: TerminalSizeStream,
-): null | number {
+function resolveWindowSizeColumns(stream: TerminalSizeStream): null | number {
   if (typeof stream.getWindowSize !== "function") {
     return null;
   }

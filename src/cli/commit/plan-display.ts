@@ -38,9 +38,7 @@ export function formatPlanBodyLine(line: string, maxWidth: number): string[] {
 }
 
 export function formatPlanBodyLines(body: string, maxWidth: number): string[] {
-  const lines = body
-    .split("\n")
-    .map((line) => line.trimEnd());
+  const lines = body.split("\n").map((line) => line.trimEnd());
   const normalizedLines: string[] = [];
 
   for (const line of lines) {
@@ -58,7 +56,8 @@ export function formatPlanBodyLines(body: string, maxWidth: number): string[] {
 
     const previousLine = normalizedLines.at(-1);
     if (previousLine?.trim().startsWith("- ")) {
-      normalizedLines[normalizedLines.length - 1] = `${previousLine} ${trimmedLine}`;
+      normalizedLines[normalizedLines.length - 1] =
+        `${previousLine} ${trimmedLine}`;
       continue;
     }
 
@@ -104,10 +103,14 @@ function wrapDisplayTextWithPrefix(
     maxWidth: number;
   },
 ): string[] {
-  const contentWidth = Math.max(12, options.maxWidth - options.firstLinePrefix.length);
+  const contentWidth = Math.max(
+    12,
+    options.maxWidth - options.firstLinePrefix.length,
+  );
   const wrappedLines = wrapDisplayText(text, contentWidth);
 
-  return wrappedLines.map((line, index) =>
-    `${index === 0 ? options.firstLinePrefix : options.continuationPrefix}${line}`,
+  return wrappedLines.map(
+    (line, index) =>
+      `${index === 0 ? options.firstLinePrefix : options.continuationPrefix}${line}`,
   );
 }

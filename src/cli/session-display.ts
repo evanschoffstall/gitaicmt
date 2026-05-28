@@ -89,7 +89,9 @@ export function logActualTokenUsage(
   ]);
 }
 
-export function logCommitPlanAnalysis(analysis: CommitPlanAnalysisSummary): void {
+export function logCommitPlanAnalysis(
+  analysis: CommitPlanAnalysisSummary,
+): void {
   logPlannedCommits(analysis.groups, analysis.elapsed);
   if (analysis.plannerFallbackNotice) {
     log(`${YELLOW}${analysis.plannerFallbackNotice}${RESET}`);
@@ -118,18 +120,16 @@ export function logGenerationContext(
     },
   ]);
   if (tokenEstimate) {
-    logTokenEstimate(tokenEstimate, tokenWarningThreshold ?? 0, suppressWarning);
+    logTokenEstimate(
+      tokenEstimate,
+      tokenWarningThreshold ?? 0,
+      suppressWarning,
+    );
   }
 }
 
 export function logStatusSection(title: string, rows: StatusRow[]): void {
-  writeTerminalLines(
-    buildStatusSectionLines(
-      title,
-      rows as PresentationStatusRow[],
-      resolveLogWidth(),
-    ),
-  );
+  writeTerminalLines(buildStatusSectionLines(title, rows, resolveLogWidth()));
 }
 
 export function logTokenEstimate(

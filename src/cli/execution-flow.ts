@@ -45,7 +45,10 @@ import {
   verbose,
 } from "./session-display.js";
 import { ensureStaged } from "./staging-guard.js";
-import { withThinkingIndicator, writeTerminalLines } from "./terminal/output-ui.js";
+import {
+  withThinkingIndicator,
+  writeTerminalLines,
+} from "./terminal/output-ui.js";
 import {
   confirmCommitPlan,
   confirmTokenCheckedGeneration,
