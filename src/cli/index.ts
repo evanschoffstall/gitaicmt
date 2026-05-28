@@ -1,11 +1,13 @@
-export * from "./commit/index.js";
-export * from "./counts.js";
-export * from "./fatal.js";
-export * from "./output-presentation.js";
-export * from "./planner-notices.js";
-export * from "./session-display.js";
-export * from "./terminal/index.js";
-export * from "./token/index.js";
-export * from "./verbose-output.js";
-export * from "./verbose-rendering/index.js";
-export * from "./viewport.js";
+export {
+  cmdCommit,
+  cmdCommitSingle,
+  cmdGenerate,
+  cmdPlan,
+  cmdResume,
+} from "./execution-flow.js";
+export { die } from "./fatal.js";
+export {
+  resolveDisplayWidth,
+  resolveLogWidth,
+  resolveVerboseWidth,
+} from "./viewport.js";

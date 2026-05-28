@@ -24,9 +24,17 @@ const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 const YELLOW = "\x1b[33m";
 
+/**
+ * Commit execution options used when replaying previously saved plan entries.
+ */
+export interface CommitExecutionOptions {
+  ignoreMessageBody?: boolean;
+}
+
 export function executePlannedCommits(
   groups: { files: PlannedCommitFile[]; message: string }[],
   fileMap: Map<string, FileDiff>,
+  options: CommitExecutionOptions = {},
 ): void {
   const startedAtMs = performance.now();
   let committed = 0;
@@ -34,7 +42,7 @@ export function executePlannedCommits(
 
   try {
     for (let index = 0; index < groups.length; index++) {
-      committed += executeCommitGroup(groups, fileMap, index);
+      committed += executeCommitGroup(groups, fileMap, index, options);
     }
 
     logCommitCompletion(committed, groups.length, startedAtMs);
@@ -61,6 +69,7 @@ function executeCommitGroup(
   groups: { files: PlannedCommitFile[]; message: string }[],
   fileMap: Map<string, FileDiff>,
   index: number,
+  options: CommitExecutionOptions,
 ): 0 | 1 {
   const group = groups[index];
   renderCommitGroupHeader(group, groups.length, fileMap, index);
@@ -68,12 +77,18 @@ function executeCommitGroup(
   resetStaging();
   stageGroupFiles(group.files, fileMap);
   if (!hasStagedChanges()) {
-    log(`${YELLOW}  (skipped - no stageable changes remain for this group)${RESET}`);
+    log(
+      `${YELLOW}  (skipped - no stageable changes remain for this group)${RESET}`,
+    );
     log("");
     return 0;
   }
 
-  renderCommitExecutionResult(commitWithMessage(group.message));
+  renderCommitExecutionResult(
+    commitWithMessage(group.message, undefined, {
+      ignoreMessageBody: options.ignoreMessageBody,
+    }),
+  );
   log("");
   return 1;
 }
