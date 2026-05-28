@@ -17,7 +17,8 @@ describe("verbose-output", () => {
         content: JSON.stringify([
           {
             files: [{ path: "F2" }],
-            message: "chore(tooling): refresh lint deps\n\n- Keep the lint stack current.",
+            message:
+              "chore(tooling): refresh lint deps\n\n- Keep the lint stack current.",
           },
         ]),
         fileAliasMap: new Map([
@@ -31,8 +32,12 @@ describe("verbose-output", () => {
       { maxWidth: 88, mode: "summary", sequence: 1 },
     );
 
-    expect(lines.some((line) => line.includes("impact: 1 file(s) · 1 detail"))).toBe(true);
-    expect(lines.some((line) => line.includes("files: package.json"))).toBe(true);
+    expect(
+      lines.some((line) => line.includes("impact: 1 file(s) · 1 detail")),
+    ).toBe(true);
+    expect(lines.some((line) => line.includes("files: package.json"))).toBe(
+      true,
+    );
     expect(lines.join("\n")).not.toContain("F2");
   });
 
@@ -58,7 +63,9 @@ describe("verbose-output", () => {
       { maxWidth: 84, mode: "trace", sequence: 2 },
     );
 
-    expect(lines.some((line) => line.includes('"path": "package.json"'))).toBe(true);
+    expect(lines.some((line) => line.includes('"path": "package.json"'))).toBe(
+      true,
+    );
     expect(lines.join("\n")).not.toContain('"path": "F2"');
   });
 
@@ -68,7 +75,7 @@ describe("verbose-output", () => {
         files: [
           {
             hunks: [0, 1, 2, 3],
-            path: "src/cli/command-line-interface.ts",
+            path: "src/cli/main.ts",
           },
         ],
         message:
@@ -86,18 +93,14 @@ describe("verbose-output", () => {
       { maxWidth: 28, mode: "trace", sequence: 1 },
     );
 
-    expect(
-      lines.some((line) => line.includes('"path":')),
-    ).toBe(true);
-    expect(
-      lines.some((line) => line.includes('"hunks": [0, 1, 2, 3]')),
-    ).toBe(true);
-    expect(
-      lines.some((line) => line.includes('"message": "fix(verbose')),
-    ).toBe(true);
-    expect(
-      lines.some((line) => line.includes('-output):')),
-    ).toBe(true);
+    expect(lines.some((line) => line.includes('"path":'))).toBe(true);
+    expect(lines.some((line) => line.includes('"hunks": [0, 1, 2, 3]'))).toBe(
+      true,
+    );
+    expect(lines.some((line) => line.includes('"message": "fix(verbose'))).toBe(
+      true,
+    );
+    expect(lines.some((line) => line.includes("-output):"))).toBe(true);
   });
 
   test("splits long trace path tokens before the terminal hard-wraps them", () => {
@@ -123,20 +126,10 @@ describe("verbose-output", () => {
       { maxWidth: 28, mode: "trace", sequence: 1 },
     );
 
-    expect(
-      lines.some((line) =>
-        line.includes('"path": "src/cli/'),
-      ),
-    ).toBe(true);
-    expect(
-      lines.some((line) => line.includes('verbose-')),
-    ).toBe(true);
-    expect(
-      lines.some((line) => line.includes('rendering/')),
-    ).toBe(true);
-    expect(
-      lines.some((line) => line.includes('render.ts",')),
-    ).toBe(true);
+    expect(lines.some((line) => line.includes('"path": "src/cli/'))).toBe(true);
+    expect(lines.some((line) => line.includes("verbose-"))).toBe(true);
+    expect(lines.some((line) => line.includes("rendering/"))).toBe(true);
+    expect(lines.some((line) => line.includes('render.ts",'))).toBe(true);
   });
 
   test("formats planned commit arrays as semantic terminal summaries", () => {
@@ -173,9 +166,7 @@ describe("verbose-output", () => {
       ),
     ).toBe(true);
     expect(
-      plainLines.some((line) =>
-        line.includes("impact: 2 file(s) · 3 details"),
-      ),
+      plainLines.some((line) => line.includes("impact: 2 file(s) · 3 details")),
     ).toBe(true);
     expect(
       plainLines.some((line) =>
@@ -185,7 +176,9 @@ describe("verbose-output", () => {
       ),
     ).toBe(true);
     expect(
-      plainLines.some((line) => line.includes("- Reset AI cache in shared hooks.")),
+      plainLines.some((line) =>
+        line.includes("- Reset AI cache in shared hooks."),
+      ),
     ).toBe(true);
     expect(
       plainLines.some((line) => line.includes("... 1 more detail line(s)")),
@@ -193,9 +186,19 @@ describe("verbose-output", () => {
     expect(lines.join("\n")).not.toContain('"path"');
     expect(lines[0]).toContain("\x1b[1m");
     expect(lines[0]).toContain("\x1b[36m");
-    expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(true);
-    expect(plainLines.some((line) => line.includes("stats: model-output · chat · 842ms"))).toBe(true);
-    expect(plainLines.some((line) => line.includes("usage: 1 req · 610 in · 128 out · 738 tok"))).toBe(true);
+    expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(
+      true,
+    );
+    expect(
+      plainLines.some((line) =>
+        line.includes("stats: model-output · chat · 842ms"),
+      ),
+    ).toBe(true);
+    expect(
+      plainLines.some((line) =>
+        line.includes("usage: 1 req · 610 in · 128 out · 738 tok"),
+      ),
+    ).toBe(true);
     expect(lines.some((line) => line.includes("\x1b[2m"))).toBe(true);
   });
 
@@ -240,18 +243,28 @@ describe("verbose-output", () => {
     const plainLines = getPlainLines(lines);
 
     expect(lines[0]).toContain("Grouping batch #1 trace");
-    expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(true);
-    expect(plainLines.some((line) => line.includes("stats: model-output · responses · 1.26s"))).toBe(true);
-    expect(plainLines.some((line) => line.includes("usage: 1 req · 444 in · 111 out · 555 tok"))).toBe(true);
+    expect(lines.some((line) => line.startsWith("\x1b[36m│\x1b[0m"))).toBe(
+      true,
+    );
     expect(
-      lines.some((line) => line.includes('"hunks": [0, 1,')),
-    ).toBe(true);
-    expect(
-      lines.some((line) =>
-        line.includes('{ "path": "src/commit-planning/orchestration.ts", "hunks": [0, 1,'),
+      plainLines.some((line) =>
+        line.includes("stats: model-output · responses · 1.26s"),
       ),
     ).toBe(true);
-    expect(lines.some((line) => line.includes('4] }],'))).toBe(true);
+    expect(
+      plainLines.some((line) =>
+        line.includes("usage: 1 req · 444 in · 111 out · 555 tok"),
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.includes('"hunks": [0, 1,'))).toBe(true);
+    expect(
+      lines.some((line) =>
+        line.includes(
+          '{ "path": "src/commit-planning/orchestration.ts", "hunks": [0, 1,',
+        ),
+      ),
+    ).toBe(true);
+    expect(lines.some((line) => line.includes("4] }],"))).toBe(true);
   });
 
   test("summarizes final consolidation traces instead of repeating the full plan payload", () => {
@@ -260,11 +273,13 @@ describe("verbose-output", () => {
         content: JSON.stringify([
           {
             files: [{ path: "src/cli/output-presentation.ts" }],
-            message: "feat(cli): improve execution rendering\n\n- Render execution files vertically.",
+            message:
+              "feat(cli): improve execution rendering\n\n- Render execution files vertically.",
           },
           {
             files: [{ path: "src/git/operations.ts" }],
-            message: "fix(git): return structured commit output\n\n- Capture stdout and stderr for CLI rendering.",
+            message:
+              "fix(git): return structured commit output\n\n- Capture stdout and stderr for CLI rendering.",
           },
         ]),
         durationMs: 1_048,
@@ -283,24 +298,35 @@ describe("verbose-output", () => {
     expect(lines[0]).toContain("Final consolidation #1 trace");
     expect(
       plainLines.some((line) =>
-        line.includes("summary: 2 candidate commits finalized; full plan cards render below"),
+        line.includes(
+          "summary: 2 candidate commits finalized; full plan cards render below",
+        ),
       ),
     ).toBe(true);
     expect(
-      plainLines.some((line) => line.includes("1. feat(cli): improve execution rendering")),
+      plainLines.some((line) =>
+        line.includes("1. feat(cli): improve execution rendering"),
+      ),
     ).toBe(true);
     expect(
-      plainLines.some((line) => line.includes("2. fix(git): return structured commit output")),
+      plainLines.some((line) =>
+        line.includes("2. fix(git): return structured commit output"),
+      ),
     ).toBe(true);
     expect(lines.join("\n")).not.toContain('"files":');
-    expect(lines.join("\n")).not.toContain('"path": "src/cli/output-presentation.ts"');
+    expect(lines.join("\n")).not.toContain(
+      '"path": "src/cli/output-presentation.ts"',
+    );
   });
 
   test("wraps long trace values with continuation aligned to the value column", () => {
     const raw = JSON.stringify([
       {
         files: [
-          { hunks: [0, 1, 2, 4, 5, 8, 9, 10, 13, 14], path: "src/cli/command-line-interface.ts" },
+          {
+            hunks: [0, 1, 2, 4, 5, 8, 9, 10, 13, 14],
+            path: "src/cli/main.ts",
+          },
           { path: "src/cli/verbose-output.ts" },
         ],
         message:
@@ -317,37 +343,37 @@ describe("verbose-output", () => {
 
     expect(
       lines.some((line) =>
-        line.includes('       "message": "feat(cli): add structured verbose and trace AI output'),
+        line.includes(
+          '       "message": "feat(cli): add structured verbose and trace AI output',
+        ),
       ),
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('                  modes\\n\\n- Introduce output modes (off/summary/trace) and'),
+        line.includes(
+          "                  modes\\n\\n- Introduce output modes (off/summary/trace) and",
+        ),
       ),
     ).toBe(true);
-    expect(
-      lines.some((line) => line.includes('       "files": [')),
-    ).toBe(true);
-    expect(
-      lines.some((line) =>
-        line.includes('             {'),
-      ),
-    ).toBe(true);
+    expect(lines.some((line) => line.includes('       "files": ['))).toBe(true);
+    expect(lines.some((line) => line.includes("             {"))).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('               "path": "src/cli/command-line-interface.ts",'),
+        line.includes('               "path": "src/cli/main.ts",'),
       ),
     ).toBe(true);
     expect(
       lines.some((line) =>
-        line.includes('               "hunks": [0, 1, 2, 4, 5, 8, 9, 10, 13, 14]'),
+        line.includes(
+          '               "hunks": [0, 1, 2, 4, 5, 8, 9, 10, 13, 14]',
+        ),
       ),
     ).toBe(true);
   });
 
   test("wraps narrow trace file entries while keeping continuation aligned", () => {
     const raw =
-      '[{"files":[{"path":"src/cli/command-line-interface.ts","hunks":[0,1,2,4,5,6,7,8,9,12,13]}],"message":"feat: raw payload"}]';
+      '[{"files":[{"path":"src/cli/main.ts","hunks":[0,1,2,4,5,6,7,8,9,12,13]}],"message":"feat: raw payload"}]';
     const lines = formatVerboseAiOutputLines(
       {
         content: raw,
@@ -356,20 +382,12 @@ describe("verbose-output", () => {
       { maxWidth: 36, mode: "trace", sequence: 1 },
     );
 
+    expect(lines.some((line) => line.includes("             {"))).toBe(true);
     expect(
-      lines.some((line) =>
-        line.includes('             {'),
-      ),
+      lines.some((line) => line.includes('               "path": "src/cli/')),
     ).toBe(true);
     expect(
-      lines.some((line) =>
-        line.includes('               "path": "src/cli/'),
-      ),
-    ).toBe(true);
-    expect(
-      lines.some((line) =>
-        line.includes('                       command-'),
-      ),
+      lines.some((line) => line.includes('                       main.ts",')),
     ).toBe(true);
     expect(
       lines.some((line) =>
@@ -377,7 +395,7 @@ describe("verbose-output", () => {
       ),
     ).toBe(true);
     expect(
-      lines.some((line) => line.includes('                        9, 12, 13]')),
+      lines.some((line) => line.includes("                        9, 12, 13]")),
     ).toBe(true);
   });
 
@@ -418,8 +436,16 @@ describe("verbose-output", () => {
     const plainLines = getPlainLines(lines);
 
     expect(lines[0]).toContain("Dependency ordering #2");
-    expect(plainLines.some((line) => line.includes("stats: planner-decision · internal · 37ms"))).toBe(true);
-    expect(plainLines.some((line) => line.includes('"decision": "dependency-ordering"'))).toBe(true);
+    expect(
+      plainLines.some((line) =>
+        line.includes("stats: planner-decision · internal · 37ms"),
+      ),
+    ).toBe(true);
+    expect(
+      plainLines.some((line) =>
+        line.includes('"decision": "dependency-ordering"'),
+      ),
+    ).toBe(true);
   });
 
   test("uses separate sequence buckets for different consolidate event families", () => {
@@ -511,10 +537,14 @@ describe("verbose-output", () => {
 
     expect(lines[0]).toContain("Consolidation failed #2 trace");
     expect(lines[0]).toContain("\x1b[31m");
-    expect(lines.some((line) => line.startsWith("\x1b[31m│\x1b[0m"))).toBe(true);
+    expect(lines.some((line) => line.startsWith("\x1b[31m│\x1b[0m"))).toBe(
+      true,
+    );
     expect(lines.some((line) => line.includes('"attemptCount": 2'))).toBe(true);
     expect(
-      lines.some((line) => line.includes('"reason": "retry-exhausted-call-failed"')),
+      lines.some((line) =>
+        line.includes('"reason": "retry-exhausted-call-failed"'),
+      ),
     ).toBe(true);
   });
 
@@ -571,7 +601,9 @@ describe("verbose-output", () => {
     );
 
     expect(lines[0]).toContain("\x1b[33m");
-    expect(lines.some((line) => line.startsWith("\x1b[33m│\x1b[0m"))).toBe(true);
+    expect(lines.some((line) => line.startsWith("\x1b[33m│\x1b[0m"))).toBe(
+      true,
+    );
   });
 
   test("formats sub-millisecond event durations without rounding down to zero", () => {
@@ -591,7 +623,9 @@ describe("verbose-output", () => {
     const plainLines = getPlainLines(lines);
 
     expect(
-      plainLines.some((line) => line.includes("stats: planner-decision · internal · <1ms")),
+      plainLines.some((line) =>
+        line.includes("stats: planner-decision · internal · <1ms"),
+      ),
     ).toBe(true);
   });
 });
