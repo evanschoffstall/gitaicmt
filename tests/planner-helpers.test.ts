@@ -1,4 +1,8 @@
-import { ConfigError, OpenAIError, OpenAITimeoutError } from "../src/application/errors.js";
+import {
+  ConfigError,
+  OpenAIError,
+  OpenAITimeoutError,
+} from "../src/application/errors.js";
 import {
   buildCompletionRequest,
   isNonChatModelError,
@@ -60,11 +64,13 @@ describe("planner helper coverage", () => {
     expect(buildPlaceholderPlanGroupsForEstimate(files, 3)).toEqual([
       {
         files: [{ path: "src/a.ts" }, { path: "src/b.ts" }],
-        message: "feat(plan): change 1\n\n- Cover the staged files grouped into change 1.",
+        message:
+          "feat(plan): change 1\n\n- Cover the staged files grouped into change 1.",
       },
       {
         files: [{ path: "src/c.ts" }, { path: "src/d.ts" }],
-        message: "feat(plan): change 2\n\n- Cover the staged files grouped into change 2.",
+        message:
+          "feat(plan): change 2\n\n- Cover the staged files grouped into change 2.",
       },
     ]);
   });
@@ -108,12 +114,12 @@ describe("client support coverage", () => {
     openai: {
       apiKey: "",
       maxTokens: 512,
-      model: "gpt-4o-mini",
+      model: "gpt-5.3-codex",
       temperature: 0.3,
     },
     performance: {
       cacheEnabled: true,
-      cacheTTLSeconds: 300,
+      maxSavedPlanBundles: 50,
       parallel: true,
       timeoutMs: 15000,
     },
@@ -137,35 +143,45 @@ describe("client support coverage", () => {
   });
 
   test("isNonChatModelError recognizes both supported message variants", () => {
-    expect(isNonChatModelError(new Error("This is not a chat model"))).toBe(true);
+    expect(isNonChatModelError(new Error("This is not a chat model"))).toBe(
+      true,
+    );
     expect(
-      isNonChatModelError("Model is not supported in the v1/chat/completions API"),
+      isNonChatModelError(
+        "Model is not supported in the v1/chat/completions API",
+      ),
     ).toBe(true);
     expect(isNonChatModelError(new Error("different failure"))).toBe(false);
   });
 
   test("readChatContent trims valid responses and rejects empty content", () => {
     expect(
-      readChatContent({ choices: [{ message: { content: "  hello world  " } }] }),
+      readChatContent({
+        choices: [{ message: { content: "  hello world  " } }],
+      }),
     ).toBe("hello world");
-    expect(() => readChatContent({ choices: [{ message: { content: "   " } }] })).toThrow(
-      OpenAIError,
-    );
+    expect(() =>
+      readChatContent({ choices: [{ message: { content: "   " } }] }),
+    ).toThrow(OpenAIError);
   });
 
   test("rethrowTimeoutError upgrades abort and timeout failures", () => {
     const abortError = new Error("aborted");
     abortError.name = "AbortError";
 
-    expect(() => rethrowTimeoutError(abortError, 2500)).toThrow(OpenAITimeoutError);
-    expect(() => rethrowTimeoutError(new Error("socket timeout"), 2500)).toThrow(
+    expect(() => rethrowTimeoutError(abortError, 2500)).toThrow(
       OpenAITimeoutError,
     );
-    expect(() => rethrowTimeoutError(new Error("other failure"), 2500)).not.toThrow();
+    expect(() =>
+      rethrowTimeoutError(new Error("socket timeout"), 2500),
+    ).toThrow(OpenAITimeoutError);
+    expect(() =>
+      rethrowTimeoutError(new Error("other failure"), 2500),
+    ).not.toThrow();
   });
 
   test("supportsTemperature and toOpenAiCallError cover model and error branches", () => {
-    expect(supportsTemperature("gpt-4o-mini")).toBe(true);
+    expect(supportsTemperature("gpt-5.3-codex")).toBe(true);
     expect(supportsTemperature("gpt-5.4")).toBe(false);
     expect(toOpenAiCallError(new Error("boom"))).toBeInstanceOf(OpenAIError);
     expect(toOpenAiCallError("boom")).toBeInstanceOf(OpenAIError);
@@ -175,6 +191,6 @@ describe("client support coverage", () => {
     expect(() => validateModelName("  ")).toThrow(ConfigError);
     expect(() => validateModelName("x".repeat(101))).toThrow(ConfigError);
     expect(() => validateModelName("bad/model")).toThrow(ConfigError);
-    expect(() => validateModelName("gpt-4o-mini")).not.toThrow();
+    expect(() => validateModelName("gpt-5.3-codex")).not.toThrow();
   });
 });
