@@ -2,27 +2,26 @@ import { createHash } from "crypto";
 
 import { loadConfig } from "../application/config/index.js";
 import { CACHE_MAX_SIZE } from "../application/constants.js";
+import { clonePlannedCommits } from "./planned-commit-clone.js";
 
-type GroupingPromptContext =
-  import("./prompt-builders/index.js").GroupingPromptContext;
+type GroupingPromptContext = import("./prompts/index.js").GroupingPromptContext;
 type PlannedCommit = import("./types.js").PlannedCommit;
 
 const cache = new Map<string, { msg: string; ts: number }>();
 const planCache = new Map<string, { plan: PlannedCommit[]; ts: number }>();
 
-export function getCachedMessage(content: string): null | string {
+export function getCachedMessage(
+  content: string,
+  promptMode = "default",
+): null | string {
   const cfg = loadConfig();
   if (!cfg.performance.cacheEnabled) {
     return null;
   }
 
-  const key = cacheKey(content);
+  const key = cacheKey(content, promptMode);
   const entry = cache.get(key);
   if (!entry) {
-    return null;
-  }
-  if (Date.now() - entry.ts > cfg.performance.cacheTTLSeconds * 1000) {
-    cache.delete(key);
     return null;
   }
   return entry.msg;
@@ -39,12 +38,8 @@ export function getCachedPlan(planInput: string): null | PlannedCommit[] {
   if (!entry) {
     return null;
   }
-  if (Date.now() - entry.ts > cfg.performance.cacheTTLSeconds * 1000) {
-    planCache.delete(key);
-    return null;
-  }
 
-  return clonePlan(entry.plan);
+  return clonePlannedCommits(entry.plan);
 }
 
 export function resetAiCache(): void {
@@ -61,6 +56,7 @@ export function serializePlanCacheInput(
     allFiles: promptContext?.allFiles?.map((file) => file.path) ?? [],
     batchCount: promptContext?.batchCount ?? 0,
     batchIndex: promptContext?.batchIndex ?? 0,
+    breakingMode: promptContext?.breakingMode ?? "normal",
     deferFinalization: promptContext?.deferFinalization ?? false,
     files: files.map((file, index) => ({
       content: formattedDiffs[index] ?? "",
@@ -69,13 +65,17 @@ export function serializePlanCacheInput(
   });
 }
 
-export function setCachedMessage(content: string, msg: string): void {
+export function setCachedMessage(
+  content: string,
+  msg: string,
+  promptMode = "default",
+): void {
   const cfg = loadConfig();
   if (!cfg.performance.cacheEnabled) {
     return;
   }
 
-  cache.set(cacheKey(content), { msg, ts: Date.now() });
+  cache.set(cacheKey(content, promptMode), { msg, ts: Date.now() });
   evictOldestCacheEntries();
 }
 
@@ -86,48 +86,22 @@ export function setCachedPlan(planInput: string, plan: PlannedCommit[]): void {
   }
 
   planCache.set(planCacheKey(planInput), {
-    plan: clonePlan(plan),
+    plan: clonePlannedCommits(plan),
     ts: Date.now(),
   });
   evictOldestCacheEntries();
 }
 
-function cacheKey(content: string): string {
+function cacheKey(content: string, promptMode: string): string {
   const cfg = loadConfig();
-  const version = "v3";
+  const version = "v6";
   const configFingerprint = `${cfg.openai.model}|${String(cfg.openai.temperature)}|${String(cfg.commit.conventional)}`;
   return createHash("sha256")
-    .update(version + configFingerprint + content)
+    .update(version + configFingerprint + promptMode + content)
     .digest("hex");
 }
 
-function clonePlan(plan: PlannedCommit[]): PlannedCommit[] {
-  return plan.map((group) => ({
-    files: group.files.map((file) => ({
-      ...(file.hunks ? { hunks: [...file.hunks] } : {}),
-      path: file.path,
-    })),
-    message: group.message,
-  }));
-}
-
 function evictOldestCacheEntries(): void {
-  const cfg = loadConfig();
-  const now = Date.now();
-  const ttlMs = cfg.performance.cacheTTLSeconds * 1000;
-
-  for (const [key, entry] of cache.entries()) {
-    if (now - entry.ts > ttlMs) {
-      cache.delete(key);
-    }
-  }
-
-  for (const [key, entry] of planCache.entries()) {
-    if (now - entry.ts > ttlMs) {
-      planCache.delete(key);
-    }
-  }
-
   evictOverflow(cache);
   evictOverflow(planCache);
 }

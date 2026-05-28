@@ -1,6 +1,4 @@
-import {
-  CLUSTERING_THRESHOLD,
-} from "../application/constants.js";
+import { CLUSTERING_THRESHOLD } from "../application/constants.js";
 import {
   batchFilesForGrouping,
   batchingMakesProgress,
@@ -19,7 +17,7 @@ import {
   buildGroupingSystemPrompt,
   buildGroupingUserPrompt,
   type GroupingPromptContext,
-} from "./prompt-builders/index.js";
+} from "./prompts/index.js";
 
 type Config = import("../application/config/index.js").Config;
 type FileDiff = import("../git/diff.js").FileDiff;
@@ -71,7 +69,13 @@ export function estimatePlanOperationDetails(
   promptContext?: GroupingPromptContext,
   includeFollowUpEstimates = true,
 ): { estimatedGroupCount: number; summary: TokenEstimateSummary } {
-  const trivialEstimate = estimateTrivialPlanDetails(files, formatFileDiff, cfg, helpers);
+  const trivialEstimate = estimateTrivialPlanDetails(
+    files,
+    formatFileDiff,
+    cfg,
+    helpers,
+    promptContext,
+  );
   if (trivialEstimate) {
     return trivialEstimate;
   }
@@ -104,14 +108,15 @@ function appendConsolidationFollowUps(
   cfg: Config,
   helpers: Parameters<typeof estimatePlanOperationDetails>[3],
   summaries: TokenEstimateSummary[],
+  promptContext?: GroupingPromptContext,
 ): void {
   const passCount = estimateLikelyConsolidationPassCount(currentGroups.length);
   for (let pass = 0; pass < passCount; pass++) {
     summaries.push(
       helpers.summarizeRequests([
         helpers.estimateCompletionTokens(
-          buildConsolidationSystemPrompt(),
-          buildConsolidationUserPrompt(files, currentGroups),
+          buildConsolidationSystemPrompt(promptContext),
+          buildConsolidationUserPrompt(files, currentGroups, promptContext),
           helpers.getPlannerResponseTokenBudget(
             cfg.openai.maxTokens,
             "consolidate",
@@ -175,6 +180,7 @@ function estimateBatchedPlanDetails(
         allFiles,
         batchCount: batchContext.batches.length,
         batchIndex,
+        breakingMode: batchContext.promptContext?.breakingMode,
         deferFinalization: true,
       },
       false,
@@ -192,7 +198,13 @@ function estimateBatchedPlanDetails(
   const summaries = [lowerBoundSummary];
   if (includeFollowUpEstimates) {
     summaries.push(
-      ...estimatePlanFollowUpSummaries(allFiles, estimatedGroupCount, cfg, helpers),
+      ...estimatePlanFollowUpSummaries(
+        allFiles,
+        estimatedGroupCount,
+        cfg,
+        helpers,
+        batchContext.promptContext,
+      ),
     );
   }
 
@@ -247,16 +259,25 @@ function estimateDirectPlanDetails(
   const estimatedGroupCount = estimateLikelyPlanGroupCount(files);
   const lowerBoundSummary = helpers.summarizeRequests([
     helpers.estimateCompletionTokens(
-      buildGroupingSystemPrompt(),
+      buildGroupingSystemPrompt(promptContext),
       buildGroupingUserPrompt(files, formatFileDiff, promptContext),
-      helpers.getGroupingResponseTokenBudget(cfg.openai.maxTokens, files.length),
+      helpers.getGroupingResponseTokenBudget(
+        cfg.openai.maxTokens,
+        files.length,
+      ),
     ),
   ]);
   const summary = combineSummaries(
     [
       lowerBoundSummary,
       ...(includeFollowUpEstimates
-        ? estimatePlanFollowUpSummaries(files, estimatedGroupCount, cfg, helpers)
+        ? estimatePlanFollowUpSummaries(
+            files,
+            estimatedGroupCount,
+            cfg,
+            helpers,
+            promptContext,
+          )
         : []),
     ],
     helpers.emptySummary,
@@ -299,6 +320,7 @@ function estimatePlanFollowUpSummaries(
   estimatedGroupCount: number,
   cfg: Config,
   helpers: Parameters<typeof estimatePlanOperationDetails>[3],
+  promptContext?: GroupingPromptContext,
 ): TokenEstimateSummary[] {
   if (estimatedGroupCount <= 1) {
     return [];
@@ -310,8 +332,21 @@ function estimatePlanFollowUpSummaries(
     estimatedGroupCount,
   );
 
-  currentGroups = estimateClusterFollowUp(currentGroups, files, cfg, helpers, summaries);
-  appendConsolidationFollowUps(currentGroups, files, cfg, helpers, summaries);
+  currentGroups = estimateClusterFollowUp(
+    currentGroups,
+    files,
+    cfg,
+    helpers,
+    summaries,
+  );
+  appendConsolidationFollowUps(
+    currentGroups,
+    files,
+    cfg,
+    helpers,
+    summaries,
+    promptContext,
+  );
   return summaries;
 }
 
@@ -320,12 +355,13 @@ function estimateSingleFilePlanDetails(
   formatFileDiff: (f: FileDiff) => string,
   cfg: Config,
   helpers: Parameters<typeof estimatePlanOperationDetails>[3],
+  promptContext: GroupingPromptContext | undefined,
 ): { estimatedGroupCount: number; summary: TokenEstimateSummary } {
   return {
     estimatedGroupCount: 1,
     summary: helpers.summarizeRequests([
       helpers.estimateCompletionTokens(
-        buildGroupingSystemPrompt(),
+        buildGroupingSystemPrompt(promptContext),
         buildGroupingUserPrompt([file], formatFileDiff),
         helpers.getGroupingResponseTokenBudget(cfg.openai.maxTokens, 1),
       ),
@@ -338,12 +374,19 @@ function estimateTrivialPlanDetails(
   formatFileDiff: (f: FileDiff) => string,
   cfg: Config,
   helpers: Parameters<typeof estimatePlanOperationDetails>[3],
+  promptContext: GroupingPromptContext | undefined,
 ): null | { estimatedGroupCount: number; summary: TokenEstimateSummary } {
   if (files.length === 0) {
     return { estimatedGroupCount: 0, summary: helpers.emptySummary() };
   }
   if (files.length === 1 && files[0].hunks.length <= 1) {
-    return estimateSingleFilePlanDetails(files[0], formatFileDiff, cfg, helpers);
+    return estimateSingleFilePlanDetails(
+      files[0],
+      formatFileDiff,
+      cfg,
+      helpers,
+      promptContext,
+    );
   }
   return null;
 }

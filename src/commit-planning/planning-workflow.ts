@@ -1,14 +1,14 @@
-import type { GroupingPromptContext } from "./prompt-builders/index.js";
+import type {
+  BreakingChangeMode,
+  GroupingPromptContext,
+} from "./prompts/index.js";
 import type { PlannedCommit, PlannedCommitFile } from "./types.js";
 
 import { ValidationError } from "../application/errors.js";
 import { formatSelectedFileDiff } from "../git/diff.js";
 import { finalizePlannedGroups, premergeBySubject } from "./grouping/index.js";
 import { emitAiOutputEvent } from "./openai-client.js";
-import {
-  getCachedPlan,
-  serializePlanCacheInput,
-} from "./result-cache.js";
+import { getCachedPlan, serializePlanCacheInput } from "./result-cache.js";
 
 type DiffChunk = import("../git/diff.js").DiffChunk;
 type FileDiff = import("../git/diff.js").FileDiff;

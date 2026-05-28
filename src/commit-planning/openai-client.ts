@@ -1,8 +1,11 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 
 import { loadConfig } from "../application/config/index.js";
 import { ConfigError, OpenAIError } from "../application/errors.js";
-import { type AiOutputFileAliasMap, extractAiOutputFileAliasMap } from "./ai-output-aliases.js";
+import {
+  type AiOutputFileAliasMap,
+  extractAiOutputFileAliasMap,
+} from "./ai-file-paths.js";
 import {
   buildCompletionRequest,
   isNonChatModelError,
@@ -11,7 +14,7 @@ import {
   supportsTemperature,
   toOpenAiCallError,
   validateModelName,
-} from "./client-support.js";
+} from "./client-contracts.js";
 import { extractResponseText } from "./output-text.js";
 import {
   createEmptyTokenUsageByStage,
@@ -92,12 +95,7 @@ export async function complete(
     }
 
     try {
-      return await completeViaResponses(
-        system,
-        user,
-        request,
-        fileAliasMap,
-      );
+      return await completeViaResponses(system, user, request, fileAliasMap);
     } catch (fallbackErr: unknown) {
       rethrowTimeoutError(fallbackErr, request.timeoutMs);
       throw toOpenAiCallError(fallbackErr);
@@ -163,7 +161,7 @@ export function validateOpenAIConfiguration(): void {
   validateModelName(cfg.openai.model);
 }
 
-function client(): OpenAI {
+async function client(): Promise<OpenAI> {
   const cfg = loadConfig();
 
   if (cachedClient && lastApiKey !== cfg.openai.apiKey) {
@@ -178,7 +176,8 @@ function client(): OpenAI {
   validateOpenAIConfiguration();
 
   lastApiKey = cfg.openai.apiKey;
-  cachedClient = new OpenAI({ apiKey: cfg.openai.apiKey });
+  const OpenAIClient = (await import("openai")).default;
+  cachedClient = new OpenAIClient({ apiKey: cfg.openai.apiKey });
   return cachedClient;
 }
 
@@ -195,7 +194,9 @@ async function completeViaChat(
   fileAliasMap: AiOutputFileAliasMap,
 ): Promise<string> {
   const cfg = loadConfig();
-  const res = await client().chat.completions.create(
+  const res = await (
+    await client()
+  ).chat.completions.create(
     {
       max_completion_tokens: request.maxTokens,
       model: cfg.openai.model,
@@ -233,7 +234,9 @@ async function completeViaResponses(
 ): Promise<string> {
   const cfg = loadConfig();
   const startedAtMs = performance.now();
-  const res = await client().responses.create(
+  const res = await (
+    await client()
+  ).responses.create(
     {
       input: user,
       instructions: system,
@@ -320,4 +323,3 @@ function recordTokenUsage(
 
   return usage;
 }
-

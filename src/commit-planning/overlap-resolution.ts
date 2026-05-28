@@ -46,7 +46,12 @@ export function resolveOverlappingCommits(
       continue;
     }
 
-    addResolvedGroup(group.message, survivingFiles, resolvedGroups, acceptedFileRefs);
+    addResolvedGroup(
+      group.message,
+      survivingFiles,
+      resolvedGroups,
+      acceptedFileRefs,
+    );
   }
 
   return resolvedGroups;
@@ -169,7 +174,10 @@ function trimOverlappingFileRef(
     groupIndex++
   ) {
     const acceptedFileRef = acceptedFileRefs[groupIndex]?.get(fileRef.path);
-    if (!acceptedFileRef || !plannedCommitFilesOverlap(acceptedFileRef, remainingFileRef)) {
+    if (
+      !acceptedFileRef ||
+      !plannedCommitFilesOverlap(acceptedFileRef, remainingFileRef)
+    ) {
       continue;
     }
 

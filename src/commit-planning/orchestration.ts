@@ -16,13 +16,24 @@ import {
 import { finalizePlannedGroups } from "./grouping/index.js";
 import { complete, emitAiOutputEvent } from "./openai-client.js";
 import {
+  buildMissedFilesChunk,
+  buildPlanCacheContext,
+  collectMissedPlannedFiles,
+  finalizePlannedCommitGroups,
+  getEmittedCachedPlan,
+  parseGroupingResponse,
+  validatePlanRecursionDepth,
+} from "./planning-workflow.js";
+import {
+  type BreakingChangeMode,
   buildGroupingSystemPrompt,
   buildGroupingUserPrompt,
   buildMergePrompt,
   buildSystemPrompt,
   buildUserPrompt,
   type GroupingPromptContext,
-} from "./prompt-builders/index.js";
+  resolveBreakingChangeMode,
+} from "./prompts/index.js";
 import { validateAndNormalizeGrouping } from "./response-validation.js";
 import {
   getCachedMessage,
@@ -31,18 +42,13 @@ import {
 } from "./result-cache.js";
 import { getGroupingResponseTokenBudget } from "./token-estimation.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./types.js";
-import {
-  buildMissedFilesChunk,
-  buildPlanCacheContext,
-  collectMissedPlannedFiles,
-  finalizePlannedCommitGroups,
-  getEmittedCachedPlan,
-  parseGroupingResponse,
-  validatePlanRecursionDepth,
-} from "./workflow-support.js";
 
+interface CommitGenerationOptions {
+  breakingMode?: BreakingChangeMode;
+}
 type DiffChunk = import("../git/diff.js").DiffChunk;
 type DiffStats = import("../git/diff.js").DiffStats;
+
 type FileDiff = import("../git/diff.js").FileDiff;
 
 export {
