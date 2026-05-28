@@ -19,7 +19,9 @@ export function buildMissedFilesChunk(
   formatFileDiff: (f: FileDiff) => string,
 ): DiffChunk {
   const content = missedFiles
-    .map((missedFile) => formatMissedFileDiff(missedFile, fileByPath, formatFileDiff))
+    .map((missedFile) =>
+      formatMissedFileDiff(missedFile, fileByPath, formatFileDiff),
+    )
     .join("\n");
 
   return {
@@ -39,7 +41,11 @@ export function buildPlanCacheContext(
 
   return {
     formattedDiffs,
-    planCacheInput: serializePlanCacheInput(files, formattedDiffs, promptContext),
+    planCacheInput: serializePlanCacheInput(
+      files,
+      formattedDiffs,
+      promptContext,
+    ),
   };
 }
 
@@ -48,7 +54,10 @@ export function collectMissedPlannedFiles(
   files: FileDiff[],
   fileByPath: Map<string, FileDiff>,
 ): PlannedCommitFile[] {
-  const { assignedFiles, assignedHunks } = collectAssignedPlanCoverage(groups, fileByPath);
+  const { assignedFiles, assignedHunks } = collectAssignedPlanCoverage(
+    groups,
+    fileByPath,
+  );
   const missedFiles: PlannedCommitFile[] = [];
 
   for (const file of files) {
@@ -61,7 +70,11 @@ export function collectMissedPlannedFiles(
     }
 
     const assigned = assignedHunks.get(file.path);
-    if (!assigned || assigned.size === 0 || assigned.size >= file.hunks.length) {
+    if (
+      !assigned ||
+      assigned.size === 0 ||
+      assigned.size >= file.hunks.length
+    ) {
       continue;
     }
 
@@ -128,9 +141,7 @@ export function getEmittedCachedPlan(
 }
 
 export function parseGroupingResponse(raw: string): unknown {
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/m, "")
-    .replace(/\s*```$/m, "");
+  const cleaned = raw.replace(/^```(?:json)?\s*/m, "").replace(/\s*```$/m, "");
 
   try {
     return JSON.parse(cleaned);
@@ -174,7 +185,9 @@ function collectAssignedPlanCoverage(
 
       const file = fileByPath.get(fileRef.path);
       if (!file) {
-        throw new ValidationError(`Unknown file in commit group: ${fileRef.path}`);
+        throw new ValidationError(
+          `Unknown file in commit group: ${fileRef.path}`,
+        );
       }
 
       if (fileRef.hunks) {
