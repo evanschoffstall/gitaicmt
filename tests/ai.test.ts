@@ -1,4 +1,5 @@
 import { resetConfigCache } from "../src/application/config/index.js";
+import { validateAndNormalizeGrouping } from "../src/commit-planning/response-validation.js";
 import { resetAiCache } from "../src/commit-planning/result-cache.js";
 import { formatFileDiff } from "../src/git/diff.js";
 
@@ -96,7 +97,8 @@ describe("ai module", () => {
 
   describe("generateForChunks", () => {
     test("returns fallback for empty chunks", async () => {
-      const { generateForChunks } = await import("../src/commit-planning/orchestration.js");
+      const { generateForChunks } =
+        await import("../src/commit-planning/orchestration.js");
       const stats = makeStats(0, 0, 0, 0);
       const result = await generateForChunks([], stats);
       expect(result).toBe(
@@ -112,7 +114,8 @@ describe("ai module", () => {
 
   describe("planCommits", () => {
     test("is exported as a function", async () => {
-      const { planCommits } = await import("../src/commit-planning/orchestration.js");
+      const { planCommits } =
+        await import("../src/commit-planning/orchestration.js");
       expect(typeof planCommits).toBe("function");
     });
   });
@@ -121,7 +124,8 @@ describe("ai module", () => {
 
   describe("generateForChunk", () => {
     test("is exported as a function", async () => {
-      const { generateForChunk } = await import("../src/commit-planning/orchestration.js");
+      const { generateForChunk } =
+        await import("../src/commit-planning/orchestration.js");
       expect(typeof generateForChunk).toBe("function");
     });
   });
@@ -135,7 +139,8 @@ describe("ai module - mock API tests", () => {
   test("generateForChunks merges multiple chunks", async () => {
     // We test the logic path — with mocked completions
     // The important thing is that it calls the API and returns a string
-    const { generateForChunks } = await import("../src/commit-planning/orchestration.js");
+    const { generateForChunks } =
+      await import("../src/commit-planning/orchestration.js");
 
     // Single chunk should go through generateForChunk
     const chunk = makeChunk(0, ["file.ts"], "+hello world");
@@ -154,7 +159,8 @@ describe("ai module - mock API tests", () => {
   });
 
   test("planCommits handles single file without grouping API call", async () => {
-    const { planCommits } = await import("../src/commit-planning/orchestration.js");
+    const { planCommits } =
+      await import("../src/commit-planning/orchestration.js");
     const file = makeFileDiff("src/app.ts", 5, 2);
     const formatFn = (f: FileDiff) =>
       `--- ${f.path}\n+++ ${f.path}\n${f.hunks[0].lines.join("\n")}`;
@@ -171,7 +177,8 @@ describe("ai module - mock API tests", () => {
   });
 
   test("planCommits with multiple files attempts grouping", async () => {
-    const { planCommits } = await import("../src/commit-planning/orchestration.js");
+    const { planCommits } =
+      await import("../src/commit-planning/orchestration.js");
     const files = [
       makeFileDiff("src/a.ts", 3, 1),
       makeFileDiff("src/b.ts", 5, 0),
@@ -250,20 +257,23 @@ function makeMultiHunkFileDiff(
 
 describe("grouping system prompt", () => {
   test("describes cross-file hunk wiring as non-optional", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("THIS IS NOT OPTIONAL");
   });
 
   test("instructs AI to scan hunk map before reading diffs", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("STEP 1");
     expect(prompt).toContain("HUNK REFERENCE MAP");
   });
 
   test("includes concrete cross-file linking examples (type in A, used in B)", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("EXAMPLE 1");
     expect(prompt).toContain("EXAMPLE 2");
@@ -273,7 +283,8 @@ describe("grouping system prompt", () => {
   });
 
   test("examples show JSON with per-file hunks arrays", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain('"hunks"');
     expect(prompt).toContain('"path"');
@@ -281,13 +292,15 @@ describe("grouping system prompt", () => {
   });
 
   test("explains that every hunk must appear in exactly one commit", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("exactly one commit");
   });
 
   test("instructs linked hunks from different files to go in same commit", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     // STEP 2 wiring section
     expect(prompt).toContain("STEP 2");
@@ -295,27 +308,31 @@ describe("grouping system prompt", () => {
   });
 
   test("instructs unrelated hunks in same file to go in different commits", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("different commits");
   });
 
   test("shows wrong vs right example for hunk precision", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("WRONG");
     expect(prompt).toContain("RIGHT");
   });
 
   test("states any combination of files and hunks is valid", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("ANY COMBINATION IS VALID");
     expect(prompt).toContain("NO restriction");
   });
 
   test("includes final checklist before output", async () => {
-    const { buildGroupingSystemPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingSystemPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const prompt = buildGroupingSystemPrompt();
     expect(prompt).toContain("FINAL CHECKLIST");
   });
@@ -329,7 +346,8 @@ describe("grouping user prompt", () => {
     f.hunks.map((h) => h.header + "\n" + h.lines.join("\n")).join("\n");
 
   test("includes HUNK REFERENCE MAP section", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/parser.ts", [
       { header: "@@ -1,3 +1,5 @@", lines: ["+const x = 1;"] },
       { header: "@@ -20,2 +22,4 @@", lines: ["+const y = 2;"] },
@@ -338,8 +356,25 @@ describe("grouping user prompt", () => {
     expect(prompt).toContain("HUNK REFERENCE MAP");
   });
 
+  test("includes default breaking authoring guidance without sensitivity mode", async () => {
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
+    const file = makeMultiHunkFileDiff("src/cli/options.ts", [
+      { header: "@@ -1,3 +1,5 @@", lines: ["+export const flag = true;"] },
+    ]);
+
+    const prompt = buildGroupingUserPrompt([file], formatFn);
+
+    expect(prompt).toContain("Breaking-change authoring is available");
+    expect(prompt).toContain("supported public contract");
+    expect(prompt).toContain("authored BREAKING CHANGE: footer");
+    expect(prompt).not.toContain("BREAKING SENSITIVITY MODE");
+    expect(prompt).not.toContain("--breaking");
+  });
+
   test("lists each hunk with its index in the reference map", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/handler.ts", [
       {
         header: "@@ -5,3 +5,6 @@",
@@ -358,7 +393,8 @@ describe("grouping user prompt", () => {
   });
 
   test("reference map lists multiple files each with their hunks", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const fileA = makeMultiHunkFileDiff("src/errors.ts", [
       {
         header: "@@ -1,2 +1,5 @@",
@@ -385,7 +421,8 @@ describe("grouping user prompt", () => {
   });
 
   test("labels hunks in FULL DIFFS section too", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/models.ts", [
       { header: "@@ -1,3 +1,4 @@", lines: ["+createdAt: Date"] },
       { header: "@@ -50,2 +51,3 @@", lines: ["-oldField: string"] },
@@ -399,7 +436,8 @@ describe("grouping user prompt", () => {
   });
 
   test("uses a stable file legend without heuristic categories", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const srcFile = makeMultiHunkFileDiff("src/app.ts", [
       { header: "@@ -1,1 +1,2 @@", lines: ["+const x = 1;"] },
     ]);
@@ -416,7 +454,8 @@ describe("grouping user prompt", () => {
   });
 
   test("strips repeated file headers from diff bodies once files are aliased", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/models.ts", [
       { header: "@@ -1,3 +1,4 @@", lines: ["+createdAt: Date"] },
     ]);
@@ -429,7 +468,8 @@ describe("grouping user prompt", () => {
   });
 
   test("includes overall changeset context for batched prompts", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const batchFile = makeFileDiff("src/app.ts", 1, 0);
     const siblingFile = makeFileDiff("tests/app.test.ts", 1, 0);
     const rootFile = makeFileDiff("package.json", 1, 0);
@@ -450,9 +490,14 @@ describe("grouping user prompt", () => {
   });
 
   test("does not inject project cue summaries into grouping prompts", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const cacheFile = makeFileDiff("src/commit-planning/result-cache.ts", 1, 0);
-    const tokensFile = makeFileDiff("src/commit-planning/token-estimation.ts", 1, 0);
+    const tokensFile = makeFileDiff(
+      "src/commit-planning/token-estimation.ts",
+      1,
+      0,
+    );
     const coverageFile = makeFileDiff("tests/ai-coverage.test.ts", 1, 0);
 
     const prompt = buildGroupingUserPrompt(
@@ -466,7 +511,8 @@ describe("grouping user prompt", () => {
   });
 
   test("keeps rename-only metadata in FULL DIFFS for file-level changes", async () => {
-    const { buildGroupingUserPrompt } = await import("../src/commit-planning/orchestration.js");
+    const { buildGroupingUserPrompt } =
+      await import("../src/commit-planning/orchestration.js");
     const file: FileDiff = {
       additions: 0,
       deletions: 0,
@@ -495,7 +541,7 @@ describe("grouping user prompt", () => {
 describe("consolidation user prompt", () => {
   test("includes selected diff previews for grouped files", async () => {
     const { buildConsolidationUserPrompt } =
-      await import("../src/commit-planning/prompt-builders/index.js");
+      await import("../src/commit-planning/prompts/index.js");
     const fileA = makeMultiHunkFileDiff("src/app.ts", [
       {
         header: "@@ -1,3 +1,5 @@",
@@ -536,7 +582,7 @@ describe("consolidation user prompt", () => {
 
   test("omits diff previews for low-ambiguity commits", async () => {
     const { buildConsolidationUserPrompt } =
-      await import("../src/commit-planning/prompt-builders/index.js");
+      await import("../src/commit-planning/prompts/index.js");
     const featureFile = makeMultiHunkFileDiff("src/auth.ts", [
       {
         header: "@@ -1,1 +1,3 @@",
@@ -572,7 +618,7 @@ describe("consolidation user prompt", () => {
 
   test("prefers absorbing narrow support commits into the owning change", async () => {
     const { buildConsolidationSystemPrompt, buildConsolidationUserPrompt } =
-      await import("../src/commit-planning/prompt-builders/index.js");
+      await import("../src/commit-planning/prompts/index.js");
     const fileA = makeMultiHunkFileDiff("src/signup.ts", [
       {
         header: "@@ -1,2 +1,5 @@",
@@ -652,7 +698,7 @@ describe("consolidation user prompt", () => {
 
   test("allows non-adjacent merges and collapses style sweep commits", async () => {
     const { buildConsolidationSystemPrompt, buildConsolidationUserPrompt } =
-      await import("../src/commit-planning/prompt-builders/index.js");
+      await import("../src/commit-planning/prompts/index.js");
 
     const systemPrompt = buildConsolidationSystemPrompt();
 
@@ -709,7 +755,7 @@ describe("consolidation user prompt", () => {
 describe("cluster prompts", () => {
   test("buildClusterSystemPrompt instructs collapsing style sweeps into one cluster", async () => {
     const { buildClusterSystemPrompt } =
-      await import("../src/commit-planning/prompt-builders/index.js");
+      await import("../src/commit-planning/prompts/index.js");
     const prompt = buildClusterSystemPrompt();
     expect(prompt).toContain("style, import-order, formatting");
     expect(prompt).toContain("ONE cluster");
@@ -724,7 +770,7 @@ describe("cluster prompts", () => {
 
   test("buildClusterUserPrompt lists all commit subjects by index", async () => {
     const { buildClusterUserPrompt } =
-      await import("../src/commit-planning/prompt-builders/index.js");
+      await import("../src/commit-planning/prompts/index.js");
     const groups = [
       {
         files: [{ path: "src/a.ts" }],
@@ -758,7 +804,8 @@ describe("cluster prompts", () => {
 
 describe("deterministic pre-merge", () => {
   test("parseSubjectWords extracts type and significant words", async () => {
-    const { parseSubjectWords } = await import("../src/commit-planning/grouping/index.js");
+    const { parseSubjectWords } =
+      await import("../src/commit-planning/grouping/index.js");
     const result = parseSubjectWords(
       "style(dashboard): normalize import ordering and spacing",
     );
@@ -772,14 +819,16 @@ describe("deterministic pre-merge", () => {
   });
 
   test("parseSubjectWords handles messages without conventional prefix", async () => {
-    const { parseSubjectWords } = await import("../src/commit-planning/grouping/index.js");
+    const { parseSubjectWords } =
+      await import("../src/commit-planning/grouping/index.js");
     const result = parseSubjectWords("some random message");
     expect(result.type).toBe("");
     expect(result.words.size).toBeGreaterThan(0);
   });
 
   test("wordsRelated matches inflected forms via prefix", async () => {
-    const { wordsRelated } = await import("../src/commit-planning/grouping/index.js");
+    const { wordsRelated } =
+      await import("../src/commit-planning/grouping/index.js");
     expect(wordsRelated("import", "imports")).toBe(true);
     expect(wordsRelated("order", "ordering")).toBe(true);
     expect(wordsRelated("format", "formatting")).toBe(true);
@@ -811,7 +860,8 @@ describe("deterministic pre-merge", () => {
   });
 
   test("premergeBySubject merges style commits with similar descriptions", async () => {
-    const { premergeBySubject } = await import("../src/commit-planning/grouping/index.js");
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
     const fileByPath = new Map([
       ["src/a.ts", makeFileDiff("src/a.ts", 1, 0)],
       ["src/b.ts", makeFileDiff("src/b.ts", 1, 0)],
@@ -846,7 +896,8 @@ describe("deterministic pre-merge", () => {
   });
 
   test("premergeBySubject uses transitive closure", async () => {
-    const { premergeBySubject } = await import("../src/commit-planning/grouping/index.js");
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
     const fileByPath = new Map([
       ["a.ts", makeFileDiff("a.ts", 1, 0)],
       ["b.ts", makeFileDiff("b.ts", 1, 0)],
@@ -873,8 +924,443 @@ describe("deterministic pre-merge", () => {
     expect(result[0].files).toHaveLength(3);
   });
 
+  test("premergeBySubject merges deletion-dominant cleanup into same-owner refactors", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const deletedPromptModule = {
+      ...makeFileDiff("src/commit-planning/prompts/cluster-prompts.ts", 0, 1),
+      status: "deleted" as const,
+    };
+    const deletedGenerationModule = {
+      ...makeFileDiff(
+        "src/commit-planning/prompts/generation-prompts.ts",
+        0,
+        1,
+      ),
+      status: "deleted" as const,
+    };
+    const fileByPath = new Map([
+      [
+        "src/commit-planning/prompts/rules/formatting.ts",
+        makeFileDiff("src/commit-planning/prompts/rules/formatting.ts", 1, 0),
+      ],
+      [
+        "src/commit-planning/prompts/rules/semantic-planning.ts",
+        makeFileDiff(
+          "src/commit-planning/prompts/rules/semantic-planning.ts",
+          1,
+          0,
+        ),
+      ],
+      [
+        "src/commit-planning/token-estimation.ts",
+        makeFileDiff("src/commit-planning/token-estimation.ts", 1, 0),
+      ],
+      [deletedGenerationModule.path, deletedGenerationModule],
+      [deletedPromptModule.path, deletedPromptModule],
+    ]);
+    const groups = [
+      {
+        files: [
+          { path: deletedPromptModule.path },
+          { path: deletedGenerationModule.path },
+        ],
+        message:
+          "refactor(prompts): remove legacy prompt modules\n\n- Remove legacy prompt entrypoints.",
+      },
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/formatting.ts",
+          },
+          {
+            path: "src/commit-planning/prompts/rules/semantic-planning.ts",
+          },
+        ],
+        message:
+          "refactor(prompt-rules): split reusable planning rules\n\n- Extract shared planning rules.",
+      },
+      {
+        files: [{ path: "src/commit-planning/token-estimation.ts" }],
+        message:
+          "refactor(commit-planning): align token estimation types\n\n- Thread renamed option types.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toHaveLength(2);
+    const mergedPromptBuilders = result.find((group) =>
+      group.files.some((file) => file.path === deletedPromptModule.path),
+    );
+    expect(mergedPromptBuilders?.files).toHaveLength(4);
+    expect(mergedPromptBuilders?.files.map((file) => file.path).sort()).toEqual(
+      [
+        "src/commit-planning/prompts/cluster-prompts.ts",
+        "src/commit-planning/prompts/generation-prompts.ts",
+        "src/commit-planning/prompts/rules/formatting.ts",
+        "src/commit-planning/prompts/rules/semantic-planning.ts",
+      ],
+    );
+  });
+
+  test("premergeBySubject merges same-feature refactor follow-ups that share renamed identifiers", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const promptBuilderRuleFile = {
+      ...makeFileDiff(
+        "src/commit-planning/prompts/rules/commit/message.ts",
+        1,
+        1,
+      ),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 1,
+          header: "@@ -1,1 +1,1 @@",
+          lines: [
+            "-export interface CommitFormatInstructionOptions {}",
+            "+export interface CommitMessageRuleOptions {}",
+          ],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const responseValidationFile = {
+      ...makeFileDiff("src/commit-planning/response-validation.ts", 1, 1),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 1,
+          header: "@@ -1,1 +1,1 @@",
+          lines: [
+            "-type CommitFormatInstructionOptions = import('./prompts/index.js').CommitFormatInstructionOptions;",
+            "+type CommitMessageRuleOptions = import('./prompts/index.js').CommitMessageRuleOptions;",
+          ],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const groupingStabilityFile = {
+      ...makeFileDiff(
+        "src/commit-planning/grouping/group/group-stability.ts",
+        1,
+        1,
+      ),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 1,
+          header: "@@ -1,1 +1,1 @@",
+          lines: [
+            "-type CommitFormatInstructionOptions = import('../../prompts/index.js').CommitFormatInstructionOptions;",
+            "+type CommitMessageRuleOptions = import('../../prompts/index.js').CommitMessageRuleOptions;",
+          ],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const fileByPath = new Map([
+      [groupingStabilityFile.path, groupingStabilityFile],
+      [promptBuilderRuleFile.path, promptBuilderRuleFile],
+      [responseValidationFile.path, responseValidationFile],
+    ]);
+    const groups = [
+      {
+        files: [
+          { path: promptBuilderRuleFile.path },
+          { path: responseValidationFile.path },
+        ],
+        message:
+          "refactor(prompts): rename commit instruction options\n\n- Rename shared prompt option types.",
+      },
+      {
+        files: [{ path: groupingStabilityFile.path }],
+        message:
+          "refactor(grouping): align message rule option plumbing\n\n- Propagate the renamed option type into grouping stability.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.files).toHaveLength(3);
+  });
+
+  test("premergeBySubject keeps same-feature refactors separate without shared identifiers", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const promptBuilderRuleFile = {
+      ...makeFileDiff(
+        "src/commit-planning/prompts/rules/commit/message.ts",
+        1,
+        1,
+      ),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 1,
+          header: "@@ -1,1 +1,1 @@",
+          lines: [
+            "-export interface CommitFormatInstructionOptions {}",
+            "+export interface CommitMessageRuleOptions {}",
+          ],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const tokenEstimationFile = {
+      ...makeFileDiff("src/commit-planning/token-estimation.ts", 1, 1),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 1,
+          header: "@@ -1,1 +1,1 @@",
+          lines: ["-const previousBudget = 1;", "+const bufferedBudget = 2;"],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const groupingStabilityFile = {
+      ...makeFileDiff(
+        "src/commit-planning/grouping/group/group-stability.ts",
+        1,
+        1,
+      ),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 1,
+          header: "@@ -1,1 +1,1 @@",
+          lines: [
+            "-const previousStage = 'cluster';",
+            "+const settledStage = 'cluster';",
+          ],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const fileByPath = new Map([
+      [groupingStabilityFile.path, groupingStabilityFile],
+      [promptBuilderRuleFile.path, promptBuilderRuleFile],
+      [tokenEstimationFile.path, tokenEstimationFile],
+    ]);
+    const groups = [
+      {
+        files: [
+          { path: promptBuilderRuleFile.path },
+          { path: tokenEstimationFile.path },
+        ],
+        message:
+          "refactor(prompts): rename prompt option helpers\n\n- Align prompt option names.",
+      },
+      {
+        files: [{ path: groupingStabilityFile.path }],
+        message:
+          "refactor(grouping): tidy stage naming\n\n- Rename local stage variables.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toHaveLength(2);
+  });
+
+  test("premergeBySubject keeps same-file neighboring hunks separate when their identifiers diverge", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const orchestrationFile = {
+      ...makeFileDiff("src/commit-planning/orchestration.ts", 2, 0),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 0,
+          header: "@@ -1,0 +1,1 @@",
+          lines: ["+recordStageTokens(stage, usage)"],
+          startNew: 1,
+          startOld: 1,
+        },
+        {
+          countNew: 1,
+          countOld: 0,
+          header: "@@ -10,0 +10,1 @@",
+          lines: ["+estimatePlanningStageTokens(batchCount)"],
+          startNew: 10,
+          startOld: 10,
+        },
+      ],
+    };
+    const openAiClientFile = {
+      ...makeFileDiff("src/commit-planning/openai-client.ts", 1, 0),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 0,
+          header: "@@ -1,0 +1,1 @@",
+          lines: ["+recordStageTokens(stage, usage)"],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const tokenEstimationFile = {
+      ...makeFileDiff("src/commit-planning/token-estimation.ts", 1, 0),
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 0,
+          header: "@@ -1,0 +1,1 @@",
+          lines: ["+estimatePlanningStageTokens(batchCount)"],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+    };
+    const fileByPath = new Map([
+      [openAiClientFile.path, openAiClientFile],
+      [orchestrationFile.path, orchestrationFile],
+      [tokenEstimationFile.path, tokenEstimationFile],
+    ]);
+    const groups = [
+      {
+        files: [
+          { path: openAiClientFile.path },
+          { hunks: [0], path: orchestrationFile.path },
+        ],
+        message:
+          "feat(ai-client): track stage telemetry\n\n- Record per-stage token usage and output observer events.",
+      },
+      {
+        files: [
+          { path: tokenEstimationFile.path },
+          { hunks: [1], path: orchestrationFile.path },
+        ],
+        message:
+          "feat(ai-pipeline): estimate planning costs\n\n- Model multi-pass planning request sizes before execution.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toEqual(groups);
+  });
+
+  test("premergeBySubject merges small test follow-ups into the owning prompt refactor", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const promptBuilderRuleFile = makeFileDiff(
+      "src/commit-planning/prompts/rules/commit/message.ts",
+      1,
+      0,
+    );
+    const promptBuilderIndexFile = makeFileDiff(
+      "src/commit-planning/prompts/rules/commit/index.ts",
+      1,
+      0,
+    );
+    const commitMessagesTestFile = makeFileDiff(
+      "tests/commit-messages.test.ts",
+      1,
+      0,
+    );
+    const fileByPath = new Map([
+      [commitMessagesTestFile.path, commitMessagesTestFile],
+      [promptBuilderIndexFile.path, promptBuilderIndexFile],
+      [promptBuilderRuleFile.path, promptBuilderRuleFile],
+    ]);
+    const groups = [
+      {
+        files: [
+          { path: promptBuilderRuleFile.path },
+          { path: promptBuilderIndexFile.path },
+        ],
+        message:
+          "refactor(prompts): split commit message rule exports\n\n- Move commit rule exports under a dedicated module.",
+      },
+      {
+        files: [{ path: commitMessagesTestFile.path }],
+        message:
+          "test(commit-messages): align rule tests with renamed prompt exports\n\n- Update renamed rule export coverage.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.files).toHaveLength(3);
+  });
+
+  test("premergeBySubject keeps unrelated validation tests separate from path resolver fixes", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const pathResolverFile = makeFileDiff(
+      "src/commit-planning/path/resolver.ts",
+      1,
+      0,
+    );
+    const responseValidationTestFile = makeFileDiff(
+      "tests/response-validation.test.ts",
+      1,
+      0,
+    );
+    const fileByPath = new Map([
+      [pathResolverFile.path, pathResolverFile],
+      [responseValidationTestFile.path, responseValidationTestFile],
+    ]);
+    const groups = [
+      {
+        files: [{ path: pathResolverFile.path }],
+        message:
+          "fix(path): resolve unique basenames with directory checks\n\n- Recover canonical paths safely.",
+      },
+      {
+        files: [{ path: responseValidationTestFile.path }],
+        message:
+          "test(response-validation): cover dropped-directory path normalization\n\n- Add normalization regression coverage.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toHaveLength(2);
+  });
+
+  test("premergeBySubject does not treat generic placeholder filenames as test follow-up ownership", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const implementationFile = makeFileDiff("file-0.ts", 1, 0);
+    const testFile = makeFileDiff("file-1.test.ts", 1, 0);
+    const fileByPath = new Map([
+      [implementationFile.path, implementationFile],
+      [testFile.path, testFile],
+    ]);
+    const groups = [
+      {
+        files: [{ path: implementationFile.path }],
+        message:
+          "feat(verbose-output): render planner trace labels\n\n- Add human-readable planner decision titles.",
+      },
+      {
+        files: [{ path: testFile.path }],
+        message:
+          "test(planner-fallback): cover invalid fallback reasons\n\n- Verify fallback notices stay precise.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toHaveLength(2);
+  });
+
   test("premergeBySubject does not merge different types", async () => {
-    const { premergeBySubject } = await import("../src/commit-planning/grouping/index.js");
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
     const fileByPath = new Map([
       ["a.ts", makeFileDiff("a.ts", 1, 0)],
       ["b.ts", makeFileDiff("b.ts", 1, 0)],
@@ -892,6 +1378,390 @@ describe("deterministic pre-merge", () => {
     const result = premergeBySubject(groups, fileByPath);
     // Different types → stay separate
     expect(result).toHaveLength(2);
+  });
+
+  test("premergeBySubject does not merge unrelated planner modules on shared vocabulary", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+
+    // Simulate high word overlap planner subjects without a real anchor.
+    // All are "feat(commit-planning)" with shared words like "add", "planner", etc.
+    // but they have different ownership roots.
+    const fileByPath = new Map([
+      [
+        "src/commit-planning/grouping/support-attachment/scoring.ts",
+        makeFileDiff(
+          "src/commit-planning/grouping/support-attachment/scoring.ts",
+          1,
+          0,
+        ),
+      ],
+      [
+        "src/commit-planning/path/resolver.ts",
+        makeFileDiff("src/commit-planning/path/resolver.ts", 1, 0),
+      ],
+      [
+        "src/commit-planning/prompts/rules/commit/generation.ts",
+        makeFileDiff(
+          "src/commit-planning/prompts/rules/commit/generation.ts",
+          1,
+          0,
+        ),
+      ],
+    ]);
+    const groups = [
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/commit/generation.ts",
+          },
+        ],
+        message:
+          "feat(commit-planning): add prompt rule builders\n\n- Extract reusable prompt rules for commit generation.",
+      },
+      {
+        files: [{ path: "src/commit-planning/path/resolver.ts" }],
+        message:
+          "feat(commit-planning): add path resolution helpers\n\n- Support flattened planner file paths.",
+      },
+      {
+        files: [
+          {
+            path: "src/commit-planning/grouping/support-attachment/scoring.ts",
+          },
+        ],
+        message:
+          "feat(commit-planning): add support attachment scoring\n\n- Score ownership for support commit attachment.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    // These must NOT merge despite all being "feat(commit-planning)"
+    // because they lack a real owner or scope anchor:
+    // - prompts/rules/commit is a different ownership root from path
+    // - path is a different ownership root from grouping/support-attachment
+    expect(result).toHaveLength(3);
+  });
+
+  test("premergeBySubject does not merge prompt rules with prompt module organization", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+
+    // Simulate the prompt-rule vs prompt-module umbrella from the trace.
+    // Both touch prompts, but they are distinct rollouts: one adds rules, one reorganizes.
+    const fileByPath = new Map([
+      [
+        "src/commit-planning/prompt-builders/cluster-prompts.ts",
+        makeFileDiff(
+          "src/commit-planning/prompt-builders/cluster-prompts.ts",
+          1,
+          0,
+        ),
+      ],
+      [
+        "src/commit-planning/prompts/context/diff-context.ts",
+        makeFileDiff(
+          "src/commit-planning/prompts/context/diff-context.ts",
+          1,
+          0,
+        ),
+      ],
+      [
+        "src/commit-planning/prompts/rules/commit/generation.ts",
+        makeFileDiff(
+          "src/commit-planning/prompts/rules/commit/generation.ts",
+          1,
+          0,
+        ),
+      ],
+      [
+        "src/commit-planning/prompts/rules/hunk-grouping.ts",
+        makeFileDiff(
+          "src/commit-planning/prompts/rules/hunk-grouping.ts",
+          1,
+          0,
+        ),
+      ],
+    ]);
+    const groups = [
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/commit/generation.ts",
+          },
+          {
+            path: "src/commit-planning/prompts/rules/hunk-grouping.ts",
+          },
+        ],
+        message:
+          "feat(commit-planning): add reusable prompt rule builders\n\n- Extract shared commit-message and grouping guidance into dedicated rule modules.",
+      },
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompt-builders/cluster-prompts.ts",
+          },
+          {
+            path: "src/commit-planning/prompts/context/diff-context.ts",
+          },
+        ],
+        message:
+          "refactor(prompts): move planner prompts under the prompts module\n\n- Replace the prompt-builders entrypoints with the new prompts module surface.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    // These should NOT merge: distinct rollouts despite shared prompt vocabulary.
+    // One adds new rules, the other reorganizes existing builders.
+    expect(result).toHaveLength(2);
+  });
+
+  test("premergeBySubject does not merge grouping internals with path features", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+
+    // Simulate grouping repartition vs path resolution: different modules, different purposes.
+    const fileByPath = new Map([
+      [
+        "src/commit-planning/grouping/repartition.ts",
+        makeFileDiff("src/commit-planning/grouping/repartition.ts", 1, 0),
+      ],
+      [
+        "src/commit-planning/path/resolver.ts",
+        makeFileDiff("src/commit-planning/path/resolver.ts", 1, 0),
+      ],
+    ]);
+    const groups = [
+      {
+        files: [
+          {
+            path: "src/commit-planning/grouping/repartition.ts",
+          },
+        ],
+        message:
+          "fix(grouping): split broad consolidations by owner and style area\n\n- Add path ownership helpers so large implementation clusters can be broken apart by dominant source subtree.",
+      },
+      {
+        files: [{ path: "src/commit-planning/path/resolver.ts" }],
+        message:
+          "feat(path): resolve flattened and aliased planner file paths\n\n- Add project, absolute, and virtual nested-path aliases.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    // These must NOT merge: different ownership roots (grouping vs path).
+    expect(result).toHaveLength(2);
+  });
+
+  test("premergeBySubject merges same-scope prompts work", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+
+    // Same scope (prompts) + high word overlap + same owner → safe premerge.
+    const fileByPath = new Map([
+      [
+        "src/commit-planning/prompts/rules/commit/generation.ts",
+        makeFileDiff(
+          "src/commit-planning/prompts/rules/commit/generation.ts",
+          1,
+          0,
+        ),
+      ],
+      [
+        "src/commit-planning/prompts/rules/commit/index.ts",
+        makeFileDiff("src/commit-planning/prompts/rules/commit/index.ts", 1, 0),
+      ],
+    ]);
+    const groups = [
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/commit/generation.ts",
+          },
+        ],
+        message:
+          "feat(prompts): add commit generation rules\n\n- Extract reusable commit-message guidance.",
+      },
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/commit/index.ts",
+          },
+        ],
+        message:
+          "feat(prompts): export commit generation rules\n\n- Re-export commit-message guidance from rules index.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    // These should merge: same scope, high word overlap, same owner root (prompts/rules/commit).
+    expect(result).toHaveLength(1);
+  });
+
+  test("premergeBySubject merges style-only sweeps within the same top-level area", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const fileByPath = new Map([
+      ["src/runtime.ts", makeFileDiff("src/runtime.ts", 1, 0)],
+      [
+        "tests/output-presentation.test.ts",
+        makeFileDiff("tests/output-presentation.test.ts", 1, 0),
+      ],
+      [
+        "tests/verbose-output.test.ts",
+        makeFileDiff("tests/verbose-output.test.ts", 1, 0),
+      ],
+    ]);
+    const groups = [
+      {
+        files: [{ path: "tests/output-presentation.test.ts" }],
+        message:
+          "style(tests): normalize matcher wrapping\n\n- Reflow long assertions.",
+      },
+      {
+        files: [{ path: "tests/verbose-output.test.ts" }],
+        message:
+          "style(verbose-output): reflow long test assertions for readability\n\n- Wrap long expectation lines.",
+      },
+      {
+        files: [{ path: "src/runtime.ts" }],
+        message: "style(runtime): normalize import order\n\n- Reorder imports.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toHaveLength(2);
+    const mergedTestSweep = result.find((group) =>
+      group.files.some((file) => file.path === "tests/verbose-output.test.ts"),
+    );
+    expect(mergedTestSweep?.files).toHaveLength(2);
+  });
+
+  test("premergeBySubject keeps source-tree style sweeps separate when they only share src as a broad area", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const fileByPath = new Map([
+      [
+        "src/app/dashboard/DashboardRouter.tsx",
+        makeFileDiff("src/app/dashboard/DashboardRouter.tsx", 1, 0),
+      ],
+      ["src/lib/db/db.ts", makeFileDiff("src/lib/db/db.ts", 1, 0)],
+    ]);
+    const groups = [
+      {
+        files: [{ path: "src/app/dashboard/DashboardRouter.tsx" }],
+        message:
+          "style(dashboard): reorganize component class names\n\n- Keep dashboard formatting consistent.",
+      },
+      {
+        files: [{ path: "src/lib/db/db.ts" }],
+        message:
+          "style(db): remove trailing whitespace\n\n- Keep database helpers formatting clean.",
+      },
+    ];
+
+    const result = premergeBySubject(groups, fileByPath);
+
+    expect(result).toEqual(groups);
+  });
+
+  test("hasPotentialMergeSignals ignores broad planner overlap across distinct ownership roots", async () => {
+    const { hasPotentialMergeSignals } =
+      await import("../src/commit-planning/grouping/subject/analysis.js");
+
+    const groups = [
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/index.ts",
+          },
+        ],
+        message:
+          "feat(prompts): centralize breaking mode planner rules\n\n- Compose one staged rule surface for breaking-sensitive prompts.",
+      },
+      {
+        files: [
+          {
+            path: "src/commit-planning/grouping/support-attachment/scoring.ts",
+          },
+        ],
+        message:
+          "feat(grouping): centralize breaking mode planner scoring\n\n- Keep support attachment decisions anchored to ownership signals.",
+      },
+      {
+        files: [{ path: "src/commit-planning/orchestration.ts" }],
+        message:
+          "feat(orchestration): centralize breaking mode planner execution\n\n- Carry release-impact mode through planner orchestration.",
+      },
+      {
+        files: [{ path: "src/cli/main.ts" }],
+        message:
+          "feat(cli): centralize breaking mode planner flags\n\n- Expose release-impact planner mode in the command line.",
+      },
+    ];
+
+    expect(hasPotentialMergeSignals(groups)).toBe(false);
+  });
+
+  test("premergeBySubject keeps same-word planner rollout slices separate across ownership roots", async () => {
+    const { premergeBySubject } =
+      await import("../src/commit-planning/grouping/index.js");
+    const fileByPath = new Map([
+      ["src/cli/main.ts", makeFileDiff("src/cli/main.ts", 1, 0)],
+      [
+        "src/commit-planning/grouping/support-attachment/scoring.ts",
+        makeFileDiff(
+          "src/commit-planning/grouping/support-attachment/scoring.ts",
+          1,
+          0,
+        ),
+      ],
+      [
+        "src/commit-planning/orchestration.ts",
+        makeFileDiff("src/commit-planning/orchestration.ts", 1, 0),
+      ],
+      [
+        "src/commit-planning/prompts/rules/index.ts",
+        makeFileDiff("src/commit-planning/prompts/rules/index.ts", 1, 0),
+      ],
+    ]);
+    const groups = [
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/index.ts",
+          },
+        ],
+        message:
+          "feat(prompts): centralize breaking mode planner rules\n\n- Compose one staged rule surface for breaking-sensitive prompts.",
+      },
+      {
+        files: [
+          {
+            path: "src/commit-planning/grouping/support-attachment/scoring.ts",
+          },
+        ],
+        message:
+          "feat(grouping): centralize breaking mode planner scoring\n\n- Keep support attachment decisions anchored to ownership signals.",
+      },
+      {
+        files: [{ path: "src/commit-planning/orchestration.ts" }],
+        message:
+          "feat(orchestration): centralize breaking mode planner execution\n\n- Carry release-impact mode through planner orchestration.",
+      },
+      {
+        files: [{ path: "src/cli/main.ts" }],
+        message:
+          "feat(cli): centralize breaking mode planner flags\n\n- Expose release-impact planner mode in the command line.",
+      },
+    ];
+
+    expect(premergeBySubject(groups, fileByPath)).toEqual(groups);
   });
 });
 
@@ -930,40 +1800,30 @@ describe("planCommits - cross-file hunk validation", () => {
           { hunks: [0], path: "src/errors.ts" },
           { hunks: [0, 1], path: "src/parser.ts" },
         ],
-        message: "feat(parser): add ParseError and integrate into parser",
+        message: commitMessage(
+          "feat(parser): add ParseError and integrate into parser",
+        ),
       },
       {
         files: [{ hunks: [1], path: "src/errors.ts" }],
-        message: "style(errors): clean up whitespace",
+        message: commitMessage("style(errors): clean up whitespace"),
       },
     ]);
 
-    // We can't easily mock the OpenAI module, so we validate the structure
-    // planCommits would produce if the AI returned this JSON.
-    // Instead, test by verifying the response shape is accepted by validation logic
-    // indirectly — by checking planCommits either succeeds or fails with network error.
-    const { planCommits } = await import("../src/commit-planning/orchestration.js");
-    try {
-      await planCommits([fileA, fileB], formatFn);
-    } catch (e: unknown) {
-      // Should fail with network/API error, NOT a validation error
-      const msg = e instanceof Error ? e.message : String(e);
-      const isNetworkError =
-        msg.includes("API") ||
-        msg.includes("fetch") ||
-        msg.includes("network") ||
-        msg.includes("key") ||
-        msg.includes("connect") ||
-        msg.includes("timeout");
-      expect(isNetworkError).toBe(true);
-    }
-
-    // Additionally, validate that the mock response JSON matches PlannedCommit schema
     const parsed = JSON.parse(mockAIResponse) as {
       files: { hunks?: number[]; path: string }[];
       message: string;
     }[];
+    const normalized = validateAndNormalizeGrouping(
+      parsed,
+      new Map([
+        [fileA.path, fileA],
+        [fileB.path, fileB],
+      ]),
+    );
+
     expect(parsed).toHaveLength(2);
+    expect(normalized).toEqual(parsed);
     // Commit 1: cross-file hunk wiring
     expect(parsed[0].files).toHaveLength(2);
     expect(parsed[0].files[0].path).toBe("src/errors.ts");
@@ -976,7 +1836,8 @@ describe("planCommits - cross-file hunk validation", () => {
   });
 
   test("planCommits single file 1 hunk skips grouping", async () => {
-    const { planCommits } = await import("../src/commit-planning/orchestration.js");
+    const { planCommits } =
+      await import("../src/commit-planning/orchestration.js");
     const file = makeMultiHunkFileDiff("src/tiny.ts", [
       { header: "@@ -1,1 +1,2 @@", lines: ["+const x = 1;"] },
     ]);
