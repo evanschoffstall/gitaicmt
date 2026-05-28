@@ -51,17 +51,16 @@ describe("plan display formatting", () => {
     expect(
       wrapDisplayFileLines(
         [
-          "src/cli/terminal-output-ui.ts",
+          "/home/evans/Repos/gitaicmt/src/cli/terminal/output-ui.ts",
           "src/cli/verbose-output.ts",
-          "src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
+          "src/cli/main.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
         ],
         72,
       ),
     ).toEqual([
-      "- src/cli/terminal-output-ui.ts",
+      "- src/cli/terminal/output-ui.ts",
       "- src/cli/verbose-output.ts",
-      "- src/cli/command-line-interface.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9,",
-      "  12, 13 / 14]",
+      "- src/cli/main.ts [hunks 0, 1, 2, 4, 5, 6, 7, 8, 9, 12, 13 / 14]",
     ]);
   });
 
@@ -69,26 +68,23 @@ describe("plan display formatting", () => {
     expect(
       wrapDisplayFileLines(
         [
-          "src/cli/command-line-interface.ts [hunks 0, 1, 2, 3 / 4]",
+          "src/cli/main.ts [hunks 0, 1, 2, 3 / 4]",
           "src/cli/verbose-output.ts [hunks 0, 1 / 2]",
         ],
         32,
       ),
     ).toEqual([
-      "- src/cli/command-line-",
-      "  interface.ts [hunks 0, 1, 2, 3",
-      "  / 4]",
+      "- src/cli/main.ts [hunks 0, 1,",
+      "  2, 3 / 4]",
       "- src/cli/verbose-output.ts",
       "  [hunks 0, 1 / 2]",
     ]);
   });
 
   test("splits long unbroken display tokens when needed", () => {
-    expect(wrapDisplayText("src/cli/command-line-interface.ts", 12)).toEqual([
+    expect(wrapDisplayText("src/cli/main.ts", 12)).toEqual([
       "src/cli/",
-      "command-",
-      "line-",
-      "interface.ts",
+      "main.ts",
     ]);
   });
 });
