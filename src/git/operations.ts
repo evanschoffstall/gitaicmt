@@ -1,17 +1,17 @@
 import { spawnSync } from "node:child_process";
 
-import {
-  DIFF_CONTEXT_LINES,
-} from "../application/constants.js";
+import { DIFF_CONTEXT_LINES } from "../application/constants.js";
 import { GitCommandError } from "../application/errors.js";
 import {
-  createCommitFailure,
-  createGitCommandFailure,
-  runGitCommand,
-  sanitizeFilePath,
-  sanitizeGitOutput,
+  type CommitInputValidationOptions,
   validateCommitInput,
-} from "./operation-support.js";
+} from "./commit-input-validation.js";
+import { createCommitFailure, createGitCommandFailure } from "./failures.js";
+import { sanitizeGitOutput } from "./output-sanitization.js";
+import { sanitizeFilePath } from "./path-validation.js";
+import { createGitProcessEnv } from "./process-environment.js";
+import { didGitSpawnSucceed } from "./spawn-success.js";
+import { runGitCommand } from "./subprocess.js";
 
 const CANONICAL_DIFF_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"];
 
@@ -20,27 +20,38 @@ const CANONICAL_DIFF_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"];
 // ============================================================================
 
 /**
- * Commit with a message (supports multi-line subject + body via stdin)
+ * Commit with a message (supports multi-line subject + body via stdin).
+ *
+ * This intentionally respects the repository's configured commit-signing
+ * policy instead of overriding it at the command level.
+ *
  * @param message - The commit message (can include newlines for body)
  * @param cwd - Optional working directory (defaults to process.cwd())
+ * @param validationOptions - Explicit validation overrides for replay flows.
  * @throws {GitCommandError} If message is empty or commit fails
  */
 export function commitWithMessage(
   message: string,
   cwd?: string,
+  validationOptions: CommitInputValidationOptions = {},
 ): { stderr: string; stdout: string } {
-  const validatedMessage = validateCommitInput(message);
+  const validatedMessage = validateCommitInput(message, validationOptions);
 
   const dir = cwd ?? process.cwd();
   const result = spawnSync("git", ["commit", "-F", "-"], {
     cwd: dir,
     encoding: "utf-8",
+    env: createGitProcessEnv(),
     input: validatedMessage,
     stdio: ["pipe", "pipe", "pipe"],
   });
 
   if (result.status !== 0) {
-    throw createCommitFailure(result.status, result.stderr.trim(), result.error?.message);
+    throw createCommitFailure(
+      result.status,
+      result.stderr.trim(),
+      result.error?.message,
+    );
   }
 
   return {
@@ -80,10 +91,6 @@ export function getStagedFiles(cwd?: string): string[] {
   return out.trim().split("\n").filter(Boolean);
 }
 
-// ============================================================================
-// Path Validation
-// ============================================================================
-
 /**
  * Get an exact staged patch including binary payloads for recovery.
  * @param cwd - Optional working directory (defaults to process.cwd())
@@ -110,19 +117,7 @@ export function getStagedPatch(cwd?: string): string {
  * This avoids relying on localized git error text when HEAD does not exist yet.
  */
 export function hasCommitHistory(cwd?: string): boolean {
-  try {
-    const result = spawnSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
-      cwd: cwd ?? process.cwd(),
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (result.error) {
-      return false;
-    }
-    return result.status === 0;
-  } catch {
-    return false;
-  }
+  return didGitSpawnSucceed(["rev-parse", "--verify", "HEAD^{commit}"], cwd);
 }
 
 /**
@@ -136,30 +131,28 @@ export function hasStagedChanges(cwd?: string): boolean {
   return out.trim().length > 0;
 }
 
-// ============================================================================
-// Safe Git Execution
-// ============================================================================
-
 /**
  * Check if the current directory is inside a git repository
  * @param cwd - Optional working directory (defaults to process.cwd())
  * @returns true if inside a git repository, false otherwise
  */
 export function isGitRepository(cwd?: string): boolean {
-  try {
-    const result = spawnSync("git", ["rev-parse", "--git-dir"], {
-      cwd: cwd ?? process.cwd(),
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    // Check if process executed successfully
-    if (result.error) {
-      return false;
-    }
-    return result.status === 0;
-  } catch {
-    return false;
-  }
+  return didGitSpawnSucceed(["rev-parse", "--git-dir"], cwd);
+}
+
+// ============================================================================
+// Safe Git Execution
+// ============================================================================
+
+/**
+ * Check whether a path currently exists in the Git index.
+ *
+ * This is used by selective staging to detect when a rename has already been
+ * committed in an earlier split commit, so later hunks can be staged against
+ * the new path instead of replaying the original rename header.
+ */
+export function isPathTrackedInIndex(path: string, cwd?: string): boolean {
+  return didGitSpawnSucceed(["ls-files", "--error-unmatch", "--", path], cwd);
 }
 
 /**
@@ -200,10 +193,6 @@ export function restoreStagedPatch(patchContent: string, cwd?: string): void {
   });
 }
 
-// ============================================================================
-// Diff Operations
-// ============================================================================
-
 /**
  * Stage all changes (tracked and untracked, respecting .gitignore)
  * Equivalent to `git add -A`
@@ -213,6 +202,10 @@ export function restoreStagedPatch(patchContent: string, cwd?: string): void {
 export function stageAll(cwd?: string): void {
   execGit(["add", "-A"], { cwd });
 }
+
+// ============================================================================
+// Diff Operations
+// ============================================================================
 
 /**
  * Stage specific files by path
@@ -231,10 +224,6 @@ export function stageFiles(paths: string[], cwd?: string): void {
   execGit(["add", "--", ...safe], { cwd });
 }
 
-// ============================================================================
-// Staging Operations
-// ============================================================================
-
 /**
  * Stage a specific hunk by applying a patch via `git apply --cached`
  * Used for selective hunk-level staging
@@ -251,6 +240,10 @@ export function stagePatch(patchContent: string, cwd?: string): void {
     input: patchContent,
   });
 }
+
+// ============================================================================
+// Staging Operations
+// ============================================================================
 
 /**
  * Execute a git command safely with error handling
@@ -271,7 +264,12 @@ function execGit(
   try {
     const result = runGitCommand(args, dir, options);
     if (result.status !== 0) {
-      throw createGitCommandFailure(args, result.status, result.stderr, result.error?.message);
+      throw createGitCommandFailure(
+        args,
+        result.status,
+        result.stderr,
+        result.error?.message,
+      );
     }
     // Sanitize output to remove malicious escape sequences
     return sanitizeGitOutput(result.stdout);
@@ -284,4 +282,3 @@ function execGit(
     throw createGitCommandFailure(args, e.status, e.stderr ?? e.message ?? "");
   }
 }
-
