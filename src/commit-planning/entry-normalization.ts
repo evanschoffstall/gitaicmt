@@ -2,7 +2,7 @@ import type { PlannedCommitFile } from "./types.js";
 
 import { ValidationError } from "../application/errors.js";
 import { formatScalar } from "../commit-messages/formatting.js";
-import { type FilePathResolver, resolveKnownPath } from "./path-resolver.js";
+import { type FilePathResolver, resolveKnownPath } from "./path/index.js";
 
 type FileDiff = import("../git/diff.js").FileDiff;
 
