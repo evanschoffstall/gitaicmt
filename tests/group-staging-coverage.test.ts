@@ -24,8 +24,59 @@ function makeFile(hunks: FileDiff["hunks"]): FileDiff {
 }
 
 describe("group staging coverage", () => {
+  test("rename hunk staging re-anchors to the current index path even without an explicit cwd", async () => {
+    const { stageGroupFiles } =
+      await import("../src/cli/commit/group-staging.js");
+    const buildPatchCalls: FileDiff[] = [];
+
+    spyOn(operations, "isPathTrackedInIndex")
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    spyOn(diff, "buildPatch").mockImplementation((file) => {
+      buildPatchCalls.push(file);
+      return "patch";
+    });
+    spyOn(operations, "stagePatch").mockImplementation(() => undefined);
+
+    const file: FileDiff = {
+      additions: 2,
+      deletions: 0,
+      hunks: [
+        {
+          countNew: 1,
+          countOld: 1,
+          header: "@@ -1,1 +1,1 @@",
+          lines: ["-before", "+after"],
+          startNew: 1,
+          startOld: 1,
+        },
+      ],
+      metadataLines: [
+        "similarity index 90%",
+        "rename from old.ts",
+        "rename to new.ts",
+      ],
+      oldPath: "old.ts",
+      path: "new.ts",
+      status: "renamed",
+    };
+    const fileMap = new Map([[file.path, file]]);
+
+    stageGroupFiles([{ hunks: [0], path: file.path }], fileMap);
+
+    expect(buildPatchCalls).toEqual([
+      expect.objectContaining({
+        metadataLines: [],
+        oldPath: "new.ts",
+        path: "new.ts",
+        status: "modified",
+      }),
+    ]);
+  });
+
   test("whole-file entries with no hunks fall back to stageFiles when the patch is empty", async () => {
-    const { stageGroupFiles } = await import("../src/cli/commit/group-staging.js");
+    const { stageGroupFiles } =
+      await import("../src/cli/commit/group-staging.js");
     const stageFilesCalls: string[][] = [];
 
     spyOn(diff, "buildPatch").mockReturnValue("");
@@ -42,15 +93,20 @@ describe("group staging coverage", () => {
   });
 
   test("empty patches for hunked files emit a warning instead of staging", async () => {
-    const { stageGroupFiles } = await import("../src/cli/commit/group-staging.js");
+    const { stageGroupFiles } =
+      await import("../src/cli/commit/group-staging.js");
     const stderrWrites: string[] = [];
 
     spyOn(diff, "buildPatch").mockReturnValue("");
     spyOn(operations, "stageFiles").mockImplementation(() => undefined);
     spyOn(operations, "stagePatch").mockImplementation(() => undefined);
     spyOn(terminalColumns, "resolveTerminalColumns").mockReturnValue(80);
-    spyOn(lineWrapping, "wrapTerminalTextBlock").mockImplementation((message) => [message]);
-    spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+    spyOn(lineWrapping, "wrapTerminalTextBlock").mockImplementation(
+      (message) => [message],
+    );
+    spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
       stderrWrites.push(String(chunk));
       return true;
     }) as never);
@@ -72,13 +128,18 @@ describe("group staging coverage", () => {
   });
 
   test("stagePatch failures are logged before the error is rethrown", async () => {
-    const { stageGroupFiles } = await import("../src/cli/commit/group-staging.js");
+    const { stageGroupFiles } =
+      await import("../src/cli/commit/group-staging.js");
     const stderrWrites: string[] = [];
 
     spyOn(diff, "buildPatch").mockReturnValue("patch");
     spyOn(terminalColumns, "resolveTerminalColumns").mockReturnValue(80);
-    spyOn(lineWrapping, "wrapTerminalTextBlock").mockImplementation((message) => [message]);
-    spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+    spyOn(lineWrapping, "wrapTerminalTextBlock").mockImplementation(
+      (message) => [message],
+    );
+    spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
       stderrWrites.push(String(chunk));
       return true;
     }) as never);
@@ -101,6 +162,8 @@ describe("group staging coverage", () => {
     expect(() =>
       stageGroupFiles([{ hunks: [0], path: file.path }], fileMap),
     ).toThrow("apply failed");
-    expect(stderrWrites.join("")).toContain("Error staging hunks [0] for src/app.ts");
+    expect(stderrWrites.join("")).toContain(
+      "Error staging hunks [0] for src/app.ts",
+    );
   });
 });

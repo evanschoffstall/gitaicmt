@@ -741,15 +741,21 @@ describe("cli coverage", () => {
 
   test("commit execution covers success, skipped groups, and single commit rendering", async () => {
     const hasStagedChangesQueue = [true, false];
+    const commitValidationOptions: unknown[] = [];
     const logMessages: string[] = [];
     const restoreCalls: string[] = [];
     const stagedGroups: unknown[] = [];
     const terminalLines: string[][] = [];
 
-    spyOn(gitOperations, "commitWithMessage").mockImplementation((message) => ({
-      stderr: message.includes("stderr") ? "stderr text" : "",
-      stdout: `committed:${message}`,
-    }));
+    spyOn(gitOperations, "commitWithMessage").mockImplementation(
+      (message, _cwd, validationOptions) => {
+        commitValidationOptions.push(validationOptions ?? {});
+        return {
+          stderr: message.includes("stderr") ? "stderr text" : "",
+          stdout: `committed:${message}`,
+        };
+      },
+    );
     spyOn(gitOperations, "getStagedPatch").mockReturnValue("saved patch");
     spyOn(gitOperations, "hasStagedChanges").mockImplementation(
       () => hasStagedChangesQueue.shift() ?? true,
@@ -771,9 +777,11 @@ describe("cli coverage", () => {
       terminalLines.push(lines);
     });
     spyOn(viewport, "resolveDisplayWidth").mockReturnValue(76);
-    spyOn(groupStaging, "stageGroupFiles").mockImplementation((files, fileMap) => {
-      stagedGroups.push({ fileMap, files });
-    });
+    spyOn(groupStaging, "stageGroupFiles").mockImplementation(
+      (files, fileMap) => {
+        stagedGroups.push({ fileMap, files });
+      },
+    );
     spyOn(performance, "now")
       .mockReturnValueOnce(1000)
       .mockReturnValueOnce(2800);
@@ -785,7 +793,10 @@ describe("cli coverage", () => {
     execution.executePlannedCommits(
       [
         { files: [{ path: "src/one.ts" }], message: "feat: one" },
-        { files: [{ path: "src/two.ts" }], message: "feat: two" },
+        {
+          files: [{ path: "src/two.ts" }],
+          message: ["feat: two", "", "- Keep the planned body."].join("\n"),
+        },
       ],
       new Map([
         ["src/one.ts", { hunks: [], path: "src/one.ts" }],
@@ -794,6 +805,7 @@ describe("cli coverage", () => {
     );
 
     expect(stagedGroups).toHaveLength(2);
+    expect(commitValidationOptions).toEqual([{ ignoreMessageBody: true }]);
     expect(terminalLines[0]?.[0]).toContain("header:");
     expect(terminalLines[1]?.[0]).toContain("result:76:committed:feat: one");
     expect(
@@ -806,6 +818,49 @@ describe("cli coverage", () => {
     execution.executeSingleCommitMessage("stderr commit");
     expect(terminalLines.at(-1)?.[0]).toContain("stderr text");
     expect(restoreCalls).toEqual([]);
+  });
+
+  test("commit execution keeps body validation enabled for planned messages that already include a body", async () => {
+    const commitValidationOptions: unknown[] = [];
+
+    spyOn(gitOperations, "commitWithMessage").mockImplementation(
+      (message, _cwd, validationOptions) => {
+        commitValidationOptions.push(validationOptions ?? {});
+        return { stderr: "", stdout: `committed:${message}` };
+      },
+    );
+    spyOn(gitOperations, "getStagedPatch").mockReturnValue("saved patch");
+    spyOn(gitOperations, "hasStagedChanges").mockReturnValue(true);
+    spyOn(gitOperations, "resetStaging").mockImplementation(() => undefined);
+    spyOn(gitOperations, "restoreStagedPatch").mockImplementation(
+      () => undefined,
+    );
+    spyOn(outputPresentation, "buildExecutionCommitLines").mockReturnValue([
+      "header",
+    ]);
+    spyOn(outputPresentation, "buildExecutionResultLines").mockReturnValue([
+      "result",
+    ]);
+    spyOn(sessionDisplayExports, "log").mockImplementation(() => undefined);
+    spyOn(outputUi, "writeTerminalLines").mockImplementation(() => undefined);
+    spyOn(viewport, "resolveDisplayWidth").mockReturnValue(76);
+    spyOn(groupStaging, "stageGroupFiles").mockImplementation(() => undefined);
+
+    const execution = await importFresh<
+      typeof import("../src/cli/commit/execution.js")
+    >("../src/cli/commit/execution.js", "execution-body-validation");
+
+    execution.executePlannedCommits(
+      [
+        {
+          files: [{ path: "src/one.ts" }],
+          message: ["feat: one", "", "- Keep the planned body."].join("\n"),
+        },
+      ],
+      new Map([["src/one.ts", { hunks: [], path: "src/one.ts" }]]) as never,
+    );
+
+    expect(commitValidationOptions).toEqual([{ ignoreMessageBody: false }]);
   });
 
   test("single-commit breaking flag allows but does not force breaking metadata", async () => {
@@ -1034,7 +1089,9 @@ describe("cli coverage", () => {
 
     expect(renderedSubjects).toEqual(["fix: second", "chore: third"]);
     expect(executedGroups).toEqual(bundle.plan.slice(1, 3));
-    expect(executionOptions).toEqual([{ ignoreMessageBody: true }]);
+    expect(executionOptions).toEqual([
+      { cwd: "/repo", ignoreMessageBody: true },
+    ]);
   });
 
   test("valid-only resume filters out invalid saved commits before execution", async () => {
@@ -1146,19 +1203,18 @@ describe("cli coverage", () => {
     expect(executedGroups).toEqual([bundle.plan[0]]);
   });
 
-  test("commit execution restores staging on failure when recovery is available", async () => {
+  test("commit execution restores the staged patch that existed before the failed step", async () => {
     const logMessages: string[] = [];
-    const restoreCalls: string[] = [];
 
     spyOn(gitOperations, "commitWithMessage").mockImplementation(() => {
       throw new Error("commit failed");
     });
-    spyOn(gitOperations, "getStagedPatch").mockReturnValue("saved patch");
+    spyOn(gitOperations, "getStagedPatch").mockReturnValue("remaining patch");
     spyOn(gitOperations, "hasStagedChanges").mockReturnValue(true);
     spyOn(gitOperations, "resetStaging").mockImplementation(() => undefined);
-    spyOn(gitOperations, "restoreStagedPatch").mockImplementation((patch) => {
-      restoreCalls.push(patch);
-    });
+    spyOn(gitOperations, "restoreStagedPatch").mockImplementation(
+      () => undefined,
+    );
     spyOn(outputPresentation, "buildExecutionCommitLines").mockReturnValue([
       "header",
     ]);
@@ -1180,33 +1236,40 @@ describe("cli coverage", () => {
       execution.executePlannedCommits(
         [{ files: [{ path: "src/one.ts" }], message: "feat: broken" }],
         new Map([["src/one.ts", { hunks: [], path: "src/one.ts" }]]) as never,
+        { cwd: "/repo" },
       ),
     ).toThrow("commit failed");
-    expect(restoreCalls).toEqual(["saved patch"]);
+    expect(gitOperations.resetStaging).toHaveBeenCalledTimes(2);
+    expect(gitOperations.restoreStagedPatch).toHaveBeenCalledWith(
+      "remaining patch",
+      "/repo",
+    );
     expect(
       logMessages.some((message) =>
-        message.includes("Attempting to restore initial staging state"),
+        message.includes(
+          "Restored staged changes that existed before the failed commit step",
+        ),
       ),
     ).toBe(true);
     expect(
       logMessages.some((message) =>
-        message.includes("Initial staging state restored successfully"),
+        message.includes("Manual recovery: Review 'git status' and 'git log'"),
       ),
     ).toBe(true);
   });
 
-  test("commit execution reports manual recovery when patch capture fails", async () => {
+  test("commit execution clears failed-step staging when nothing was staged before it began", async () => {
     const logMessages: string[] = [];
 
     spyOn(gitOperations, "commitWithMessage").mockImplementation(() => {
       throw new Error("commit failed");
     });
-    spyOn(gitOperations, "getStagedPatch").mockImplementation(() => {
-      throw new Error("cannot snapshot");
-    });
-    spyOn(gitOperations, "hasStagedChanges").mockReturnValue(true);
+    spyOn(gitOperations, "getStagedPatch").mockReturnValue("");
     spyOn(gitOperations, "resetStaging").mockImplementation(() => undefined);
-    spyOn(gitOperations, "restoreStagedPatch").mockImplementation(() => undefined);
+    spyOn(gitOperations, "hasStagedChanges").mockReturnValue(true);
+    spyOn(gitOperations, "restoreStagedPatch").mockImplementation(
+      () => undefined,
+    );
     spyOn(outputPresentation, "buildExecutionCommitLines").mockReturnValue([
       "header",
     ]);
@@ -1228,18 +1291,70 @@ describe("cli coverage", () => {
       execution.executePlannedCommits(
         [{ files: [{ path: "src/one.ts" }], message: "feat: broken" }],
         new Map([["src/one.ts", { hunks: [], path: "src/one.ts" }]]) as never,
+        { cwd: "/repo" },
       ),
     ).toThrow("commit failed");
     expect(
       logMessages.some((message) =>
-        message.includes("Could not save initial staging state"),
+        message.includes(
+          "Cleared staged changes from the failed commit step because none were staged before it began",
+        ),
       ),
     ).toBe(true);
+    expect(gitOperations.restoreStagedPatch).not.toHaveBeenCalled();
     expect(
       logMessages.some((message) =>
-        message.includes("Manual recovery required"),
+        message.includes("Manual recovery: Review 'git status' and 'git log'"),
       ),
     ).toBe(true);
+  });
+
+  test("commit execution reports manual recovery when it cannot capture the pre-step staged patch", async () => {
+    const logMessages: string[] = [];
+
+    spyOn(gitOperations, "commitWithMessage").mockImplementation(() => {
+      throw new Error("commit failed");
+    });
+    spyOn(gitOperations, "getStagedPatch").mockImplementation(() => {
+      throw new Error("cannot snapshot");
+    });
+    spyOn(gitOperations, "resetStaging").mockImplementation(() => undefined);
+    spyOn(gitOperations, "hasStagedChanges").mockReturnValue(true);
+    spyOn(gitOperations, "restoreStagedPatch").mockImplementation(
+      () => undefined,
+    );
+    spyOn(outputPresentation, "buildExecutionCommitLines").mockReturnValue([
+      "header",
+    ]);
+    spyOn(outputPresentation, "buildExecutionResultLines").mockReturnValue([
+      "result",
+    ]);
+    spyOn(sessionDisplayExports, "log").mockImplementation((message) => {
+      logMessages.push(message);
+    });
+    spyOn(outputUi, "writeTerminalLines").mockImplementation(() => undefined);
+    spyOn(viewport, "resolveDisplayWidth").mockReturnValue(76);
+    spyOn(groupStaging, "stageGroupFiles").mockImplementation(() => undefined);
+
+    const execution = await importFresh<
+      typeof import("../src/cli/commit/execution.js")
+    >("../src/cli/commit/execution.js", "execution-capture-failure");
+
+    expect(() =>
+      execution.executePlannedCommits(
+        [{ files: [{ path: "src/one.ts" }], message: "feat: broken" }],
+        new Map([["src/one.ts", { hunks: [], path: "src/one.ts" }]]) as never,
+        { cwd: "/repo" },
+      ),
+    ).toThrow("commit failed");
+    expect(
+      logMessages.some((message) =>
+        message.includes(
+          "Could not capture staged changes before this commit step for recovery",
+        ),
+      ),
+    ).toBe(true);
+    expect(gitOperations.restoreStagedPatch).not.toHaveBeenCalled();
   });
 
   test("git chunking covers across-file, grouped-by-file, and hunk grouping branches", async () => {
