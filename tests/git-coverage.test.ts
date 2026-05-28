@@ -149,6 +149,23 @@ describe("git coverage", () => {
     }
   });
 
+  test("commitWithMessage can replay subject-only messages when body validation is ignored", () => {
+    const dir = makeGitDir();
+
+    try {
+      writeFileSync(join(dir, "file.txt"), "hello\n");
+      execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
+
+      expect(() =>
+        commitWithMessage("feat(core): replay legacy subject", dir, {
+          ignoreMessageBody: true,
+        }),
+      ).not.toThrow();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   test("getStagedDiff throws a git command error outside a repository", () => {
     const plainDir = mkdtempSync(join(tmpdir(), "gitaicmt-plain-"));
 
