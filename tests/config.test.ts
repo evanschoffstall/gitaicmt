@@ -63,7 +63,7 @@ describe("config", () => {
       const dir = makeTmpDir();
       const cfg = loadConfig(dir);
 
-      expect(cfg.openai.model).toBe("gpt-4o-mini");
+      expect(cfg.openai.model).toBe("gpt-5.3-codex");
       expect(cfg.openai.maxTokens).toBe(512);
       expect(cfg.openai.temperature).toBe(0.3);
       expect(cfg.openai.apiKey).toBe("");
@@ -166,7 +166,7 @@ describe("config", () => {
       expect(cfg.openai.temperature).toBe(0.7);
       expect(cfg.analysis.chunkSize).toBe(500);
       // Untouched siblings
-      expect(cfg.openai.model).toBe("gpt-4o-mini");
+      expect(cfg.openai.model).toBe("gpt-5.3-codex");
       expect(cfg.openai.maxTokens).toBe(512);
       expect(cfg.analysis.groupByFile).toBe(true);
 
@@ -347,7 +347,7 @@ describe("config", () => {
       expect(existsSync(path)).toBe(true);
 
       const written = JSON.parse(readFileSync(path, "utf-8")) as Config;
-      expect(written.openai.model).toBe("gpt-4o-mini");
+      expect(written.openai.model).toBe("gpt-5.3-codex");
       expect(written.commit.conventional).toBe(true);
       expect(written.performance.parallel).toBe(true);
 
@@ -390,7 +390,7 @@ describe("config", () => {
       const cfg = loadConfig(dir);
 
       // All defaults should be preserved
-      expect(cfg.openai.model).toBe("gpt-4o-mini");
+      expect(cfg.openai.model).toBe("gpt-5.3-codex");
       expect(cfg.analysis.chunkSize).toBe(800);
 
       rmSync(dir, { recursive: true });
