@@ -1,7 +1,29 @@
 import { ValidationError } from "../application/errors.js";
 import { formatDiffHeaderLines } from "../git/diff.js";
+import {
+  ensureBreakingChangeFooter,
+  splitCommitBodyAndBreakingFooter,
+} from "./breaking-change-footers.js";
+import {
+  isBulletContinuationLine,
+  isBulletLine,
+  trimTrailingBlankLines,
+} from "./commit-message-bullets.js";
+import {
+  normalizeConventionalSubjectScope,
+  parseConventionalSubject,
+} from "./subject-parser.js";
 
 type FileDiff = import("../git/diff.js").FileDiff;
+
+const NON_BREAKING_CONVENTIONAL_TYPES = new Set([
+  "chore",
+  "ci",
+  "docs",
+  "style",
+  "test",
+  "tests",
+]);
 
 export function formatLabeledDiff(
   file: FileDiff,
@@ -24,14 +46,78 @@ export function formatScalar(value: boolean | number): string {
   return String(value);
 }
 
+/** Return a validated commit message whose conventional subject and footer declare a breaking change. */
+export function markCommitMessageBreaking(message: string): string {
+  const { bodyLines, subject } = parseCommitMessage(message);
+  const parsedSubject = parseConventionalSubject(subject);
+  const breakingSubject = markConventionalSubjectBreaking(subject);
+  if (breakingSubject === subject && !parsedSubject.isBreaking) {
+    return validateCommitMessage(message);
+  }
+
+  const nextBodyLines = ensureBreakingChangeFooter(bodyLines, breakingSubject);
+  return validateCommitMessage(
+    [breakingSubject, "", ...nextBodyLines].join("\n"),
+  );
+}
+
+/** Return a validated commit message with conventional breaking metadata removed. */
+export function suppressCommitMessageBreaking(message: string): string {
+  const { bodyLines, subject } = parseCommitMessage(message);
+  const nextSubject = suppressBreakingReleaseLanguage(
+    suppressConventionalSubjectBreaking(subject),
+  );
+  const { bulletBodyLines } = splitCommitBodyAndBreakingFooter(bodyLines);
+  return validateCommitMessage(
+    [
+      nextSubject,
+      "",
+      ...bulletBodyLines.map(suppressBreakingReleaseLanguage),
+    ].join("\n"),
+  );
+}
+
 export function validateCommitMessage(message: string): string {
+  const { bodyLines, subject } = parseCommitMessage(message);
+  const { bulletBodyLines, hasBreakingChangeFooter } =
+    splitCommitBodyAndBreakingFooter(bodyLines);
+  const parsedSubject = parseConventionalSubject(subject);
+
+  validateCommitMessageBody(bulletBodyLines);
+  if (parsedSubject.isBreaking && !hasBreakingChangeFooter) {
+    throw new ValidationError(
+      "Breaking commit messages must include a BREAKING CHANGE footer",
+    );
+  }
+
+  return [subject, "", ...bodyLines].join("\n");
+}
+
+function markConventionalSubjectBreaking(subject: string): string {
+  const parsed = parseConventionalSubject(subject);
+  if (
+    parsed.type === "" ||
+    parsed.isBreaking ||
+    NON_BREAKING_CONVENTIONAL_TYPES.has(parsed.type)
+  ) {
+    return subject;
+  }
+
+  const colonIdx = subject.indexOf(":");
+  return `${subject.slice(0, colonIdx)}!${subject.slice(colonIdx)}`;
+}
+
+function parseCommitMessage(message: string): {
+  bodyLines: string[];
+  subject: string;
+} {
   const normalized = message.replace(/\r\n/g, "\n").trim();
   if (normalized.length === 0) {
     throw new ValidationError("Commit message cannot be empty");
   }
 
   const lines = normalized.split("\n");
-  const subject = lines[0]?.trim() ?? "";
+  const subject = normalizeConventionalSubjectScope(lines[0]?.trim() ?? "");
   if (subject.length === 0) {
     throw new ValidationError("Commit message subject cannot be empty");
   }
@@ -52,28 +138,32 @@ export function validateCommitMessage(message: string): string {
     throw new ValidationError("Commit message body is required");
   }
 
-  validateCommitMessageBody(bodyLines);
-
-  return [subject, "", ...bodyLines].join("\n");
+  return { bodyLines, subject };
 }
 
-function isBulletContinuationLine(
-  line: string,
-  previousLineWasBullet: boolean,
-): boolean {
-  return /^\s{2,}\S/.test(line) && previousLineWasBullet;
+function suppressBreakingReleaseLanguage(line: string): string {
+  return line
+    .replace(/\bbreaking[- ]change(s)?\b/giu, "compatibility-impact change$1")
+    .replace(/\bbreaking metadata\b/giu, "release-impact metadata")
+    .replace(/\bbreaking marker(s)?\b/giu, "release-impact marker$1")
+    .replace(/\bbreaking footer(s)?\b/giu, "release-impact footer$1")
+    .replace(/\bbreaking authoring\b/giu, "release-impact authoring")
+    .replace(/\bmajor[- ]version\b/giu, "release-impact")
+    .replace(/\bmajor[- ]release\b/giu, "release-impact")
+    .replace(/\bmust migrate\b/giu, "must adjust")
+    .replace(/\brequires migration\b/giu, "requires adjustment")
+    .replace(/\brequire migration\b/giu, "require adjustment");
 }
 
-function isBulletLine(line: string): boolean {
-  return /^\s*-\s+\S/.test(line);
-}
-
-function trimTrailingBlankLines(lines: string[]): string[] {
-  const trimmed = [...lines];
-  while (trimmed.length > 0 && trimmed.at(-1)?.trim() === "") {
-    trimmed.pop();
+function suppressConventionalSubjectBreaking(subject: string): string {
+  const parsed = parseConventionalSubject(subject);
+  if (!parsed.isBreaking) {
+    return subject;
   }
-  return trimmed;
+
+  const colonIdx = subject.indexOf(":");
+  const prefix = subject.slice(0, colonIdx);
+  return `${prefix.slice(0, -1)}${subject.slice(colonIdx)}`;
 }
 
 function validateCommitMessageBody(bodyLines: string[]): void {
