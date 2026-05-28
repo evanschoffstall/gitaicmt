@@ -1,10 +1,14 @@
 import { readFileSync } from "node:fs";
 import { posix as pathPosix } from "node:path";
 
-import { sanitizeSubjectWords } from "../../commit-messages/subject-parser.js";
-import { filterSignificantWords } from "./subject/analysis.js";
+import { sanitizeSubjectWords } from "../../../commit-messages/subject-parser.js";
+import {
+  getProjectPathAliases,
+  getVirtualPathAliases,
+} from "../../path/index.js";
+import { filterSignificantWords } from "../subject/analysis.js";
 
-type FileDiff = import("./grouping-types.js").FileDiff;
+type FileDiff = import("../grouping-types.js").FileDiff;
 
 export function buildChangedPathAliases(
   changedPaths: Iterable<string>,
@@ -13,11 +17,22 @@ export function buildChangedPathAliases(
 
   for (const changedPath of changedPaths) {
     const normalizedPath = pathPosix.normalize(changedPath);
-    addChangedPathAlias(aliases, normalizedPath, changedPath);
+    const aliasCandidates = new Set<string>(
+      getProjectPathAliases(normalizedPath),
+    );
+    for (const projectAlias of [...aliasCandidates]) {
+      for (const virtualAlias of getVirtualPathAliases(projectAlias)) {
+        aliasCandidates.add(virtualAlias);
+      }
+    }
 
-    const stemPath = stripPathExtension(normalizedPath);
-    if (stemPath !== normalizedPath) {
-      addChangedPathAlias(aliases, stemPath, changedPath);
+    for (const aliasPath of aliasCandidates) {
+      addChangedPathAlias(aliases, aliasPath, changedPath);
+
+      const stemPath = stripPathExtension(aliasPath);
+      if (stemPath !== aliasPath) {
+        addChangedPathAlias(aliases, stemPath, changedPath);
+      }
     }
   }
 
@@ -52,7 +67,10 @@ export function extractIntentWords(
       if (sourceLine === null) {
         continue;
       }
-      for (const word of filterSignificantWords(sanitizeSubjectWords(sourceLine), 4)) {
+      for (const word of filterSignificantWords(
+        sanitizeSubjectWords(sourceLine),
+        4,
+      )) {
         intentWords.add(word);
       }
     }
@@ -136,7 +154,9 @@ export function isCoordinatorLikeFile(
   pathWords: Set<string>,
   providedSymbols: Set<string>,
 ): boolean {
-  return importedPaths.size >= 2 && pathWords.size <= 1 && providedSymbols.size <= 1;
+  return (
+    importedPaths.size >= 2 && pathWords.size <= 1 && providedSymbols.size <= 1
+  );
 }
 
 export function resolveChangedModulePath(

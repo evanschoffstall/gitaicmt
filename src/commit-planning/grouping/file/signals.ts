@@ -1,4 +1,4 @@
-import { type FileChangeSignals, type FileDiff } from "./grouping-types.js";
+import { type FileChangeSignals, type FileDiff } from "../grouping-types.js";
 import {
   buildChangedPathAliases,
   collectFileSignalLines,
@@ -9,7 +9,7 @@ import {
   extractReferencedSymbols,
   isCoordinatorLikeFile,
   resolveChangedModulePath,
-} from "./signal-support.js";
+} from "./extraction.js";
 
 /** Builds file-level semantic signals for dependency ordering and merge gating. */
 export function buildFileChangeSignals(
