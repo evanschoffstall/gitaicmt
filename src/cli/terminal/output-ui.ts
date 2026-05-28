@@ -4,6 +4,8 @@ const CLEAR_LINE = "\r\x1b[2K";
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
 
+type TerminalLineObserver = (lines: string[], output: TerminalWriter) => void;
+
 export const THINKING_GLYPHS = [
   "✧",
   "✦",
@@ -141,6 +143,7 @@ interface TerminalWriter {
 }
 
 let activeThinkingIndicator: ActiveThinkingIndicator | null = null;
+let terminalLineObserver: null | TerminalLineObserver = null;
 
 export function renderThinkingFrame(frameIndex: number): string {
   const glyph =
@@ -175,6 +178,13 @@ export function renderThinkingFrame(frameIndex: number): string {
     ),
     RESET,
   ].join("");
+}
+
+/** Register a process-local observer for rendered terminal lines. */
+export function setTerminalLineObserver(
+  observer: null | TerminalLineObserver,
+): void {
+  terminalLineObserver = observer;
 }
 
 export function shouldAnimateThinkingIndicator(
@@ -246,6 +256,10 @@ export function writeTerminalLines(
 
   for (const line of lines) {
     output.write(`${line}\n`);
+  }
+
+  if (terminalLineObserver) {
+    terminalLineObserver(lines, output);
   }
 
   if (activeIndicator) {

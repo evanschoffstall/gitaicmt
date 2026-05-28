@@ -1,11 +1,27 @@
-import type { AiOutputEvent, TokenUsageSummary } from "../commit-planning/openai-client.js";
+import type {
+  AiOutputEvent,
+  TokenUsageSummary,
+} from "../commit-planning/openai-client.js";
 
-import { type PlannedCommitFile, type TokenEstimateSummary } from "../commit-planning/orchestration.js";
-import { formatCount, formatRequestCount, formatStageUsageLabel, formatTokenWarning, isHighTokenEstimate } from "./counts.js";
-import { buildStatusSectionLines, type PresentationStatusRow } from "./output-presentation.js";
+import {
+  type PlannedCommitFile,
+  type TokenEstimateSummary,
+} from "../commit-planning/orchestration.js";
+import {
+  formatCount,
+  formatRequestCount,
+  formatStageUsageLabel,
+  formatTokenWarning,
+  isHighTokenEstimate,
+} from "./counts.js";
+import { buildStatusSectionLines } from "./output-presentation.js";
 import { wrapTerminalTextBlock } from "./terminal/line-wrapping.js";
 import { writeTerminalLines } from "./terminal/output-ui.js";
-import { formatVerboseAiOutputLines, getVerboseAiOutputSequenceKey } from "./verbose-output.js";
+import { configureTracePersistence } from "./trace-persistence.js";
+import {
+  formatVerboseAiOutputLines,
+  getVerboseAiOutputSequenceKey,
+} from "./verbose-output.js";
 import { resolveLogWidth, resolveVerboseWidth } from "./viewport.js";
 
 export type OutputMode = "off" | "summary" | "trace";
@@ -27,11 +43,15 @@ const RESET = "\x1b[0m";
 const YELLOW = "\x1b[33m";
 
 let outputMode: OutputMode = "off";
-let verboseEventCounts: Record<string, number> = Object.create(null) as Record<string, number>;
+let verboseEventCounts: Record<string, number> = Object.create(null) as Record<
+  string,
+  number
+>;
 
 export function configureOutputMode(mode: OutputMode): void {
   outputMode = mode;
   verboseEventCounts = Object.create(null) as Record<string, number>;
+  configureTracePersistence(mode);
 }
 
 export function hasVisibleOutputMode(): boolean {
