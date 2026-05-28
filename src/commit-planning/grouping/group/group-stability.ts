@@ -1,10 +1,12 @@
+import type { CommitMessageRuleOptions } from "../../prompts/index.js";
+
 import { emitAiOutputEvent } from "../../openai-client.js";
 import { validateAndNormalizeGrouping } from "../../response-validation.js";
 import {
   getCoverageMismatchDiagnostics,
   hasMatchingCoverage,
 } from "../commit-coverage.js";
-import { orderCommitsByDependencies } from "../dependency-ordering.js";
+import { orderCommitsByDependencies } from "../dependency/index.js";
 import {
   type FileChangeSignals,
   type FileDiff,
@@ -14,133 +16,26 @@ import { splitWeakConsolidations } from "../repartition.js";
 import {
   absorbIncidentalAdjacentGroups,
   hasMostlyImplementationTail,
-} from "./adjacent-absorption.js";
+} from "./adjacent/index.js";
+import {
+  getClusterSizeDiagnostics,
+  hasMeaningfulConsolidationChange,
+  hasSupportAttachedToMixedImplementationRoots,
+} from "./consolidation-shape.js";
+import {
+  emitClusterMergeResolutionEvent,
+  emitFinalizePlannedGroupsEvent,
+  emitRepartitionAfterConsolidationEvent,
+} from "./events.js";
 import { mergeCommitClusters } from "./merge.js";
 import { harmonizeConsolidatedMessages } from "./message-harmonization.js";
-import {
-  describeError,
-  emitPlannerFallbackEvent,
-} from "./planner-stage.js";
+import { describeError, emitPlannerFallbackEvent } from "./stage.js";
 
 const MIN_CONSOLIDATION_TAIL_GROUP_COUNT = 5;
 
 export interface ClusterMergeResult {
   rawMerged: PlannedCommit[];
   stabilized: PlannedCommit[];
-}
-
-export function emitClusterPassEvent(
-  inputGroupCount: number,
-  clusterCount: number,
-  merged: ClusterMergeResult,
-  passStartedAtMs: number,
-  pass: number,
-): void {
-  emitAiOutputEvent({
-    content: JSON.stringify({
-      clusterCount,
-      decision: "cluster-pass",
-      inputGroupCount,
-      mergedGroupCount: merged.stabilized.length,
-      pass,
-      rawMergedGroupCount: merged.rawMerged.length,
-      repartitionedGroupCount:
-        merged.stabilized.length > merged.rawMerged.length
-          ? merged.stabilized.length
-          : undefined,
-    }),
-    durationMs: performance.now() - passStartedAtMs,
-    kind: "planner-decision",
-    stage: "cluster",
-    transport: "internal",
-  });
-}
-
-export function emitClusterStopEvent(
-  inputGroupCount: number,
-  clusterCount: number,
-  merged: ClusterMergeResult,
-  passStartedAtMs: number,
-  pass: number,
-): void {
-  emitAiOutputEvent({
-    content: JSON.stringify({
-      clusterCount,
-      decision: "cluster-stop",
-      inputGroupCount,
-      mergedGroupCount: merged.rawMerged.length,
-      pass,
-      reason: "semantic-repartition-undid-merge",
-      repartitionedGroupCount: merged.stabilized.length,
-    }),
-    durationMs: performance.now() - passStartedAtMs,
-    kind: "planner-decision",
-    stage: "cluster",
-    transport: "internal",
-  });
-}
-
-export function emitConsolidationDiminishingReturnsStop(
-  currentLength: number,
-  previousReduction: number,
-  startedAtMs: number,
-): void {
-  emitAiOutputEvent({
-    content: JSON.stringify({
-      decision: "consolidation-stop",
-      inputGroupCount: currentLength,
-      previousReduction,
-      reason: "diminishing-returns",
-    }),
-    durationMs: performance.now() - startedAtMs,
-    kind: "planner-decision",
-    stage: "consolidate",
-    transport: "internal",
-  });
-}
-
-export function emitCoverageMismatchFallback(
-  groups: PlannedCommit[],
-  consolidated: PlannedCommit[],
-  fileByPath: Map<string, FileDiff>,
-): void {
-  const coverageMismatch = getCoverageMismatchDiagnostics(
-    groups,
-    consolidated,
-    fileByPath,
-  );
-  if (!coverageMismatch) {
-    return;
-  }
-
-  emitPlannerFallbackEvent(
-    "consolidation-fallback",
-    "coverage-mismatch",
-    "consolidate",
-    {
-      ...coverageMismatch,
-      inputGroupCount: groups.length,
-      outputGroupCount: consolidated.length,
-    },
-  );
-}
-
-export function emitRepartitionAfterConsolidationEvent(
-  premergedGroupCount: number,
-  outputGroupCount: number,
-  startedAtMs: number,
-): void {
-  emitAiOutputEvent({
-    content: JSON.stringify({
-      decision: "repartition-after-consolidation",
-      outputGroupCount,
-      premergedGroupCount,
-    }),
-    durationMs: performance.now() - startedAtMs,
-    kind: "planner-decision",
-    stage: "consolidate",
-    transport: "internal",
-  });
 }
 
 export function finalizeStabilizedGroups(
@@ -173,18 +68,15 @@ export function finalizeStabilizedGroups(
     });
   }
 
-  emitAiOutputEvent({
-    content: JSON.stringify({
-      decision: "finalize-planned-groups",
-      finalGroupCount: stabilized.length,
-      inputGroupCount,
-      premergedGroupCount,
-      repartitionedGroupCount: repartitionedGroups.length,
-    }),
-    durationMs: performance.now() - startedAtMs,
-    kind: "planner-decision",
-    stage: "consolidate",
-    transport: "internal",
+  emitFinalizePlannedGroupsEvent({
+    diagnostics: {
+      absorbedGroupCount: ordered.length - stabilized.length,
+      dependencyOrderedGroupCount: ordered.length,
+    },
+    finalGroups: stabilized,
+    inputGroupCount,
+    premergedGroupCount,
+    repartitionedGroups,
   });
 
   return stabilized;
@@ -214,6 +106,7 @@ export function finalizeWithoutConsolidation(
 
 export function hasValidConsolidationCoverage(
   groups: PlannedCommit[],
+
   consolidated: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
 ): boolean {
@@ -226,22 +119,56 @@ export function mergeClusterPass(
   fileByPath: Map<string, FileDiff>,
   fileSignals: Map<string, FileChangeSignals>,
 ): ClusterMergeResult | null {
-  const rawMerged = mergeCommitClusters(current, clusters, fileByPath);
-  if (!hasMatchingCoverage(current, rawMerged, fileByPath)) {
-    return null;
-  }
-  if (rawMerged.length >= current.length) {
+  // Reject any cluster that collapses too many unrelated groups in one step.
+  // Very large clusters (8+) are almost always planner-wide umbrella families
+  // that splitWeakConsolidations will have to mostly undo anyway.
+  const MAX_SINGLE_CLUSTER_SIZE = 7;
+  const sizeDiagnostics = getClusterSizeDiagnostics(
+    current,
+    clusters,
+    MAX_SINGLE_CLUSTER_SIZE,
+  );
+  const oversizedClusterRejection = getOversizedClusterRejection(
+    current.length,
+    clusters.length,
+    sizeDiagnostics,
+    MAX_SINGLE_CLUSTER_SIZE,
+  );
+  if (oversizedClusterRejection) {
+    emitRejectedClusterMergeResolution(...oversizedClusterRejection);
     return null;
   }
 
+  const rawMerged = mergeCommitClusters(current, clusters, fileByPath);
+  const rawMergeRejection = getRawMergeRejection(
+    current,
+    clusters.length,
+    rawMerged,
+    fileByPath,
+    sizeDiagnostics.largestClusterSize,
+  );
+  if (rawMergeRejection) {
+    emitRejectedClusterMergeResolution(...rawMergeRejection);
+    return null;
+  }
+
+  const stabilized = splitWeakConsolidations(
+    current,
+    rawMerged,
+    fileByPath,
+    fileSignals,
+  );
+  emitAcceptedClusterMergeResolution(
+    current.length,
+    clusters.length,
+    sizeDiagnostics.largestClusterSize,
+    rawMerged.length,
+    stabilized.length,
+  );
+
   return {
     rawMerged,
-    stabilized: splitWeakConsolidations(
-      current,
-      rawMerged,
-      fileByPath,
-      fileSignals,
-    ),
+    stabilized,
   };
 }
 
@@ -249,9 +176,10 @@ export function readConsolidatedGroups(
   parsed: unknown,
   fileByPath: Map<string, FileDiff>,
   inputGroupCount: number,
+  options: CommitMessageRuleOptions = {},
 ): null | PlannedCommit[] {
   try {
-    return validateAndNormalizeGrouping(parsed, fileByPath);
+    return validateAndNormalizeGrouping(parsed, fileByPath, options);
   } catch (error: unknown) {
     emitPlannerFallbackEvent(
       "consolidation-fallback",
@@ -272,8 +200,14 @@ export function resolveHarmonizedConsolidation(
   fileByPath: Map<string, FileDiff>,
   fileSignals: Map<string, FileChangeSignals>,
   startedAtMs: number,
+  options: CommitMessageRuleOptions = {},
 ): null | PlannedCommit[] {
-  const harmonized = harmonizeConsolidatedMessages(groups, consolidated, fileByPath);
+  const harmonized = harmonizeConsolidatedMessages(
+    groups,
+    consolidated,
+    fileByPath,
+    options,
+  );
   const repartitioned = splitWeakConsolidations(
     groups,
     harmonized,
@@ -294,11 +228,21 @@ export function resolveHarmonizedConsolidation(
     );
     return null;
   }
-  if (harmonized.length >= groups.length) {
+  if (repartitioned.length >= groups.length) {
+    if (hasMeaningfulConsolidationChange(groups, repartitioned)) {
+      emitConsolidationResolution(
+        "consolidation-pass",
+        groups.length,
+        repartitioned.length,
+        startedAtMs,
+      );
+      return repartitioned;
+    }
+
     emitConsolidationResolution(
       "consolidation-noop",
       groups.length,
-      harmonized.length,
+      repartitioned.length,
       startedAtMs,
       { reason: "no-meaningful-reduction" },
     );
@@ -308,10 +252,10 @@ export function resolveHarmonizedConsolidation(
   emitConsolidationResolution(
     "consolidation-pass",
     groups.length,
-    harmonized.length,
+    repartitioned.length,
     startedAtMs,
   );
-  return harmonized;
+  return repartitioned;
 }
 
 export function shouldStopConsolidationPass(
@@ -323,6 +267,27 @@ export function shouldStopConsolidationPass(
     previousReduction <= 1 &&
     hasMostlyImplementationTail(groups)
   );
+}
+
+function emitAcceptedClusterMergeResolution(
+  inputGroupCount: number,
+  clusterCount: number,
+  largestClusterSize: number,
+  rawMergedGroupCount: number,
+  stabilizedGroupCount: number,
+): void {
+  emitClusterMergeResolutionEvent({
+    clusterCount,
+    diagnostics: {
+      rawMergedGroupCount,
+      stabilizedGroupCount,
+    },
+    inputGroupCount,
+    largestClusterSize,
+    outputGroupCount: stabilizedGroupCount,
+    reason: "cluster-merge-accepted",
+    resolution: "accepted",
+  });
 }
 
 function emitConsolidationResolution(
@@ -346,6 +311,78 @@ function emitConsolidationResolution(
   });
 }
 
+function emitRejectedClusterMergeResolution(
+  inputGroupCount: number,
+  clusterCount: number,
+  largestClusterSize: number,
+  reason: string,
+  diagnostics: Record<string, number>,
+  outputGroupCount?: number,
+): void {
+  emitClusterMergeResolutionEvent({
+    clusterCount,
+    diagnostics,
+    inputGroupCount,
+    largestClusterSize,
+    outputGroupCount,
+    reason,
+    resolution: "rejected",
+  });
+}
+
+function getOversizedClusterRejection(
+  currentLength: number,
+  clusterCount: number,
+  sizeDiagnostics: ReturnType<typeof getClusterSizeDiagnostics>,
+  maxSingleClusterSize: number,
+): [number, number, number, string, Record<string, number>, number?] | null {
+  if (!sizeDiagnostics.hasOversizedNonStyleCluster) {
+    return null;
+  }
+
+  return [
+    currentLength,
+    clusterCount,
+    sizeDiagnostics.largestClusterSize,
+    "oversized-non-style-cluster",
+    {
+      maxSingleClusterSize,
+      oversizedClusterCount: sizeDiagnostics.oversizedClusterCount,
+    },
+  ];
+}
+
+function getRawMergeRejection(
+  current: PlannedCommit[],
+  clusterCount: number,
+  rawMerged: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+  largestClusterSize: number,
+): [number, number, number, string, Record<string, number>, number?] | null {
+  if (!hasMatchingCoverage(current, rawMerged, fileByPath)) {
+    return [
+      current.length,
+      clusterCount,
+      largestClusterSize,
+      "coverage-mismatch",
+      { rawMergedGroupCount: rawMerged.length },
+    ];
+  }
+
+  if (rawMerged.length >= current.length) {
+    return [
+      current.length,
+      clusterCount,
+      largestClusterSize,
+      "no-group-count-reduction",
+      { rawMergedGroupCount: rawMerged.length },
+      rawMerged.length,
+    ];
+  }
+
+  return null;
+}
+
 function shouldRejectUnstableConsolidation(
   inputGroups: PlannedCommit[],
   consolidatedGroups: PlannedCommit[],
@@ -358,9 +395,34 @@ function shouldRejectUnstableConsolidation(
   const consolidatedReduction = inputGroups.length - consolidatedGroups.length;
   const effectiveReduction = inputGroups.length - repartitionedGroups.length;
 
-  return (
+  // Reject when repartition undoes the consolidation almost entirely,
+  // or when consolidation produced fewer commits than repartition deemed stable.
+  if (
     consolidatedReduction >= 2 &&
     repartitionedGroups.length > consolidatedGroups.length &&
     effectiveReduction <= 1
+  ) {
+    return true;
+  }
+
+  if (
+    consolidatedReduction >= 2 &&
+    hasSupportAttachedToMixedImplementationRoots(repartitionedGroups)
+  ) {
+    return true;
+  }
+
+  // Also reject when repartition expands the consolidation by more than 30%:
+  // this indicates the consolidation joined groups that should stay separate
+  // and late repair is doing the majority of semantic cleanup.
+  const expansionRatio =
+    consolidatedGroups.length > 0
+      ? repartitionedGroups.length / consolidatedGroups.length
+      : 1;
+
+  return (
+    consolidatedReduction >= 3 &&
+    expansionRatio >= 1.3 &&
+    repartitionedGroups.length >= inputGroups.length
   );
 }

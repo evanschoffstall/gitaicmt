@@ -23,7 +23,10 @@ export function mergeCommitClusters(
     }
 
     mergedGroups.push(
-      mergeCommitsIntoGroup(cluster.map((index) => groups[index]), fileByPath),
+      mergeCommitsIntoGroup(
+        cluster.map((index) => groups[index]),
+        fileByPath,
+      ),
     );
   }
 
@@ -86,9 +89,7 @@ export function prioritizeMergedCommits(
 ): PlannedCommit[] {
   return [...commits].sort((left, right) => {
     const leftSubject = parseSubjectWords(left.message.split("\n")[0] ?? "");
-    const rightSubject = parseSubjectWords(
-      right.message.split("\n")[0] ?? "",
-    );
+    const rightSubject = parseSubjectWords(right.message.split("\n")[0] ?? "");
     const leftScore =
       (isSupportLikeType(leftSubject.type) ? 0 : 10) +
       leftSubject.words.size +

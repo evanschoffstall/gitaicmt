@@ -8,23 +8,28 @@ import {
   buildClusterUserPrompt,
   buildConsolidationSystemPrompt,
   buildConsolidationUserPrompt,
-} from "../../prompt-builders/index.js";
-import { buildFileChangeSignals } from "../file-signals.js";
+  type CommitMessageRuleOptions,
+} from "../../prompts/index.js";
+import { getCoverageMismatchDiagnostics } from "../commit-coverage.js";
+import { buildFileChangeSignals } from "../file/index.js";
 import {
   type FileChangeSignals,
   type FileDiff,
   type PlannedCommit,
 } from "../grouping-types.js";
 import { splitWeakConsolidations } from "../repartition.js";
+import { hasPotentialMergeSignals } from "../subject/analysis.js";
+import { premergeBySubject } from "../subject/premerge/index.js";
 import {
-  hasPotentialMergeSignals,
-} from "../subject/analysis.js";
-import { premergeBySubject } from "../subject/premerge.js";
+  emitCoverageMismatchPartialSalvage,
+  salvageCoverageSafeConsolidation,
+} from "./coverage-salvage.js";
 import {
-  emitClusterPassEvent,
-  emitClusterStopEvent,
+  emitClusterProgressEvent,
   emitConsolidationDiminishingReturnsStop,
   emitCoverageMismatchFallback,
+} from "./events.js";
+import {
   finalizeStabilizedGroups,
   finalizeWithoutConsolidation,
   hasValidConsolidationCoverage,
@@ -34,14 +39,17 @@ import {
   shouldStopConsolidationPass,
 } from "./group-stability.js";
 import {
-  callCluster,
-  completePlannerStage,
-} from "./planner-stage.js";
+  hasOnlyScopedSingleFileTestPairs,
+  normalizeBroadSupportGroups,
+  normalizeMixedRootImplementationGroups,
+} from "./normalization.js";
+import { callCluster, completePlannerStage } from "./stage.js";
 
 /** Finalizes batched planner output into stable, coverage-safe commit groups. */
 export async function finalizePlannedGroups(
   allFiles: FileDiff[],
   groups: PlannedCommit[],
+  options: CommitMessageRuleOptions = {},
 ): Promise<PlannedCommit[]> {
   if (groups.length < 2) {
     return groups;
@@ -50,9 +58,8 @@ export async function finalizePlannedGroups(
   const startedAtMs = performance.now();
   const fileByPath = new Map(allFiles.map((file) => [file.path, file]));
   const fileSignals = buildFileChangeSignals(allFiles);
-
-  let current = premergeBySubject(groups, fileByPath);
-  const baselineGroups = current;
+  const baselineGroups = prepareBaselineGroups(groups, fileByPath);
+  let current = baselineGroups;
 
   if (!hasPotentialMergeSignals(current)) {
     return finalizeWithoutConsolidation(
@@ -63,25 +70,37 @@ export async function finalizePlannedGroups(
     );
   }
 
-  current = await clusterAndMerge(current, fileByPath, fileSignals);
+  current = await clusterAndMerge(
+    current,
+    fileByPath,
+    fileSignals,
+    groups.length,
+  );
+  if (
+    current.length < baselineGroups.length &&
+    hasOnlyScopedSingleFileTestPairs(current)
+  ) {
+    return finalizeStabilizedGroups(
+      groups.length,
+      baselineGroups.length,
+      current,
+      fileByPath,
+      fileSignals,
+      startedAtMs,
+    );
+  }
   current = await runConsolidationPasses(
     allFiles,
     current,
     fileByPath,
     fileSignals,
     startedAtMs,
+    options,
   );
-  const repartitioned = splitWeakConsolidations(
+  return finalizeConsolidatedGroups(
+    groups.length,
     baselineGroups,
     current,
-    fileByPath,
-    fileSignals,
-  );
-
-  return finalizeStabilizedGroups(
-    groups.length,
-    baselineGroups.length,
-    repartitioned,
     fileByPath,
     fileSignals,
     startedAtMs,
@@ -92,39 +111,29 @@ async function clusterAndMerge(
   groups: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
   fileSignals: Map<string, FileChangeSignals>,
+  originalGroupCount: number,
 ): Promise<PlannedCommit[]> {
   let current = groups;
 
   for (
     let pass = 0;
     pass < MAX_CLUSTER_PASSES &&
-    current.length >= CLUSTERING_THRESHOLD &&
-    hasPotentialMergeSignals(current);
+    (current.length >= CLUSTERING_THRESHOLD ||
+      (pass === 0 && originalGroupCount >= CLUSTERING_THRESHOLD)) &&
+    (hasPotentialMergeSignals(current) ||
+      (pass === 0 && originalGroupCount >= CLUSTERING_THRESHOLD));
     pass++
   ) {
-    const passStartedAtMs = performance.now();
-    const clusters = await callCluster(
+    const next = await runClusterMergePass(
       current,
-      buildClusterUserPrompt,
-      buildClusterSystemPrompt,
+      fileByPath,
+      fileSignals,
+      pass,
     );
-    if (!clusters) {
+    if (next === null) {
       break;
     }
-
-    const merged = mergeClusterPass(current, clusters, fileByPath, fileSignals);
-    if (!merged) {
-      break;
-    }
-
-    if (merged.stabilized.length >= current.length) {
-      emitClusterStopEvent(current.length, clusters.length, merged, passStartedAtMs, pass + 1);
-      break;
-    }
-
-    emitClusterPassEvent(current.length, clusters.length, merged, passStartedAtMs, pass + 1);
-
-    current = merged.stabilized;
+    current = next;
   }
 
   return current;
@@ -135,12 +144,13 @@ async function consolidateOnce(
   groups: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
   fileSignals: Map<string, FileChangeSignals>,
+  options: CommitMessageRuleOptions,
 ): Promise<null | PlannedCommit[]> {
   const startedAtMs = performance.now();
   const plannerResult = await completePlannerStage(
-    buildConsolidationUserPrompt(allFiles, groups),
+    buildConsolidationUserPrompt(allFiles, groups, options),
     "consolidate",
-    buildConsolidationSystemPrompt(),
+    buildConsolidationSystemPrompt(options),
     groups,
   );
   if (plannerResult === null) {
@@ -150,14 +160,21 @@ async function consolidateOnce(
     plannerResult.parsed,
     fileByPath,
     groups.length,
+    options,
   );
   if (!consolidated) {
     return null;
   }
 
   if (!hasValidConsolidationCoverage(groups, consolidated, fileByPath)) {
-    emitCoverageMismatchFallback(groups, consolidated, fileByPath);
-    return null;
+    return resolveCoverageMismatchConsolidation(
+      startedAtMs,
+      groups,
+      consolidated,
+      fileByPath,
+      fileSignals,
+      options,
+    );
   }
 
   const harmonized = harmonizeConsolidationResult(
@@ -166,11 +183,46 @@ async function consolidateOnce(
     consolidated,
     fileByPath,
     fileSignals,
+    options,
   );
   if (!harmonized) {
     return null;
   }
   return harmonized;
+}
+
+function finalizeConsolidatedGroups(
+  inputGroupCount: number,
+  baselineGroups: PlannedCommit[],
+  current: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+  fileSignals: Map<string, FileChangeSignals>,
+  startedAtMs: number,
+): PlannedCommit[] {
+  const repartitioned = splitWeakConsolidations(
+    baselineGroups,
+    current,
+    fileByPath,
+    fileSignals,
+  );
+  const renormalized = normalizeBroadSupportGroups(
+    normalizeMixedRootImplementationGroups(
+      repartitioned,
+      baselineGroups,
+      fileByPath,
+    ),
+    baselineGroups,
+    fileByPath,
+  );
+
+  return finalizeStabilizedGroups(
+    inputGroupCount,
+    baselineGroups.length,
+    renormalized,
+    fileByPath,
+    fileSignals,
+    startedAtMs,
+  );
 }
 
 function harmonizeConsolidationResult(
@@ -179,6 +231,7 @@ function harmonizeConsolidationResult(
   consolidated: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
   fileSignals: Map<string, FileChangeSignals>,
+  options: CommitMessageRuleOptions,
 ): null | PlannedCommit[] {
   return resolveHarmonizedConsolidation(
     groups,
@@ -186,7 +239,105 @@ function harmonizeConsolidationResult(
     fileByPath,
     fileSignals,
     startedAtMs,
+    options,
   );
+}
+
+function prepareBaselineGroups(
+  groups: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+): PlannedCommit[] {
+  const premergedGroups = premergeBySubject(groups, fileByPath);
+
+  return normalizeBroadSupportGroups(
+    normalizeMixedRootImplementationGroups(premergedGroups, groups, fileByPath),
+    groups,
+    fileByPath,
+  );
+}
+
+function resolveCoverageMismatchConsolidation(
+  startedAtMs: number,
+  groups: PlannedCommit[],
+  consolidated: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+  fileSignals: Map<string, FileChangeSignals>,
+  options: CommitMessageRuleOptions,
+): null | PlannedCommit[] {
+  const coverageMismatch = getCoverageMismatchDiagnostics(
+    groups,
+    consolidated,
+    fileByPath,
+  );
+  const salvaged = salvageCoverageSafeConsolidation(
+    groups,
+    consolidated,
+    fileByPath,
+  );
+  if (!coverageMismatch || !salvaged) {
+    emitCoverageMismatchFallback(groups, consolidated, fileByPath);
+    return null;
+  }
+
+  emitCoverageMismatchPartialSalvage(
+    coverageMismatch,
+    groups,
+    consolidated,
+    salvaged,
+  );
+  return harmonizeConsolidationResult(
+    startedAtMs,
+    groups,
+    salvaged,
+    fileByPath,
+    fileSignals,
+    options,
+  );
+}
+
+async function runClusterMergePass(
+  current: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+  fileSignals: Map<string, FileChangeSignals>,
+  pass: number,
+): Promise<null | PlannedCommit[]> {
+  const passStartedAtMs = performance.now();
+  const clusters = await callCluster(
+    current,
+    buildClusterUserPrompt,
+    buildClusterSystemPrompt,
+  );
+  if (!clusters) {
+    return null;
+  }
+
+  const merged = mergeClusterPass(current, clusters, fileByPath, fileSignals);
+  if (!merged) {
+    return null;
+  }
+
+  if (merged.stabilized.length >= current.length) {
+    emitClusterProgressEvent(
+      current.length,
+      clusters.length,
+      merged,
+      passStartedAtMs,
+      pass + 1,
+      true,
+    );
+    return null;
+  }
+
+  emitClusterProgressEvent(
+    current.length,
+    clusters.length,
+    merged,
+    passStartedAtMs,
+    pass + 1,
+    false,
+  );
+
+  return merged.stabilized;
 }
 
 async function runConsolidationPasses(
@@ -195,11 +346,16 @@ async function runConsolidationPasses(
   fileByPath: Map<string, FileDiff>,
   fileSignals: Map<string, FileChangeSignals>,
   startedAtMs: number,
+  options: CommitMessageRuleOptions,
 ): Promise<PlannedCommit[]> {
   let current = groups;
   let previousReduction = Number.POSITIVE_INFINITY;
 
-  for (let pass = 0; pass < MAX_CONSOLIDATION_PASSES && current.length > 1; pass++) {
+  for (
+    let pass = 0;
+    pass < MAX_CONSOLIDATION_PASSES && current.length > 1;
+    pass++
+  ) {
     if (!hasPotentialMergeSignals(current)) {
       break;
     }
@@ -217,6 +373,7 @@ async function runConsolidationPasses(
       current,
       fileByPath,
       fileSignals,
+      options,
     );
     if (!consolidated) {
       break;
