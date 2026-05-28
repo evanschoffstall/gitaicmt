@@ -107,6 +107,7 @@ export async function cmdCommit(
 
   const fileMap = new Map(files.map((file) => [file.path, file]));
   displayPlan(mergedGroups, fileMap);
+  logSavedPlanBundle(savePlanBundle(mergedGroups, analysis.stagedPatch));
 
   if (!(await confirmCommitPlan(autoConfirm, mergedGroups.length))) {
     return;
@@ -131,12 +132,16 @@ export async function cmdCommitSingle(
   const chunks = chunkDiffs(files);
   const stats = getStats(files, chunks);
   const cfg = loadConfig();
-  const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
-  if (!(await confirmTokenCheckedGeneration(cfg, stats, tokenEstimate, skipTokenCheck))) {
+  const message = await confirmAndGenerateCommitMessage(
+    chunks,
+    stats,
+    cfg,
+    skipTokenCheck,
+    breakingMode,
+  );
+  if (message === null) {
     return;
   }
-
-  const message = await withThinkingIndicator(() => generateForChunks(chunks, stats));
   const elapsed = ((performance.now() - startedAtMs) / 1000).toFixed(1);
 
   log(`${GREEN}${BOLD}Commit message:${RESET}`);
@@ -167,13 +172,17 @@ export async function cmdGenerate(
   verbose("Chunking diffs");
   const chunks = chunkDiffs(files);
   const stats = getStats(files, chunks);
-  const tokenEstimate = estimateGenerateOperationTokens(chunks, stats, cfg);
-  if (!(await confirmTokenCheckedGeneration(cfg, stats, tokenEstimate, skipTokenCheck))) {
+  const message = await confirmAndGenerateCommitMessage(
+    chunks,
+    stats,
+    cfg,
+    skipTokenCheck,
+    breakingMode,
+  );
+  if (message === null) {
     return;
   }
 
-  verbose("Calling OpenAI API");
-  const message = await withThinkingIndicator(() => generateForChunks(chunks, stats));
   const elapsed = ((performance.now() - startedAtMs) / 1000).toFixed(1);
 
   log(`${DIM}(${elapsed}s)${RESET}`);
@@ -260,6 +269,7 @@ export async function cmdResume(
   }
 
   executePlannedCommits(selectedPlan.validPlan, fileMap, {
+    cwd: bundle.repoRoot,
     ignoreMessageBody,
   });
 }

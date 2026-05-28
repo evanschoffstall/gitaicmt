@@ -129,16 +129,17 @@ function resolvePatchFileForCurrentIndex(
   file: FileDiff,
   cwd?: string,
 ): FileDiff {
-  if (!cwd || file.status !== "renamed" || !file.oldPath) {
+  if (file.status !== "renamed" || !file.oldPath) {
     return file;
   }
 
-  const oldPathTracked = isPathTrackedInIndex(file.oldPath, cwd);
+  const effectiveCwd = cwd ?? process.cwd();
+  const oldPathTracked = isPathTrackedInIndex(file.oldPath, effectiveCwd);
   if (oldPathTracked) {
     return file;
   }
 
-  const newPathTracked = isPathTrackedInIndex(file.path, cwd);
+  const newPathTracked = isPathTrackedInIndex(file.path, effectiveCwd);
   if (!newPathTracked) {
     return file;
   }
