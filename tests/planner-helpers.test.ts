@@ -11,7 +11,14 @@ import {
   supportsTemperature,
   toOpenAiCallError,
   validateModelName,
-} from "../src/commit-planning/client-support.js";
+} from "../src/commit-planning/client-contracts.js";
+import { buildFileChangeSignals } from "../src/commit-planning/grouping/file/index.js";
+import { hasImplementationMergeSignal } from "../src/commit-planning/grouping/implementation-merge/index.js";
+import {
+  getCommonActionWords,
+  getCommonIntentWords,
+} from "../src/commit-planning/grouping/intent/index.js";
+import { chooseSupportAttachment } from "../src/commit-planning/grouping/support-attachment/index.js";
 import {
   buildPlaceholderPlanGroupsForEstimate,
   estimateLikelyConsolidationPassCount,

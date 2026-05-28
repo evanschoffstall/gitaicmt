@@ -27,6 +27,7 @@ describe("folder entrypoints", () => {
   });
 
   test("commit message entrypoint exposes parsing and validation", () => {
+    expect(typeof commitMessages.markCommitMessageBreaking).toBe("function");
     expect(typeof commitMessages.validateCommitMessage).toBe("function");
     expect(typeof commitMessages.parseConventionalSubject).toBe("function");
   });
