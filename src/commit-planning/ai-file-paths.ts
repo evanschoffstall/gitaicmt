@@ -10,7 +10,9 @@ export type AiOutputFileAliasMap = ReadonlyMap<string, string>;
  * Reads the prompt's `File legend:` block and returns any `F<number> = path`
  * aliases defined there.
  */
-export function extractAiOutputFileAliasMap(prompt: string): Map<string, string> {
+export function extractAiOutputFileAliasMap(
+  prompt: string,
+): Map<string, string> {
   const promptLines = prompt.split(/\r?\n/u);
   const legendStartIndex = promptLines.findIndex(
     (line) => line.trim() === "File legend:",
