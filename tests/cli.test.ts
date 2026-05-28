@@ -684,26 +684,20 @@ describe("CLI", () => {
 
 describe("plannedCommitFilesOverlap", () => {
   test("whole-file vs whole-file → overlaps", () => {
-    expect(
-      plannedCommitFilesOverlap({ path: "a.ts" }, { path: "a.ts" }),
-    ).toBe(true);
+    expect(plannedCommitFilesOverlap({ path: "a.ts" }, { path: "a.ts" })).toBe(
+      true,
+    );
   });
 
   test("whole-file vs hunked → overlaps", () => {
     expect(
-      plannedCommitFilesOverlap(
-        { path: "a.ts" },
-        { hunks: [0], path: "a.ts" },
-      ),
+      plannedCommitFilesOverlap({ path: "a.ts" }, { hunks: [0], path: "a.ts" }),
     ).toBe(true);
   });
 
   test("hunked vs whole-file → overlaps", () => {
     expect(
-      plannedCommitFilesOverlap(
-        { hunks: [1], path: "a.ts" },
-        { path: "a.ts" },
-      ),
+      plannedCommitFilesOverlap({ hunks: [1], path: "a.ts" }, { path: "a.ts" }),
     ).toBe(true);
   });
 

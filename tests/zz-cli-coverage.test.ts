@@ -36,7 +36,9 @@ type TokenEstimateSummary = Parameters<
 type TokenUsageSummary = Parameters<
   typeof sessionDisplayExports.logActualTokenUsage
 >[0];
-type VerboseEvent = Parameters<typeof sessionDisplayExports.logVerboseAiOutput>[0];
+type VerboseEvent = Parameters<
+  typeof sessionDisplayExports.logVerboseAiOutput
+>[0];
 
 let restoreStdin: (() => void) | null = null;
 
@@ -96,8 +98,10 @@ function createStdinTracker(): {
   onceCalls: [event: string, listener: (...args: unknown[]) => void][];
   stdin: Pick<NodeJS.ReadStream, "off" | "once">;
 } {
-  const offCalls: [event: string, listener: (...args: unknown[]) => void][] = [];
-  const onceCalls: [event: string, listener: (...args: unknown[]) => void][] = [];
+  const offCalls: [event: string, listener: (...args: unknown[]) => void][] =
+    [];
+  const onceCalls: [event: string, listener: (...args: unknown[]) => void][] =
+    [];
   const stdin = {
     off(
       event: string,
@@ -144,12 +148,9 @@ function createVerboseEvent(stage: string): VerboseEvent {
   } as VerboseEvent;
 }
 
-async function importFresh<T>(
-  relativePath: string,
-  tag: string,
-): Promise<T> {
+async function importFresh<T>(relativePath: string, tag: string): Promise<T> {
   return import(
-    new URL(`${relativePath}?${tag}-${Math.random()}`, import.meta.url).href,
+    new URL(`${relativePath}?${tag}-${Math.random()}`, import.meta.url).href
   ) as Promise<T>;
 }
 
@@ -274,10 +275,9 @@ describe("cli coverage", () => {
       return width;
     });
 
-    const viewportModule = await importFresh<typeof import("../src/cli/viewport.js")>(
-      "../src/cli/viewport.js",
-      "viewport",
-    );
+    const viewportModule = await importFresh<
+      typeof import("../src/cli/viewport.js")
+    >("../src/cli/viewport.js", "viewport");
 
     expect(viewportModule.resolveDisplayWidth()).toBe(24);
     expect(viewportModule.resolveLogWidth()).toBe(39);
@@ -294,11 +294,11 @@ describe("cli coverage", () => {
     spyOn(outputUi, "writeTerminalLines").mockImplementation((lines) => {
       writes.push(lines);
     });
-    spyOn(process, "exit").mockImplementation(
-      ((code?: null | number | string | undefined) => {
-        throw new Error(`exit:${code}`);
-      }) as never,
-    );
+    spyOn(process, "exit").mockImplementation(((
+      code?: null | number | string | undefined,
+    ) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
 
     const fatal = await importFresh<typeof import("../src/cli/fatal.js")>(
       "../src/cli/fatal.js",
@@ -314,9 +314,9 @@ describe("cli coverage", () => {
       typeof import("../src/commit-planning/output-text.js")
     >("../src/commit-planning/output-text.js", "output-text");
 
-    expect(outputText.extractResponseText({ output_text: "  final text  " })).toBe(
-      "final text",
-    );
+    expect(
+      outputText.extractResponseText({ output_text: "  final text  " }),
+    ).toBe("final text");
     expect(
       outputText.extractResponseText({
         output: [
@@ -391,7 +391,9 @@ describe("cli coverage", () => {
     const noTracker = createStdinTracker();
     replaceProcessStdin(noTracker.stdin);
     spyOn(viewport, "resolveLogWidth").mockReturnValue(44);
-    spyOn(lineWrapping, "wrapTerminalTextBlock").mockReturnValue(["single line"]);
+    spyOn(lineWrapping, "wrapTerminalTextBlock").mockReturnValue([
+      "single line",
+    ]);
     spyOn(outputUi, "writeTerminalLines").mockImplementation(() => undefined);
     spyOn(readline, "createInterface").mockImplementation(
       () =>
@@ -632,13 +634,17 @@ describe("cli coverage", () => {
       requestCount: 2,
       totalTokens: 99,
     } as never);
-    spyOn(orchestration, "validateOpenAIConfiguration").mockImplementation(() => {
-      validated += 1;
-    });
-    spyOn(interactivePrompt, "promptYesNo").mockImplementation(async (question) => {
-      promptQuestions.push(question);
-      return promptAnswers.shift() ?? true;
-    });
+    spyOn(orchestration, "validateOpenAIConfiguration").mockImplementation(
+      () => {
+        validated += 1;
+      },
+    );
+    spyOn(interactivePrompt, "promptYesNo").mockImplementation(
+      async (question) => {
+        promptQuestions.push(question);
+        return promptAnswers.shift() ?? true;
+      },
+    );
     spyOn(outputPresentation, "buildReadyPromptLines").mockImplementation(
       (plannedCommitCount, width) => [`ready:${plannedCommitCount}:${width}`],
     );
