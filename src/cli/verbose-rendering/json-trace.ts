@@ -135,11 +135,7 @@ function formatTraceFileReference(
       return compactPathReference;
     }
 
-    return [
-      "{",
-      `  "path": ${JSON.stringify(value.path)}`,
-      "}",
-    ].join("\n");
+    return ["{", `  "path": ${JSON.stringify(value.path)}`, "}"].join("\n");
   }
 
   if (

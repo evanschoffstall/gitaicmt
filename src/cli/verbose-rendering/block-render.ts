@@ -7,7 +7,8 @@ import {
 } from "./event-stats.js";
 import { formatJsonTraceValue } from "./json-trace.js";
 
-type AiOutputEvent = import("../../commit-planning/openai-client.js").AiOutputEvent;
+type AiOutputEvent =
+  import("../../commit-planning/openai-client.js").AiOutputEvent;
 
 export const ANSI_BOLD = "\x1b[1m";
 export const ANSI_CYAN = "\x1b[36m";
@@ -84,11 +85,15 @@ export function formatEventStatLines(
   const lines: string[] = [];
 
   if (summaryParts.length > 0) {
-    lines.push(...formatWrappedStatLine("stats", summaryParts, maxWidth, severity));
+    lines.push(
+      ...formatWrappedStatLine("stats", summaryParts, maxWidth, severity),
+    );
   }
 
   if (usageParts.length > 0) {
-    lines.push(...formatWrappedStatLine("usage", usageParts, maxWidth, severity));
+    lines.push(
+      ...formatWrappedStatLine("usage", usageParts, maxWidth, severity),
+    );
   }
 
   return lines;
@@ -228,13 +233,16 @@ export function wrapLine(
   firstPrefix: string,
   continuationPrefix: string,
 ): string[] {
-  const wrappedContentLines = wrapTokenizedTextBySeparatorPreference(text, maxWidth);
+  const wrappedContentLines = wrapTokenizedTextBySeparatorPreference(
+    text,
+    maxWidth,
+  );
   if (wrappedContentLines.length === 1 && wrappedContentLines[0].length === 0) {
     return [firstPrefix.trimEnd()];
   }
 
-  return wrappedContentLines.map((line, index) =>
-    `${index === 0 ? firstPrefix : continuationPrefix}${line}`,
+  return wrappedContentLines.map(
+    (line, index) => `${index === 0 ? firstPrefix : continuationPrefix}${line}`,
   );
 }
 

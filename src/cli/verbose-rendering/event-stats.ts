@@ -1,4 +1,5 @@
-type AiOutputEvent = import("../../commit-planning/openai-client.js").AiOutputEvent;
+type AiOutputEvent =
+  import("../../commit-planning/openai-client.js").AiOutputEvent;
 
 const PLANNER_DECISION_TITLES = {
   "batched-plan-finalization": "Batched plan finalization",
@@ -46,9 +47,7 @@ export function describePlannerDecision(parsed: unknown): null | string {
   }
 
   const title = Object.hasOwn(PLANNER_DECISION_TITLES, decision)
-    ? PLANNER_DECISION_TITLES[
-        decision as keyof typeof PLANNER_DECISION_TITLES
-      ]
+    ? PLANNER_DECISION_TITLES[decision as keyof typeof PLANNER_DECISION_TITLES]
     : undefined;
   return title ?? formatPlannerDecisionTitle(decision);
 }
@@ -83,6 +82,9 @@ function formatPlannerDecisionTitle(decision: string): string {
     .join(" ");
 }
 
-function formatUsagePart(value: number | undefined, suffix: string): string | undefined {
+function formatUsagePart(
+  value: number | undefined,
+  suffix: string,
+): string | undefined {
   return typeof value === "number" ? `${String(value)} ${suffix}` : undefined;
 }
