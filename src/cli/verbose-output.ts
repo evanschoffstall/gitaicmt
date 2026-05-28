@@ -1,6 +1,6 @@
 import type { AiOutputEvent } from "../commit-planning/orchestration.js";
 
-import { normalizeAiOutputPaths } from "../commit-planning/ai-output-aliases.js";
+import { normalizeAiOutputPaths } from "../commit-planning/ai-file-paths.js";
 import {
   buildEventTitle,
   formatEventStatLines,
@@ -47,7 +47,10 @@ export function formatVerboseAiOutputLines(
 ): string[] {
   const maxWidth = Math.max(24, options?.maxWidth ?? 100);
   const mode = options?.mode ?? "summary";
-  const parsed = normalizeAiOutputPaths(parseJson(event.content), event.fileAliasMap);
+  const parsed = normalizeAiOutputPaths(
+    parseJson(event.content),
+    event.fileAliasMap,
+  );
   const sequence = options?.sequence;
 
   if (mode === "trace") {
@@ -213,17 +216,12 @@ function formatCommitPlanBlock(
     const impactSummary = `${String(commit.files.length)} file(s) · ${String(bullets.length)} ${bullets.length === 1 ? "detail" : "details"}`;
 
     lines.push(
-      ...buildCommitSubjectPreviewLines(
-        commit,
-        index,
-        maxWidth,
-        {
-          continuationPrefix: "│    ",
-          firstPrefix: "│ ",
-          severity,
-          wrapOffset: 2,
-        },
-      ),
+      ...buildCommitSubjectPreviewLines(commit, index, maxWidth, {
+        continuationPrefix: "│    ",
+        firstPrefix: "│ ",
+        severity,
+        wrapOffset: 2,
+      }),
       ...buildTraceWrappedLines(
         `impact: ${impactSummary}`,
         maxWidth,
@@ -245,8 +243,8 @@ function formatCommitPlanBlock(
     const previewBullets = bullets.slice(0, 2);
     for (const bullet of previewBullets) {
       lines.push(
-        ...wrapLine(bullet, maxWidth - 6, "│   - ", "│     ").map(
-          (line) => styleTraceRail(line, severity),
+        ...wrapLine(bullet, maxWidth - 6, "│   - ", "│     ").map((line) =>
+          styleTraceRail(line, severity),
         ),
       );
     }
@@ -294,17 +292,12 @@ function formatConsolidationTraceSummary(
 
   for (const [index, commit] of commits.slice(0, 3).entries()) {
     lines.push(
-      ...buildCommitSubjectPreviewLines(
-        commit,
-        index,
-        maxWidth,
-        {
-          continuationPrefix: "│      ",
-          firstPrefix: "│   ",
-          severity,
-          wrapOffset: 4,
-        },
-      ),
+      ...buildCommitSubjectPreviewLines(commit, index, maxWidth, {
+        continuationPrefix: "│      ",
+        firstPrefix: "│   ",
+        severity,
+        wrapOffset: 4,
+      }),
     );
   }
 
@@ -372,9 +365,7 @@ function isCommitPlan(value: unknown): value is VerboseCommitPlanItem[] {
             (!("hunks" in file) ||
               file.hunks === undefined ||
               (Array.isArray(file.hunks) &&
-                file.hunks.every(
-                  (hunk: unknown) => typeof hunk === "number",
-                ))),
+                file.hunks.every((hunk: unknown) => typeof hunk === "number"))),
         ),
     )
   );
