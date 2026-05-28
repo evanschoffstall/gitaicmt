@@ -81,10 +81,7 @@ describe("validateAndNormalizeGrouping", () => {
       validateAndNormalizeGrouping(
         [
           {
-            files: [
-              file.path,
-              { hunks: [99], path: file.path },
-            ],
+            files: [file.path, { hunks: [99], path: file.path }],
             message: commitMessage("fix(app): reject mixed invalid entries"),
           },
         ],
@@ -97,18 +94,28 @@ describe("validateAndNormalizeGrouping", () => {
     const file = makeFile("src/app.ts", 1);
     const fileByPath = new Map([[file.path, file]]);
 
-    expect(() =>
-      validateAndNormalizeGrouping([null], fileByPath),
-    ).toThrow(ValidationError);
+    expect(() => validateAndNormalizeGrouping([null], fileByPath)).toThrow(
+      ValidationError,
+    );
     expect(() =>
       validateAndNormalizeGrouping(
-        [{ files: "src/app.ts", message: commitMessage("fix(app): invalid files payload") }],
+        [
+          {
+            files: "src/app.ts",
+            message: commitMessage("fix(app): invalid files payload"),
+          },
+        ],
         fileByPath,
       ),
     ).toThrow(ValidationError);
     expect(() =>
       validateAndNormalizeGrouping(
-        [{ files: [], message: commitMessage("fix(app): empty files payload") }],
+        [
+          {
+            files: [],
+            message: commitMessage("fix(app): empty files payload"),
+          },
+        ],
         fileByPath,
       ),
     ).toThrow(ValidationError);
@@ -119,10 +126,16 @@ describe("validateAndNormalizeGrouping", () => {
     const fileByPath = new Map([[file.path, file]]);
 
     expect(() =>
-      validateAndNormalizeGrouping([{ files: [file.path], message: 42 }], fileByPath),
+      validateAndNormalizeGrouping(
+        [{ files: [file.path], message: 42 }],
+        fileByPath,
+      ),
     ).toThrow(ValidationError);
     expect(() =>
-      validateAndNormalizeGrouping([{ files: [file.path], message: "   " }], fileByPath),
+      validateAndNormalizeGrouping(
+        [{ files: [file.path], message: "   " }],
+        fileByPath,
+      ),
     ).toThrow(ValidationError);
     expect(() =>
       validateAndNormalizeGrouping(
@@ -142,7 +155,9 @@ describe("validateAndNormalizeGrouping", () => {
       [
         {
           files: files.map((file) => file.path),
-          message: commitMessage("refactor(core): keep a large valid changeset together"),
+          message: commitMessage(
+            "refactor(core): keep a large valid changeset together",
+          ),
         },
       ],
       fileByPath,
@@ -151,7 +166,9 @@ describe("validateAndNormalizeGrouping", () => {
     expect(groups).toEqual([
       {
         files: files.map((file) => ({ path: file.path })),
-        message: commitMessage("refactor(core): keep a large valid changeset together"),
+        message: commitMessage(
+          "refactor(core): keep a large valid changeset together",
+        ),
       },
     ]);
   });
@@ -188,7 +205,9 @@ describe("validateAndNormalizeGrouping", () => {
       [
         {
           files: [{ hunks: [0], path: "src/commit-merge.ts" }],
-          message: commitMessage("refactor(grouping): keep rename paths resolvable"),
+          message: commitMessage(
+            "refactor(grouping): keep rename paths resolvable",
+          ),
         },
       ],
       fileByPath,
@@ -197,20 +216,29 @@ describe("validateAndNormalizeGrouping", () => {
     expect(groups).toEqual([
       {
         files: [{ hunks: [0], path: "src/group-merge.ts" }],
-        message: commitMessage("refactor(grouping): keep rename paths resolvable"),
+        message: commitMessage(
+          "refactor(grouping): keep rename paths resolvable",
+        ),
       },
     ]);
   });
 
   test("accepts safe extension-variant paths when the repo stem is unique", () => {
-    const file = makeFile("src/app/dashboard/hooks/useDashboardToolbarState.ts", 1);
+    const file = makeFile(
+      "src/app/dashboard/hooks/useDashboardToolbarState.ts",
+      1,
+    );
     const fileByPath = new Map([[file.path, file]]);
 
     const groups = validateAndNormalizeGrouping(
       [
         {
-          files: [{ path: "src/app/dashboard/hooks/useDashboardToolbarState.tsx" }],
-          message: commitMessage("fix(dashboard): accept planner extension drift"),
+          files: [
+            { path: "src/app/dashboard/hooks/useDashboardToolbarState.tsx" },
+          ],
+          message: commitMessage(
+            "fix(dashboard): accept planner extension drift",
+          ),
         },
       ],
       fileByPath,
@@ -236,8 +264,12 @@ describe("validateAndNormalizeGrouping", () => {
       validateAndNormalizeGrouping(
         [
           {
-            files: [{ path: "src/app/dashboard/hooks/useDashboardToolbarState.jsx" }],
-            message: commitMessage("fix(dashboard): reject ambiguous extension drift"),
+            files: [
+              { path: "src/app/dashboard/hooks/useDashboardToolbarState.jsx" },
+            ],
+            message: commitMessage(
+              "fix(dashboard): reject ambiguous extension drift",
+            ),
           },
         ],
         fileByPath,
@@ -253,7 +285,9 @@ describe("validateAndNormalizeGrouping", () => {
       [
         {
           files: [{ hunks: "all", path: file.path }],
-          message: commitMessage("fix(app): normalize whole-file hunk selector"),
+          message: commitMessage(
+            "fix(app): normalize whole-file hunk selector",
+          ),
         },
       ],
       fileByPath,
@@ -283,7 +317,9 @@ describe("validateAndNormalizeGrouping", () => {
             { hunks: [1, 2], path: file.path },
             { path: other.path },
           ],
-          message: commitMessage("refactor(app): merge duplicate planner entries"),
+          message: commitMessage(
+            "refactor(app): merge duplicate planner entries",
+          ),
         },
       ],
       fileByPath,
@@ -291,11 +327,10 @@ describe("validateAndNormalizeGrouping", () => {
 
     expect(groups).toEqual([
       {
-        files: [
-          { hunks: [0, 1, 2], path: file.path },
-          { path: other.path },
-        ],
-        message: commitMessage("refactor(app): merge duplicate planner entries"),
+        files: [{ hunks: [0, 1, 2], path: file.path }, { path: other.path }],
+        message: commitMessage(
+          "refactor(app): merge duplicate planner entries",
+        ),
       },
     ]);
   });
@@ -308,7 +343,9 @@ describe("validateAndNormalizeGrouping", () => {
       [
         {
           files: [{ hunks: [0], path: file.path }, { path: file.path }],
-          message: commitMessage("fix(app): keep whole-file ownership when planner duplicates entries"),
+          message: commitMessage(
+            "fix(app): keep whole-file ownership when planner duplicates entries",
+          ),
         },
       ],
       fileByPath,
