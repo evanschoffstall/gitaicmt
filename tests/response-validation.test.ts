@@ -246,15 +246,59 @@ describe("validateAndNormalizeGrouping", () => {
 
     expect(groups).toEqual([
       {
-        files: [{ path: "src/app/dashboard/hooks/useDashboardToolbarState.ts" }],
-        message: commitMessage("fix(dashboard): accept planner extension drift"),
+        files: [
+          { path: "src/app/dashboard/hooks/useDashboardToolbarState.ts" },
+        ],
+        message: commitMessage(
+          "fix(dashboard): accept planner extension drift",
+        ),
+      },
+    ]);
+  });
+
+  test("accepts unique basename matches when the planner drops an intermediate directory", () => {
+    const file = makeFile("src/commit-planning/prompts/rules/formatting.ts", 1);
+    const fileByPath = new Map([[file.path, file]]);
+
+    const groups = validateAndNormalizeGrouping(
+      [
+        {
+          files: [
+            {
+              path: "src/commit-planning/prompts/formatting.ts",
+            },
+          ],
+          message: commitMessage(
+            "fix(prompts): accept unique dropped-directory planner paths",
+          ),
+        },
+      ],
+      fileByPath,
+    );
+
+    expect(groups).toEqual([
+      {
+        files: [
+          {
+            path: "src/commit-planning/prompts/rules/formatting.ts",
+          },
+        ],
+        message: commitMessage(
+          "fix(prompts): accept unique dropped-directory planner paths",
+        ),
       },
     ]);
   });
 
   test("rejects extension-variant paths when multiple files share the same stem", () => {
-    const tsFile = makeFile("src/app/dashboard/hooks/useDashboardToolbarState.ts", 1);
-    const tsxFile = makeFile("src/app/dashboard/hooks/useDashboardToolbarState.tsx", 1);
+    const tsFile = makeFile(
+      "src/app/dashboard/hooks/useDashboardToolbarState.ts",
+      1,
+    );
+    const tsxFile = makeFile(
+      "src/app/dashboard/hooks/useDashboardToolbarState.tsx",
+      1,
+    );
     const fileByPath = new Map([
       [tsFile.path, tsFile],
       [tsxFile.path, tsxFile],

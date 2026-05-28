@@ -186,10 +186,7 @@ function validateRawGroupingArray(raw: unknown): unknown[] {
   return raw;
 }
 
-function validateRawGroupMessage(
-  message: unknown,
-  groupIndex: number,
-): string {
+function validateRawGroupMessage(message: unknown, groupIndex: number): string {
   if (typeof message !== "string") {
     throw new ValidationError(
       `Commit group ${formatScalar(groupIndex)} has invalid 'message' field. Expected string, got: ${typeof message}`,
@@ -221,7 +218,11 @@ function validateRawGroupShape(
   }
 
   const group = candidate as { files?: unknown; message?: unknown };
-  const files = validateRawGroupFiles(group.files, availableFileCount, groupIndex);
+  const files = validateRawGroupFiles(
+    group.files,
+    availableFileCount,
+    groupIndex,
+  );
   const message = validateRawGroupMessage(group.message, groupIndex);
   return { files, message };
 }
