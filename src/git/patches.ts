@@ -1,12 +1,13 @@
 import type { DiffHunk, FileDiff } from "./models.js";
 
-import {
-  encodeGitQuotedPath,
-} from "./header.js";
+import { encodeGitQuotedPath } from "./header.js";
 
 export function buildPatch(file: FileDiff, hunks?: DiffHunk[]): string {
   const selectedHunks = hunks ?? file.hunks;
-  if (file.isBinary || isEmptyPatchSelection(selectedHunks, file.metadataLines)) {
+  if (
+    file.isBinary ||
+    isEmptyPatchSelection(selectedHunks, file.metadataLines)
+  ) {
     return "";
   }
 

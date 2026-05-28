@@ -4,7 +4,6 @@
  * All git command execution has been moved to git.ts
  */
 
-
 export { chunkDiffs } from "./chunks.js";
 export {
   formatDiffHeaderLines,
@@ -15,4 +14,3 @@ export {
 export type { DiffChunk, DiffHunk, DiffStats, FileDiff } from "./models.js";
 export { parseDiff } from "./parser.js";
 export { buildPatch } from "./patches.js";
-

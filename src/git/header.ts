@@ -61,7 +61,9 @@ export function encodeGitQuotedPath(path: string): string {
 
 export function normalizeDiffPath(rawPath: string): string {
   const trimmedPath = rawPath.trim();
-  return isQuotedPath(trimmedPath) ? decodeGitQuotedPath(trimmedPath) : trimmedPath;
+  return isQuotedPath(trimmedPath)
+    ? decodeGitQuotedPath(trimmedPath)
+    : trimmedPath;
 }
 
 export function parseFileHeader(
@@ -160,7 +162,9 @@ function parseEscapedPathByte(
     return { bytes: [escapeByte], nextIndex: index + 1 };
   }
 
-  const octalDigits = /^[0-7]{1,3}/u.exec(content.slice(index + 1, index + 4))?.[0];
+  const octalDigits = /^[0-7]{1,3}/u.exec(
+    content.slice(index + 1, index + 4),
+  )?.[0];
   if (octalDigits) {
     return {
       bytes: [Number.parseInt(octalDigits, 8)],
@@ -171,7 +175,9 @@ function parseEscapedPathByte(
   return { bytes: [...Buffer.from(escaped)], nextIndex: index + 1 };
 }
 
-function parseQuotedDiffHeaderPaths(remainder: string): [string, string] | null {
+function parseQuotedDiffHeaderPaths(
+  remainder: string,
+): [string, string] | null {
   if (!remainder.startsWith('"')) {
     return null;
   }
@@ -190,7 +196,10 @@ function parseQuotedDiffHeaderPaths(remainder: string): [string, string] | null 
     remainder,
     firstToken.nextIndex + separator[0].length,
   );
-  if (!secondToken || remainder.slice(secondToken.nextIndex).trim().length > 0) {
+  if (
+    !secondToken ||
+    remainder.slice(secondToken.nextIndex).trim().length > 0
+  ) {
     return null;
   }
 
@@ -228,25 +237,35 @@ function splitDiffHeaderPaths(remainder: string): [string, string] | null {
   );
 }
 
-function splitPrefixedDiffHeaderPaths(remainder: string): [string, string] | null {
+function splitPrefixedDiffHeaderPaths(
+  remainder: string,
+): [string, string] | null {
   if (remainder.startsWith("a/")) {
     const separatorIndex = remainder.lastIndexOf(" b/");
     if (separatorIndex > 0) {
-      return [remainder.slice(0, separatorIndex), remainder.slice(separatorIndex + 1)];
+      return [
+        remainder.slice(0, separatorIndex),
+        remainder.slice(separatorIndex + 1),
+      ];
     }
   }
 
   if (remainder.startsWith("b/")) {
     const separatorIndex = remainder.lastIndexOf(" a/");
     if (separatorIndex > 0) {
-      return [remainder.slice(separatorIndex + 1), remainder.slice(0, separatorIndex)];
+      return [
+        remainder.slice(separatorIndex + 1),
+        remainder.slice(0, separatorIndex),
+      ];
     }
   }
 
   return null;
 }
 
-function splitSimpleDiffHeaderPaths(remainder: string): [string, string] | null {
+function splitSimpleDiffHeaderPaths(
+  remainder: string,
+): [string, string] | null {
   const separatorIndex = remainder.indexOf(" ");
   return separatorIndex === -1
     ? null
