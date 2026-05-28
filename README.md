@@ -290,12 +290,12 @@ gitaicmt init
   "openai": {
     "apiKey": "",
     "maxTokens": 512,
-    "model": "gpt-4o-mini",
+    "model": "gpt-5.3-codex",
     "temperature": 0.3
   },
   "performance": {
     "cacheEnabled": true,
-    "cacheTTLSeconds": 300,
+    "maxSavedPlanBundles": 50,
     "parallel": true,
     "timeoutMs": 15000
   }
@@ -304,67 +304,44 @@ gitaicmt init
 
 </details>
 
-### Token warning behavior
+### Token warnings
 
-Token usage is estimated before model calls. When the estimate reaches `analysis.tokenWarningThreshold`, gitaicmt warns and asks for confirmation by default.
+Token usage is estimated before model calls. When the estimate exceeds `analysis.tokenWarningThreshold`, gitaicmt asks for confirmation.
 
-- Set `analysis.promptOnTokenWarning` to `false` to disable the prompt.
-- Set `analysis.tokenWarningThreshold` to `0` to disable token warnings entirely.
-- Pass `--no-token-check` to bypass the prompt for one run.
+- Set `analysis.promptOnTokenWarning: false` to disable the prompt.
+- Set `analysis.tokenWarningThreshold: 0` to disable token warnings entirely.
+- Pass `--no-token-check` to skip for one run.
 
 > [!CAUTION]
-> Disabling token warnings removes the last confirmation step for unusually large model requests.
+> Disabling token warnings removes the last confirmation step before large model requests.
+
+### Saved plan bundles
+
+Saved plan bundles reuse `performance.cacheEnabled`, but they do not expire on a timer.
+
+- Set `performance.cacheEnabled: false` to disable persisted plan bundles and in-memory planner caching together.
+- `performance.maxSavedPlanBundles` controls how many saved bundle JSON files are kept. The default is `50`.
+- Resume restores the original staged patch only when the current repository HEAD still matches the saved bundle.
 
 ---
 
 ## Recommended Models
 
-The default model is `gpt-4o-mini`.
+Default: `gpt-5.3-codex` — a pragmatic latency and cost baseline. Move up when diffs are large or project structure is complex.
 
-The codebase currently documents these as sensible text-generation choices for commit generation:
+Other well-suited options: `gpt-4o`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-5`, `gpt-5-mini`, `gpt-5.3-chat-latest`, `o3`, `o4-mini`
 
-- `gpt-4o-mini`
-- `gpt-4o`
-- `gpt-4.1-mini`
-- `gpt-4.1`
-- `gpt-5-mini`
-- `gpt-5`
-- `gpt-5.3-chat-latest`
-- `gpt-5.3-codex`
-- `o3`
-- `o4-mini`
-
-<details>
-  <summary><strong>How to think about model choice</strong></summary>
-  <p><code>gpt-4o-mini</code> is the default because it is a pragmatic latency and cost baseline. Move up only when your diffs are large or your project structure is complex enough to justify the extra reasoning budget.</p>
-</details>
+> [!WARNING]
+> Custom providers and base URL overrides are not a supported configuration surface in the current release.
 
 ---
 
 ## Development
 
-This repository uses Bun end to end.
-
-### Local development
-
 ```bash
 bun install
 bun run build
-```
-
-> [!NOTE]
-> This repository's canonical validation entrypoint is `bun check summary`.
-
-### Validation
-
-```bash
-bun check summary
-```
-
-### Build
-
-```bash
-bun run build
+bun check summary   # canonical validation entrypoint
 ```
 
 ---
