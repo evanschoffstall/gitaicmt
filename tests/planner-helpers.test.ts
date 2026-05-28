@@ -91,6 +91,115 @@ describe("planner helper coverage", () => {
       ]),
     ).toBe(3);
   });
+
+  test("hasImplementationMergeSignal rejects mixed direct-file and subtree work within one feature root", () => {
+    const groupingGroup = {
+      files: [
+        {
+          path: "src/commit-planning/grouping/repartition.ts",
+        },
+        {
+          path: "src/commit-planning/grouping/support-attachment/test-ownership.ts",
+        },
+      ],
+      message:
+        "fix(grouping): prevent weak-owner support attachment and improve premerge matching",
+    };
+    const pathResolverGroup = {
+      files: [{ path: "src/commit-planning/path/resolver.ts" }],
+      message:
+        "fix(paths): resolve unique basenames with directory compatibility",
+    };
+    const files = [
+      makeFile("src/commit-planning/grouping/repartition.ts"),
+      makeFile(
+        "src/commit-planning/grouping/support-attachment/test-ownership.ts",
+      ),
+      makeFile("src/commit-planning/path/resolver.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+    const implementationGroups = [groupingGroup, pathResolverGroup];
+
+    expect(
+      hasImplementationMergeSignal(
+        groupingGroup,
+        pathResolverGroup,
+        fileSignals,
+        getCommonActionWords(implementationGroups),
+        getCommonIntentWords(implementationGroups, fileSignals),
+      ),
+    ).toBe(false);
+  });
+
+  test("chooseSupportAttachment prefers the implementation whose details match a focused validation regression", () => {
+    const supportGroup = {
+      files: [{ path: "tests/response-validation.test.ts" }],
+      message:
+        "test(validation): cover dropped-directory path normalization\n\n- Verify basename fallback resolves canonical planner paths with directory checks.",
+    };
+    const pathResolverGroup = {
+      files: [{ path: "src/commit-planning/path/resolver.ts" }],
+      message:
+        "fix(commit-planning): resolve paths by compatible basename fallback\n\n- Add canonical basename fallback with directory compatibility checks.",
+    };
+    const groupingGroup = {
+      files: [
+        {
+          path: "src/commit-planning/grouping/repartition.ts",
+        },
+      ],
+      message:
+        "fix(grouping): split broad test support by owning implementation\n\n- Tighten weak support attachment decisions for broad test buckets.",
+    };
+    const files = [
+      makeFile("tests/response-validation.test.ts"),
+      makeFile("src/commit-planning/path/resolver.ts"),
+      makeFile("src/commit-planning/grouping/repartition.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+
+    expect(
+      chooseSupportAttachment(
+        supportGroup,
+        [pathResolverGroup, groupingGroup],
+        [[0], [1]],
+        fileSignals,
+      ),
+    ).toBe(0);
+  });
+
+  test("chooseSupportAttachment ignores generic test-root ownership overlap", () => {
+    const supportGroup = {
+      files: [{ path: "tests/cli.test.ts" }],
+      message:
+        "test(cli): cover single-commit breaking mode passthrough\n\n- Keep CLI help and single-commit wiring aligned with release-impact mode selection.",
+    };
+    const breakingMessagesGroup = {
+      files: [
+        { path: "src/commit-messages/breaking-change-footers.ts" },
+        { path: "src/commit-messages/subject-parser.ts" },
+        { path: "tests/commit-messages.test.ts" },
+      ],
+      message:
+        "feat(messages): enforce and manage breaking-change metadata\n\n- Add footer parsing and stricter breaking-subject handling.",
+    };
+    const files = [
+      makeFile("tests/cli.test.ts"),
+      makeFile("src/commit-messages/breaking-change-footers.ts"),
+      makeFile("src/commit-messages/subject-parser.ts"),
+      makeFile("tests/commit-messages.test.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+
+    expect(
+      chooseSupportAttachment(
+        supportGroup,
+        [breakingMessagesGroup],
+        [[0]],
+        fileSignals,
+      ),
+    ).toBe(-1);
+  });
 });
 
 describe("client support coverage", () => {
