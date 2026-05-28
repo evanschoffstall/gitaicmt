@@ -128,7 +128,10 @@ describe("planner-notices", () => {
       transport: "internal",
     });
     recordPlannerNotice(state, {
-      content: JSON.stringify({ decision: "consolidation-fallback", reason: "coverage-mismatch" }),
+      content: JSON.stringify({
+        decision: "consolidation-fallback",
+        reason: "coverage-mismatch",
+      }),
       kind: "planner-decision",
       stage: "group",
       transport: "internal",
