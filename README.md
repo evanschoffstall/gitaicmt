@@ -4,21 +4,17 @@
 
 <br/>
 
-<h1>gitaicmt</h1>
-
 <img src="logo.svg" width="112" height="112" alt="gitaicmt logo" />
 
-<p><em>High quality AI-Powered conventional commits</em></p>
+<h1>gitaicmt</h1>
+
+<p><em>Rigorous AI-powered conventional commits</em></p>
 
 <p>
   <a href="https://www.typescriptlang.org"><img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5" /></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/Bun-runtime-F9F1E1?style=for-the-badge&logo=bun&logoColor=black" alt="Bun" /></a>
   <a href="https://platform.openai.com/docs/overview"><img src="https://img.shields.io/badge/OpenAI-API-412991?style=for-the-badge&logo=openai&logoColor=white" alt="OpenAI API" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge" alt="MIT License" /></a>
-</p>
-
-<p>
-  A tool that reads your git diff and turns it into impressive conventional commits across files and hunks alike.<br/>
 </p>
 
 <p>
@@ -32,138 +28,35 @@
 
 </div>
 
+**gitaicmt** reads your staged diff, groups related changes by intent, and generates `type(scope): description` commit messages — one per logical unit. Large batches, mixed hunks, unrelated files: it handles all of it and shows you the plan before touching anything.
+
 > [!IMPORTANT]
-> `gitaicmt` can stage and commit changes. If you want a no-side-effects preview first, run `gitaicmt plan`.
-
----
-
-## What is gitaicmt?
-
-**gitaicmt** is a Bun-based CLI that inspects your git diff, asks an OpenAI text model to group related changes, and generates commit messages that are actually useful.
-
-It is built for the real workflow problem, not just the message-writing problem:
-
-- large staged batches
-- unrelated hunks in the same file
-- preview-before-commit safety
-- automatic commit execution after confirmation
-
-If you want to inspect the plan before anything is committed, run `gitaicmt plan`.
-
-> [!TIP]
-> The tool is strongest when you already have a meaningful staged diff. If you prefer tighter control, stage intentionally first and use `gitaicmt plan` before `gitaicmt`.
-
----
-
-## Why use it?
-
-|     | Feature | Description |
-| --- | --- | --- |
-| 🧠 | **AI-generated messages** | Produces commit subjects and bodies from the actual diff |
-| 🔀 | **Auto-split commits** | Separates unrelated work into multiple logical commits |
-| 🧪 | **Hunk-level splitting** | Can split changes inside the same file when the hunks represent different intents |
-| 📋 | **Plan-first workflow** | Shows the planned commits before it starts committing |
-| 🚀 | **Automatic staging fallback** | If nothing is staged, it stages tracked changes automatically |
-| 📝 | **Conventional Commits** | Uses `type(scope): description` by default |
-| ⚡ | **Parallel analysis** | Chunks large diffs and processes them concurrently |
-| 🔧 | **Configurable output** | Control model, temperature, token warnings, language, body inclusion, and more |
-| 🏗️ | **Pipe-friendly mode** | `gitaicmt gen` prints a single message to stdout for scripting |
-
-### At a glance
-
-| Category | Default behavior |
-| --- | --- |
-| Diff source | Uses staged changes when present |
-| Empty staging area | Auto-stages tracked changes |
-| Normal run | Shows the plan, asks once, then commits |
-| Preview run | `gitaicmt plan` shows the split and exits |
-| Pipe run | `gitaicmt gen` prints one message to stdout |
-| Default model | `gpt-4o-mini` |
-
----
-
-## Safety and Behavior
-
-Before using it on a real repository, the important behavior is this:
-
-1. `gitaicmt` reads the diff that will be committed.
-2. If you already have staged changes, it uses those.
-3. If nothing is staged, it stages tracked changes automatically.
-4. In default mode, it shows the plan and asks once before committing.
-5. `gitaicmt plan` previews the split without committing.
-6. `gitaicmt gen` generates a single message and prints it to stdout.
-
-> [!NOTE]
-> The README calls out side effects early because this tool writes to git state, not just stdout.
-
-### What gets sent to the model?
-
-The tool sends diff content and commit-format instructions so the model can:
-
-- group related changes
-- generate commit subjects and optional bodies
-- follow your configured language and formatting rules
-
-### What does not exist today?
-
-The current configuration supports OpenAI API credentials and model selection. It does **not** expose a custom provider or base URL setting in the documented config surface.
-
-> [!WARNING]
-> If you need provider switching or custom API endpoints, that is not a documented feature of the current release.
+> `gitaicmt` can stage and commit changes. Run `gitaicmt plan` for a no-side-effects preview.
 
 ---
 
 ## Quick Start
 
-### 1. Install from source
-
 ```bash
-bun install
-bun run build
-bun link
-```
-
-### 2. Set your API key
-
-```bash
+bun install && bun run build && bun link
 export OPENAI_API_KEY="sk-..."
+gitaicmt plan   # preview — no side effects
+gitaicmt        # split and commit
 ```
 
-Or create a project config file:
+Or scaffold a local config:
 
 ```bash
 gitaicmt init
 ```
 
-### 3. Preview the plan
-
-```bash
-gitaicmt plan
-```
-
-### 4. Commit
-
-```bash
-gitaicmt
-```
-
-> [!TIP]
-> If the staged diff is large, keep token warnings enabled the first time you use the tool.
-
 ---
 
 ## Example
 
-Input:
-
 ```text
-Staged changes:
-- refactor commit planner batching
-- fix terminal line wrapping regression
-- add planner notice tests
+Staged: refactor planner batching, fix terminal wrapping, add planner tests
 ```
-
-Possible plan:
 
 ```text
 1. ref(commit-planning): tighten batching for grouped diff analysis
@@ -177,94 +70,66 @@ Pipe mode:
 gitaicmt gen | git commit -F -
 ```
 
-<details>
-  <summary><strong>What this example is demonstrating</strong></summary>
-  <p>The planner is trying to separate different intents into separate commits instead of collapsing everything into a single generic message. That is the core value of the tool.</p>
-</details>
-
 ---
 
 ## Commands
 
-| Command | Alias | Description |
-| --- | --- | --- |
-| `gitaicmt` | `c` | Detect changes, show the plan, confirm once, then commit |
-| `gitaicmt plan` | `p` | Preview planned commit groups without committing |
-| `gitaicmt single` | `s` | Generate one commit for all changes |
-| `gitaicmt gen` | `g` | Generate one message to stdout |
-| `gitaicmt init` |  | Create `gitaicmt.config.json` in the current directory |
-| `gitaicmt version` |  | Show version information |
-| `gitaicmt help` | `-h` | Show help |
+| Command            | Alias | Description                          |
+| ------------------ | ----- | ------------------------------------ |
+| `gitaicmt`         | `c`   | Show plan, confirm once, then commit |
+| `gitaicmt plan`    | `p`   | Preview commit groups — no commits   |
+| `gitaicmt resume`  | `r`   | Replay a saved plan bundle by hash   |
+| `gitaicmt single`  | `s`   | One commit for all changes           |
+| `gitaicmt gen`     | `g`   | Print one message to stdout          |
+| `gitaicmt init`    |       | Create `gitaicmt.config.json`        |
+| `gitaicmt version` |       | Show version                         |
+| `gitaicmt help`    | `-h`  | Show help                            |
 
 ## Flags
 
-| Flag | Description |
-| --- | --- |
-| `-y`, `--yes` | Skip confirmation prompts |
-| `--no-token-check` | Skip the high-token confirmation prompt for one run |
-| `-v`, `--verbose` | Show concise diagnostics and stage summaries |
-| `--trace` | Show raw intermediate AI payloads |
-| `--version` | Show version information |
-| `-h`, `--help` | Show help |
-
-> [!NOTE]
-> `gitaicmt`, `gitaicmt single`, and `gitaicmt gen` solve different problems: split-and-commit, one-commit-for-all, and message-only output.
+| Flag               | Description                                              |
+| ------------------ | -------------------------------------------------------- |
+| `-b`, `--breaking` | Mark release-impacting conventional subjects as breaking |
+| `-y`, `--yes`      | Skip confirmation prompts                                |
+| `--no-token-check` | Skip the token warning for one run                       |
+| `-v`, `--verbose`  | Show diagnostics and stage summaries                     |
+| `--trace`          | Show raw AI payloads                                     |
+| `--only <n[,m...]>` | Resume and execute only the listed commits              |
+| `--from <n>`       | Resume and execute commits `n` through the end           |
+| `--range <a>..<b>` | Resume and execute commits `a` through `b`               |
+| `--version`        | Show version                                             |
+| `-h`, `--help`     | Show help                                                |
 
 ---
 
 ## Common Usage
 
 ```bash
-# Preview the split before any commit runs
-gitaicmt plan
-
-# Auto-split into logical commits and ask once
-gitaicmt
-
-# Same as above, but skip confirmation
-gitaicmt -y
-
-# Show extra planning diagnostics
-gitaicmt -v plan
-
-# Show raw intermediate AI payloads during planning
-gitaicmt --trace plan
-
-# Generate one message for all changes
-gitaicmt single
-
-# Pipe a generated message into git
-gitaicmt gen | git commit -F -
+gitaicmt plan             # preview the split
+gitaicmt                  # split and commit (asks once)
+gitaicmt -y               # split and commit, no prompt
+gitaicmt resume <hash>    # reuse a saved plan bundle later
+gitaicmt resume <hash> --only 2,4,5   # run only selected planned commits
+gitaicmt resume <hash> --from 3   # run commits 3 through the end
+gitaicmt resume <hash> --range 2..4   # run only commits 2 through 4
+gitaicmt -v plan          # verbose planning output
+gitaicmt --trace plan     # raw AI payloads
+gitaicmt single           # one commit for everything
+gitaicmt gen | git commit -F -   # pipe mode
 ```
 
-<details>
-  <summary><strong>Choosing the right mode</strong></summary>
-
-| Use case | Command |
-| --- | --- |
-| Preview logical commit grouping | `gitaicmt plan` |
-| Let the tool split and commit | `gitaicmt` |
-| Force a single commit | `gitaicmt single` |
-| Generate a message for your own scripting flow | `gitaicmt gen` |
-
-</details>
+`plan` and the default commit flow save a hashed plan bundle under the user cache directory. The CLI prints the bundle hash after planning so you can replay the exact staged patch later with `gitaicmt resume <hash>` as long as the repository HEAD still matches.
 
 ---
 
 ## Configuration
 
-Configuration is loaded and deep-merged in this order, with later entries winning:
+Loaded and merged in this order — later entries win:
 
 1. `/etc/gitaicmt/config.json`
 2. `~/.config/gitaicmt/config.json` or `$XDG_CONFIG_HOME/gitaicmt/config.json`
 3. `./gitaicmt.config.json` or `./.gitaicmt.json`
 4. `OPENAI_API_KEY` environment variable
-
-Create a local config file:
-
-```bash
-gitaicmt init
-```
 
 <details>
   <summary><strong>Default config</strong></summary>
@@ -349,48 +214,24 @@ bun check summary   # canonical validation entrypoint
 ## Project Structure
 
 ```text
-gitaicmt/
-├── src/
-│   ├── application/               # Config, constants, schemas, and runtime errors
-│   ├── cli/                       # CLI entry point, staging, plan display, and terminal UI
-│   ├── commit-messages/           # Commit message formatting and subject parsing helpers
-│   ├── commit-planning/           # AI orchestration, prompts, grouping, caching, and planning logic
-│   └── git/                       # Git diff parsing and command execution
-├── tests/
-├── scripts/
-├── package.json
-└── tsconfig.json
+src/
+├── application/      # Config, constants, schemas, and runtime errors
+├── cli/              # Entry point, staging, plan display, and terminal UI
+├── commit-messages/  # Message formatting and subject parsing
+├── commit-planning/  # AI orchestration, prompts, grouping, caching, and planning
+└── git/              # Diff parsing and command execution
 ```
 
 ---
 
 ## Stack
 
-| Layer | Technology |
-| --- | --- |
-| Runtime | Bun |
-| Language | TypeScript 5 |
-| AI | OpenAI API |
+| Layer      | Technology          |
+| ---------- | ------------------- |
+| Runtime    | Bun                 |
+| Language   | TypeScript 5        |
+| AI         | OpenAI API          |
 | Validation | `bun check summary` |
-
----
-
-## FAQ
-
-<details>
-  <summary><strong>Will this commit immediately?</strong></summary>
-  <p>In the default mode, it shows the plan and asks once before committing. If you only want the preview, use <code>gitaicmt plan</code>.</p>
-</details>
-
-<details>
-  <summary><strong>Does it require staged changes?</strong></summary>
-  <p>No. If nothing is staged, it stages tracked changes automatically before continuing.</p>
-</details>
-
-<details>
-  <summary><strong>Can I use it in scripts?</strong></summary>
-  <p>Yes. Use <code>gitaicmt gen</code> to print a single generated message to stdout.</p>
-</details>
 
 ---
 
@@ -399,7 +240,3 @@ gitaicmt/
 Made with ❤️ by [Evan Schoffstall](https://github.com/evanschoffstall)
 
 <br/>
-
-<a href="#top">Back to top</a>
-
-</div>
