@@ -69,12 +69,29 @@ function getDiff(dir: string, filename: string): string {
   }) as string;
 }
 
-function makeGitDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "gitaicmt-stage-"));
+/**
+ * Initializes an isolated Git repository for integration-style tests. The
+ * local config disables signing and resets the hooks path so machine-specific
+ * global Git settings cannot stall commits in temporary repositories.
+ * @param dir - Temporary repository path.
+ */
+function initializeGitRepo(dir: string): void {
   execSync(
-    'git init && git config user.email "test@test.com" && git config user.name "Test"',
+    [
+      "git init",
+      'git config user.email "test@test.com"',
+      'git config user.name "Test"',
+      "git config commit.gpgSign false",
+      "git config tag.gpgSign false",
+      "git config core.hooksPath .git/hooks",
+    ].join(" && "),
     { cwd: dir, stdio: "pipe" },
   );
+}
+
+function makeGitDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "gitaicmt-stage-"));
+  initializeGitRepo(dir);
   execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
   return dir;
 }
@@ -453,6 +470,55 @@ describe("stageGroupFiles — hunk-level staging", () => {
       expect(restagedDiff).toContain("rename from old.txt");
       expect(restagedDiff).toContain("rename to new.txt");
       expect(restagedDiff).not.toContain("@@");
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("later hunk staging treats an already-committed rename as a modification", () => {
+    const dir = makeGitDir();
+    try {
+      const baseLines = Array.from(
+        { length: 30 },
+        (_, index) => `line ${index + 1}`,
+      );
+      const firstHunkMarker = "RENAMED_HUNK_ZERO";
+      const secondHunkMarker = "RENAMED_HUNK_ONE";
+
+      writeFileSync(join(dir, "old.txt"), `${baseLines.join("\n")}\n`);
+      execSync("git add old.txt && git commit -m 'add old.txt'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
+
+      execSync("git mv old.txt new.txt", { cwd: dir, stdio: "pipe" });
+      const renamedLines = [...baseLines];
+      renamedLines[1] = `line 2 ${firstHunkMarker}`;
+      renamedLines[27] = `line 28 ${secondHunkMarker}`;
+      writeFileSync(join(dir, "new.txt"), `${renamedLines.join("\n")}\n`);
+      execSync("git add -A", { cwd: dir, stdio: "pipe" });
+
+      const files = parseDiff(getStagedDiff(dir));
+      expect(files).toHaveLength(1);
+      expect(files[0].status).toBe("renamed");
+      expect(files[0].hunks).toHaveLength(2);
+      const fileMap = new Map([[files[0].path, files[0]]]);
+
+      resetStaging(dir);
+      stageGroupFiles([{ hunks: [0], path: "new.txt" }], fileMap, dir);
+      commitWithMessage(
+        commitMessage("refactor(core): stage rename hunk one"),
+        dir,
+      );
+
+      resetStaging(dir);
+      stageGroupFiles([{ hunks: [1], path: "new.txt" }], fileMap, dir);
+
+      const restagedDiff = getStagedDiff(dir);
+      expect(restagedDiff).toContain(secondHunkMarker);
+      expect(restagedDiff).not.toContain(firstHunkMarker);
+      expect(restagedDiff).not.toContain("rename from old.txt");
+      expect(restagedDiff).not.toContain("rename to new.txt");
     } finally {
       cleanupDir(dir);
     }
