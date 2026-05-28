@@ -204,7 +204,7 @@ describe("CLI", () => {
       expect(existsSync(configPath)).toBe(true);
 
       const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
-      expect(cfg.openai.model).toBe("gpt-4o-mini");
+      expect(cfg.openai.model).toBe("gpt-5.3-codex");
       expect(cfg.analysis.promptOnTokenWarning).toBe(true);
 
       rmSync(dir, { recursive: true });
