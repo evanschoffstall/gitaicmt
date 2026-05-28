@@ -1,17 +1,19 @@
 {
   "name": "gitaicmt",
-  "version": "1.2.1",
+  "version": "0.0.0",
   "type": "module",
-  "main": "dist/cli/command-line-interface.js",
+  "main": "dist/cli/main.js",
   "bin": {
-    "gitaicmt": "dist/cli/command-line-interface.js"
+    "gitaicmt": "dist/cli/main.js"
   },
   "scripts": {
     "build": "tsc",
+    "codemod:flatten-feature-tree": "bun run scripts/flatten-feature-tree.ts",
+    "codemod:rename-readable-tree": "bun run scripts/rename-readable-tree.ts",
     "dev": "tsc --watch",
     "lint": "eslint .",
     "preview:thinking": "bun run scripts/preview-thinking.ts",
-    "start": "bun run src/cli/command-line-interface.ts",
+    "start": "bun run src/cli/main.ts",
     "test": "bun test",
     "check": "bun run check-suite",
     "prepublishOnly": "tsc"

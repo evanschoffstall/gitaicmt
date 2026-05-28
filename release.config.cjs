@@ -1,6 +1,9 @@
 require.resolve("conventional-changelog-conventionalcommits");
+require.resolve("@semantic-release/commit-analyzer");
 require.resolve("@semantic-release/git");
+require.resolve("@semantic-release/release-notes-generator");
 require.resolve("@semantic-release/npm");
+require.resolve("@semantic-release/github");
 
 const conventionalCommitSections = Object.freeze([
   { section: "Features", type: "feat" },
@@ -23,6 +26,7 @@ const conventionalCommitsPresetConfig = {
 
 module.exports = {
   branches: ["main"],
+  repositoryUrl: "git@github.com:evanschoffstall/gitaicmt.git",
   plugins: [
     [
       "@semantic-release/commit-analyzer",
@@ -49,7 +53,7 @@ module.exports = {
       {
         assets: ["package.json"],
         message:
-          "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}",
+          "chore(release): ${nextRelease.version} \n\n${nextRelease.notes}",
       },
     ],
     "@semantic-release/github",
