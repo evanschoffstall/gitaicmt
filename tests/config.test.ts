@@ -29,13 +29,16 @@ function makeTmpDir(): string {
 // Isolated XDG home — prevents real ~/.config/gitaicmt/config.json from leaking into tests
 let _savedXdgHome: string | undefined;
 let _testXdgDir: string;
+let _savedOpenAiApiKey: string | undefined;
 
 describe("config", () => {
   beforeEach(() => {
     resetConfigCache();
     _savedXdgHome = process.env["XDG_CONFIG_HOME"];
+    _savedOpenAiApiKey = process.env["OPENAI_API_KEY"];
     _testXdgDir = mkdtempSync(join(tmpdir(), "gitaicmt-xdg-"));
     process.env["XDG_CONFIG_HOME"] = _testXdgDir;
+    delete process.env["OPENAI_API_KEY"];
   });
 
   afterEach(() => {
@@ -44,6 +47,11 @@ describe("config", () => {
       process.env["XDG_CONFIG_HOME"] = _savedXdgHome;
     } else {
       delete process.env["XDG_CONFIG_HOME"];
+    }
+    if (_savedOpenAiApiKey !== undefined) {
+      process.env["OPENAI_API_KEY"] = _savedOpenAiApiKey;
+    } else {
+      delete process.env["OPENAI_API_KEY"];
     }
     rmSync(_testXdgDir, { force: true, recursive: true });
   });
@@ -76,7 +84,7 @@ describe("config", () => {
 
       expect(cfg.performance.parallel).toBe(true);
       expect(cfg.performance.cacheEnabled).toBe(true);
-      expect(cfg.performance.cacheTTLSeconds).toBe(300);
+      expect(cfg.performance.maxSavedPlanBundles).toBe(50);
       expect(cfg.performance.timeoutMs).toBe(15000);
 
       rmSync(dir, { recursive: true });
