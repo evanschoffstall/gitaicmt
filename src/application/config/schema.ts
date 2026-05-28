@@ -16,7 +16,7 @@ const OpenAISettingsSchema = z.object({
   model: z
     .string()
     .min(1, "Model name cannot be empty")
-    .describe("OpenAI model to use (e.g., gpt-4o-mini)"),
+    .describe("OpenAI model to use (e.g., gpt-5.3-codex)"),
   temperature: z
     .number()
     .min(0, "temperature must be at least 0")
@@ -79,12 +79,12 @@ const CommitSettingsSchema = z.object({
 
 const PerformanceSettingsSchema = z.object({
   cacheEnabled: z.boolean().describe("Cache AI responses to reduce API calls"),
-  cacheTTLSeconds: z
+  maxSavedPlanBundles: z
     .number()
     .int()
-    .min(0, "cacheTTLSeconds must be non-negative")
-    .max(86400, "cacheTTLSeconds cannot exceed 24 hours")
-    .describe("Cache time-to-live in seconds"),
+    .min(1, "maxSavedPlanBundles must be at least 1")
+    .max(10000, "maxSavedPlanBundles cannot exceed 10000")
+    .describe("Maximum saved plan bundle JSON files to retain"),
   parallel: z.boolean().describe("Process chunks in parallel"),
   timeoutMs: z
     .number()
