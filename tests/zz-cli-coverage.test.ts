@@ -1,19 +1,33 @@
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as readline from "node:readline";
 
 import * as applicationConfig from "../src/application/config/index.js";
+import * as commitExecution from "../src/cli/commit/execution.js";
 import * as groupStaging from "../src/cli/commit/group-staging.js";
 import * as interactivePrompt from "../src/cli/interactive-prompt.js";
+import * as cliOptions from "../src/cli/options.js";
 import * as outputPresentation from "../src/cli/output-presentation.js";
 import * as sessionDisplayExports from "../src/cli/session-display.js";
 import * as terminalColumns from "../src/cli/terminal/columns.js";
 import * as lineWrapping from "../src/cli/terminal/line-wrapping.js";
 import * as outputUi from "../src/cli/terminal/output-ui.js";
+import * as tokenConfirmation from "../src/cli/token/confirmation.js";
 import * as verboseOutput from "../src/cli/verbose-output.js";
 import * as viewport from "../src/cli/viewport.js";
+import * as commitPlanning from "../src/commit-planning/index.js";
 import * as orchestration from "../src/commit-planning/orchestration.js";
 import * as gitOperations from "../src/git/operations.js";
 
-const { afterEach, describe, expect, mock, spyOn, test } = await import("bun:test");
+const { afterEach, describe, expect, mock, spyOn, test } =
+  await import("bun:test");
 
 type AppConfig = ReturnType<typeof applicationConfig.loadConfig>;
 type TokenEstimateSummary = Parameters<
@@ -70,7 +84,7 @@ function createConfig(overrides?: {
     },
     performance: {
       cacheEnabled: true,
-      cacheTTLSeconds: 300,
+      maxSavedPlanBundles: 50,
       parallel: true,
       timeoutMs: 15000,
     },
@@ -162,6 +176,57 @@ afterEach(() => {
 });
 
 describe("cli coverage", () => {
+  test("parseCliOptions captures mutually exclusive resume selections with value flags", async () => {
+    expect(
+      cliOptions.parseCliOptions([
+        "--trace",
+        "resume",
+        "abcdef",
+        "--range",
+        "2..3",
+      ]),
+    ).toMatchObject({
+      command: "resume",
+      outputMode: "trace",
+      resumeHash: "abcdef",
+      resumeSelection: { endIndex: 3, kind: "range", startIndex: 2 },
+    });
+
+    expect(
+      cliOptions.parseCliOptions([
+        "resume",
+        "abcdef",
+        "--only=2,4,4",
+        "--ignore-message-body",
+        "--valid-only",
+      ]),
+    ).toMatchObject({
+      hasIgnoreMessageBodyFlag: true,
+      hasValidOnlyFlag: true,
+      resumeSelection: { indices: [2, 4], kind: "only" },
+    });
+
+    expect(() =>
+      cliOptions.parseCliOptions([
+        "resume",
+        "abcdef",
+        "--only",
+        "2",
+        "--from",
+        "3",
+      ]),
+    ).toThrow(/mutually exclusive/u);
+
+    expect(() =>
+      cliOptions.parseCliOptions([
+        "resume",
+        "abcdef",
+        "--force",
+        "--valid-only",
+      ]),
+    ).toThrow(/mutually exclusive/u);
+  });
+
   test("counts helpers cover every label and threshold branch", async () => {
     const counts = await importFresh<typeof import("../src/cli/counts.js")>(
       "../src/cli/counts.js",
@@ -378,140 +443,178 @@ describe("cli coverage", () => {
     >("../src/cli/interactive-prompt.js", "prompt-eof");
 
     expect(await eofPromptModule.promptYesNo("EOF?")).toBe(true);
+    expect(
+      await eofPromptModule.promptYesNo("EOF?", { defaultOnEof: false }),
+    ).toBe(false);
     expect(eofWrites.at(-1)).toEqual([""]);
   });
 
   test("session display logs status, token estimates, and verbose output branches", async () => {
-    const renderedBlocks: { rows: unknown; title: string; width: number }[] = [];
+    const renderedBlocks: { rows: unknown; title: string; width: number }[] =
+      [];
     const terminalLines: string[][] = [];
     const verboseCalls: { event: unknown; options: unknown }[] = [];
+    const savedXdgCacheHome = process.env["XDG_CACHE_HOME"];
+    const traceCacheHome = mkdtempSync(join(tmpdir(), "gitaicmt-trace-"));
+    const originalWriteTerminalLines = outputUi.writeTerminalLines;
 
-    spyOn(viewport, "resolveLogWidth").mockReturnValue(60);
-    spyOn(viewport, "resolveVerboseWidth").mockReturnValue(80);
-    spyOn(lineWrapping, "wrapTerminalTextBlock").mockImplementation(
-      (message, width) => [`wrapped:${width}:${message}`],
-    );
-    spyOn(outputUi, "writeTerminalLines").mockImplementation((lines) => {
-      terminalLines.push(lines);
-    });
-    spyOn(outputPresentation, "buildStatusSectionLines").mockImplementation(
-      (title, rows, width) => {
-        renderedBlocks.push({ rows, title, width });
-        return [`section:${title}:${width}`];
-      },
-    );
-    spyOn(verboseOutput, "getVerboseAiOutputSequenceKey").mockImplementation(
-      (event) => (event as { type?: string }).type ?? "unknown",
-    );
-    spyOn(verboseOutput, "formatVerboseAiOutputLines").mockImplementation(
-      (event, options) => {
-        verboseCalls.push({ event, options });
-        return ["first line", "second line"];
-      },
-    );
+    process.env["XDG_CACHE_HOME"] = traceCacheHome;
 
-    const sessionDisplay = await importFresh<
-      typeof import("../src/cli/session-display.js")
-    >("../src/cli/session-display.js", "session-display");
+    try {
+      spyOn(viewport, "resolveLogWidth").mockReturnValue(60);
+      spyOn(viewport, "resolveVerboseWidth").mockReturnValue(80);
+      spyOn(lineWrapping, "wrapTerminalTextBlock").mockImplementation(
+        (message, width) => [`wrapped:${width}:${message}`],
+      );
+      spyOn(outputUi, "writeTerminalLines").mockImplementation((lines) => {
+        terminalLines.push(lines);
+        originalWriteTerminalLines(lines);
+      });
+      spyOn(outputPresentation, "buildStatusSectionLines").mockImplementation(
+        (title, rows, width) => {
+          renderedBlocks.push({ rows, title, width });
+          return [`section:${title}:${width}`];
+        },
+      );
+      spyOn(verboseOutput, "getVerboseAiOutputSequenceKey").mockImplementation(
+        (event) => (event as { type?: string }).type ?? "unknown",
+      );
+      spyOn(verboseOutput, "formatVerboseAiOutputLines").mockImplementation(
+        (event, options) => {
+          verboseCalls.push({ event, options });
+          return ["first line", "second line"];
+        },
+      );
 
-    sessionDisplay.configureOutputMode("off");
-    expect(sessionDisplay.hasVisibleOutputMode()).toBe(false);
-    expect(sessionDisplay.isVerboseModeEnabled()).toBe(false);
+      const sessionDisplay = await importFresh<
+        typeof import("../src/cli/session-display.js")
+      >("../src/cli/session-display.js", "session-display");
 
-    sessionDisplay.log("plain message");
-    expect(terminalLines.pop()).toEqual(["wrapped:60:plain message"]);
+      sessionDisplay.configureOutputMode("off");
+      expect(sessionDisplay.hasVisibleOutputMode()).toBe(false);
+      expect(sessionDisplay.isVerboseModeEnabled()).toBe(false);
 
-    sessionDisplay.logTokenEstimate(baseEstimate({ requestCount: 0 }), 150);
-    expect(renderedBlocks).toHaveLength(0);
+      sessionDisplay.log("plain message");
+      expect(terminalLines.pop()).toEqual(["wrapped:60:plain message"]);
 
-    sessionDisplay.logTokenEstimate(
-      baseEstimate({
-        minimumRequestCount: 1,
-        minimumTotalTokens: 120,
-        requestCount: 2,
-        totalTokens: 260,
-      }),
-      150,
-    );
-    expect(renderedBlocks[0]?.title).toBe("Token Estimate");
-    expect(JSON.stringify(renderedBlocks[0]?.rows)).toContain("baseline");
-    expect(JSON.stringify(renderedBlocks[0]?.rows)).toContain("warning");
+      sessionDisplay.logTokenEstimate(baseEstimate({ requestCount: 0 }), 150);
+      expect(renderedBlocks).toHaveLength(0);
 
-    sessionDisplay.logTokenEstimate(
-      baseEstimate({ minimumTotalTokens: 180, totalTokens: 180 }),
-      500,
-      true,
-    );
-    expect(JSON.stringify(renderedBlocks[1]?.rows)).toContain("estimate");
-    expect(JSON.stringify(renderedBlocks[1]?.rows)).not.toContain("warning");
+      sessionDisplay.logTokenEstimate(
+        baseEstimate({
+          minimumRequestCount: 1,
+          minimumTotalTokens: 120,
+          requestCount: 2,
+          totalTokens: 260,
+        }),
+        150,
+      );
+      expect(renderedBlocks[0]?.title).toBe("Token Estimate");
+      expect(JSON.stringify(renderedBlocks[0]?.rows)).toContain("baseline");
+      expect(JSON.stringify(renderedBlocks[0]?.rows)).toContain("warning");
 
-    sessionDisplay.logGenerationContext(
-      "gpt-5.4",
-      { additions: 12, chunks: 3, deletions: 4, filesChanged: 2 },
-      baseEstimate({ peakRequestTokens: 120, requestCount: 1, totalTokens: 140 }),
-      150,
-    );
-    expect(
-      renderedBlocks.some((block) => block.title === "Generating Message"),
-    ).toBe(true);
+      sessionDisplay.logTokenEstimate(
+        baseEstimate({ minimumTotalTokens: 180, totalTokens: 180 }),
+        500,
+        true,
+      );
+      expect(JSON.stringify(renderedBlocks[1]?.rows)).toContain("estimate");
+      expect(JSON.stringify(renderedBlocks[1]?.rows)).not.toContain("warning");
 
-    sessionDisplay.logActualTokenUsage(createTokenUsageSummary(480, 3), {
-      cluster: createTokenUsageSummary(200, 1),
-      ignored: createTokenUsageSummary(25, 0),
-    });
-    expect(JSON.stringify(renderedBlocks.at(-1)?.rows)).not.toContain(
-      "merge-review",
-    );
+      sessionDisplay.logGenerationContext(
+        "gpt-5.4",
+        { additions: 12, chunks: 3, deletions: 4, filesChanged: 2 },
+        baseEstimate({
+          peakRequestTokens: 120,
+          requestCount: 1,
+          totalTokens: 140,
+        }),
+        150,
+      );
+      expect(
+        renderedBlocks.some((block) => block.title === "Generating Message"),
+      ).toBe(true);
 
-    sessionDisplay.configureOutputMode("summary");
-    sessionDisplay.logActualTokenUsage(createTokenUsageSummary(220, 2), {
-      cluster: createTokenUsageSummary(120, 1),
-      merge: createTokenUsageSummary(100, 1),
-    });
-    expect(JSON.stringify(renderedBlocks.at(-1)?.rows)).toContain(
-      "merge-review=120",
-    );
-    expect(JSON.stringify(renderedBlocks.at(-1)?.rows)).toContain(
-      "message-merge=100",
-    );
+      sessionDisplay.logActualTokenUsage(createTokenUsageSummary(480, 3), {
+        cluster: createTokenUsageSummary(200, 1),
+        ignored: createTokenUsageSummary(25, 0),
+      });
+      expect(JSON.stringify(renderedBlocks.at(-1)?.rows)).not.toContain(
+        "merge-review",
+      );
 
-    sessionDisplay.verbose("summary message");
-    expect(terminalLines.at(-1)?.[0]).toContain("[verbose] summary message");
+      sessionDisplay.configureOutputMode("summary");
+      sessionDisplay.logActualTokenUsage(createTokenUsageSummary(220, 2), {
+        cluster: createTokenUsageSummary(120, 1),
+        merge: createTokenUsageSummary(100, 1),
+      });
+      expect(JSON.stringify(renderedBlocks.at(-1)?.rows)).toContain(
+        "merge-review=120",
+      );
+      expect(JSON.stringify(renderedBlocks.at(-1)?.rows)).toContain(
+        "message-merge=100",
+      );
 
-    sessionDisplay.logCommitPlanAnalysis({
-      elapsed: "1.5",
-      groups: [{ files: [{ path: "src/a.ts" }], message: "feat: one" }],
-      plannerFallbackNotice: "fallback used",
-    });
-    expect(terminalLines.at(-2)?.[0]).toContain(
-      "wrapped:60:\u001b[33mfallback used\u001b[0m",
-    );
+      sessionDisplay.verbose("summary message");
+      expect(terminalLines.at(-1)?.[0]).toContain("[verbose] summary message");
 
-    sessionDisplay.logVerboseAiOutput(createVerboseEvent("planner"));
-    expect(verboseCalls[0]?.options).toEqual({
-      maxWidth: 80,
-      mode: "summary",
-      sequence: 1,
-    });
-    expect(terminalLines.at(-1)).toEqual([
-      "\u001b[2m[verbose]\u001b[0m first line",
-      "\u001b[2m[verbose]\u001b[0m second line",
-    ]);
+      sessionDisplay.logCommitPlanAnalysis({
+        elapsed: "1.5",
+        groups: [{ files: [{ path: "src/a.ts" }], message: "feat: one" }],
+        plannerFallbackNotice: "fallback used",
+      });
+      expect(terminalLines.at(-2)?.[0]).toContain(
+        "wrapped:60:\u001b[33mfallback used\u001b[0m",
+      );
 
-    sessionDisplay.configureOutputMode("trace");
-    sessionDisplay.verbose("trace message");
-    expect(terminalLines.at(-1)?.[0]).toContain("[trace] trace message");
+      sessionDisplay.logVerboseAiOutput(createVerboseEvent("planner"));
+      expect(verboseCalls[0]?.options).toEqual({
+        maxWidth: 80,
+        mode: "summary",
+        sequence: 1,
+      });
+      expect(terminalLines.at(-1)).toEqual([
+        "\u001b[2m[verbose]\u001b[0m first line",
+        "\u001b[2m[verbose]\u001b[0m second line",
+      ]);
 
-    sessionDisplay.logVerboseAiOutput(createVerboseEvent("planner"));
-    expect(verboseCalls.at(-1)?.options).toEqual({
-      maxWidth: 80,
-      mode: "trace",
-      sequence: 1,
-    });
+      sessionDisplay.configureOutputMode("trace");
+      sessionDisplay.verbose("trace message");
+      expect(terminalLines.at(-1)?.[0]).toContain("[trace] trace message");
 
-    sessionDisplay.configureOutputMode("off");
-    sessionDisplay.verbose("hidden");
-    expect(terminalLines.at(-1)?.[0]).not.toContain("hidden");
+      sessionDisplay.logVerboseAiOutput(createVerboseEvent("planner"));
+      expect(verboseCalls.at(-1)?.options).toEqual({
+        maxWidth: 80,
+        mode: "trace",
+        sequence: 1,
+      });
+
+      const traceDirectory = join(traceCacheHome, "gitaicmt", "traces");
+      const traceFiles = readdirSync(traceDirectory);
+      expect(existsSync(traceDirectory)).toBe(true);
+      expect(traceFiles).toHaveLength(1);
+      const traceContent = readFileSync(
+        join(traceDirectory, traceFiles[0]!),
+        "utf-8",
+      );
+      expect(traceFiles[0]?.endsWith(".log")).toBe(true);
+      expect(traceContent).toContain("[trace] trace message");
+      expect(traceContent).toContain("[trace] first line");
+      expect(traceContent).toContain("[trace] second line");
+      expect(traceContent).not.toContain('"events"');
+
+      sessionDisplay.configureOutputMode("off");
+      sessionDisplay.verbose("hidden");
+      expect(terminalLines.at(-1)?.[0]).not.toContain("hidden");
+    } finally {
+      if (savedXdgCacheHome === undefined) {
+        delete process.env["XDG_CACHE_HOME"];
+      } else {
+        process.env["XDG_CACHE_HOME"] = savedXdgCacheHome;
+      }
+
+      rmSync(traceCacheHome, { force: true, recursive: true });
+    }
   });
 
   test("token confirmation covers auto-confirm, prompts, warnings, and validation", async () => {
@@ -703,6 +806,344 @@ describe("cli coverage", () => {
     execution.executeSingleCommitMessage("stderr commit");
     expect(terminalLines.at(-1)?.[0]).toContain("stderr text");
     expect(restoreCalls).toEqual([]);
+  });
+
+  test("single-commit breaking flag allows but does not force breaking metadata", async () => {
+    const generatedMessage = [
+      "feat(runtime): adjust planner copy",
+      "",
+      "- Clarify prompt wording for generated commit plans.",
+    ].join("\n");
+    const committedMessages: string[] = [];
+    const config = createConfig({ tokenWarningThreshold: 10_000 });
+    config.openai.apiKey = "sk-allowed-breaking-cli-test-key";
+
+    spyOn(applicationConfig, "loadConfig").mockReturnValue(config);
+    spyOn(gitOperations, "isGitRepository").mockReturnValue(true);
+    spyOn(gitOperations, "hasCommitHistory").mockReturnValue(true);
+    spyOn(gitOperations, "hasStagedChanges").mockReturnValue(true);
+    spyOn(gitOperations, "getStagedDiff").mockReturnValue(
+      [
+        "diff --git a/src/runtime.ts b/src/runtime.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/runtime.ts",
+        "+++ b/src/runtime.ts",
+        "@@ -1 +1 @@",
+        "-oldPrompt();",
+        "+newPrompt();",
+      ].join("\n"),
+    );
+    spyOn(orchestration, "generateForChunks").mockImplementation(
+      async (_chunks, _stats, options) => {
+        expect(options).toEqual({ breakingMode: "sensitive" });
+        return generatedMessage;
+      },
+    );
+    spyOn(outputUi, "withThinkingIndicator").mockImplementation(
+      async (callback) => callback(),
+    );
+    spyOn(commitExecution, "executeSingleCommitMessage").mockImplementation(
+      (message) => {
+        committedMessages.push(message);
+      },
+    );
+    spyOn(sessionDisplayExports, "log").mockImplementation(() => undefined);
+
+    const executionFlow = await importFresh<
+      typeof import("../src/cli/execution-flow.js")
+    >("../src/cli/execution-flow.js", "allowed-breaking-single");
+
+    await executionFlow.cmdCommitSingle(false, "sensitive");
+
+    expect(committedMessages).toEqual([generatedMessage]);
+    expect(committedMessages[0]).not.toContain("feat(runtime)!");
+    expect(committedMessages[0]).not.toContain("BREAKING CHANGE:");
+  });
+
+  test("single-commit no-breaking flag disables breaking metadata", async () => {
+    const generatedMessage = [
+      "feat(runtime): adjust planner copy",
+      "",
+      "- Clarify prompt wording for generated commit plans.",
+    ].join("\n");
+    const committedMessages: string[] = [];
+    const config = createConfig({ tokenWarningThreshold: 10_000 });
+    config.openai.apiKey = "sk-no-breaking-cli-test-key";
+
+    spyOn(applicationConfig, "loadConfig").mockReturnValue(config);
+    spyOn(gitOperations, "isGitRepository").mockReturnValue(true);
+    spyOn(gitOperations, "hasCommitHistory").mockReturnValue(true);
+    spyOn(gitOperations, "hasStagedChanges").mockReturnValue(true);
+    spyOn(gitOperations, "getStagedDiff").mockReturnValue(
+      [
+        "diff --git a/src/runtime.ts b/src/runtime.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/runtime.ts",
+        "+++ b/src/runtime.ts",
+        "@@ -1 +1 @@",
+        "-oldPrompt();",
+        "+newPrompt();",
+      ].join("\n"),
+    );
+    spyOn(orchestration, "generateForChunks").mockImplementation(
+      async (_chunks, _stats, options) => {
+        expect(options).toEqual({ breakingMode: "disabled" });
+        return generatedMessage;
+      },
+    );
+    spyOn(outputUi, "withThinkingIndicator").mockImplementation(
+      async (callback) => callback(),
+    );
+    spyOn(commitExecution, "executeSingleCommitMessage").mockImplementation(
+      (message) => {
+        committedMessages.push(message);
+      },
+    );
+    spyOn(sessionDisplayExports, "log").mockImplementation(() => undefined);
+
+    const executionFlow = await importFresh<
+      typeof import("../src/cli/execution-flow.js")
+    >("../src/cli/execution-flow.js", "no-breaking-single");
+
+    await executionFlow.cmdCommitSingle(false, "disabled");
+
+    expect(committedMessages).toEqual([generatedMessage]);
+  });
+
+  test("resume executes only the selected saved-plan subset", async () => {
+    const executedGroups: { files: { path: string }[]; message: string }[] = [];
+    const executionOptions: import("../src/cli/commit/execution.js").CommitExecutionOptions[] =
+      [];
+    const renderedSubjects: string[] = [];
+    const bundle = {
+      contentHashes: {
+        bundleHash: "c".repeat(64),
+        files: [
+          {
+            fileHash: "d".repeat(64),
+            hunkHashes: ["e".repeat(64)],
+            path: "src/one.ts",
+          },
+          {
+            fileHash: "f".repeat(64),
+            hunkHashes: ["a".repeat(64)],
+            path: "src/two.ts",
+          },
+        ],
+      },
+      createdAt: "2026-05-25T00:00:00.000Z",
+      hash: "b".repeat(64),
+      headCommit: "a".repeat(40),
+      plan: [
+        { files: [{ path: "src/one.ts" }], message: "feat: first" },
+        { files: [{ path: "src/two.ts" }], message: "fix: second" },
+        { files: [{ path: "src/one.ts" }], message: "chore: third" },
+      ],
+      planCommitHashes: [
+        {
+          files: [
+            {
+              fileHash: "1".repeat(64),
+              hunkHashes: [],
+              hunkIndexes: [],
+              path: "src/one.ts",
+              wholeFile: true,
+            },
+          ],
+          hash: "2".repeat(64),
+        },
+        {
+          files: [
+            {
+              fileHash: "3".repeat(64),
+              hunkHashes: [],
+              hunkIndexes: [],
+              path: "src/two.ts",
+              wholeFile: true,
+            },
+          ],
+          hash: "4".repeat(64),
+        },
+        {
+          files: [
+            {
+              fileHash: "5".repeat(64),
+              hunkHashes: [],
+              hunkIndexes: [],
+              path: "src/one.ts",
+              wholeFile: true,
+            },
+          ],
+          hash: "6".repeat(64),
+        },
+      ],
+      planCommitPatches: ["patch-1\n", "patch-2\n", "patch-3\n"],
+      repoRoot: "/repo",
+      schemaVersion: 4,
+      stagedPatch: "patch",
+      stagedPatchHash: "9".repeat(64),
+    };
+
+    spyOn(commitPlanning, "loadPlanBundle").mockReturnValue(bundle as never);
+    spyOn(commitPlanning, "preparePlanBundleForResume").mockImplementation(
+      () => undefined,
+    );
+    spyOn(commitPlanning, "filterValidPlanCommitsForResume").mockReturnValue({
+      invalidCommits: [],
+      validPlan: bundle.plan.slice(1, 3),
+    } as never);
+    spyOn(commitPlanning, "getBundleFileDiffs").mockReturnValue([
+      { hunks: [], path: "src/one.ts" },
+      { hunks: [], path: "src/two.ts" },
+    ] as never);
+    spyOn(tokenConfirmation, "confirmCommitPlan").mockResolvedValue(true);
+    spyOn(commitExecution, "executePlannedCommits").mockImplementation(
+      (groups, _fileMap, options) => {
+        executedGroups.push(...groups);
+        executionOptions.push(options ?? {});
+      },
+    );
+    spyOn(outputPresentation, "buildPlanCardLines").mockImplementation(
+      ({ message }) => {
+        renderedSubjects.push(message.split("\n")[0] ?? "");
+        return [message];
+      },
+    );
+    spyOn(outputUi, "writeTerminalLines").mockImplementation(() => undefined);
+    spyOn(viewport, "resolveDisplayWidth").mockReturnValue(72);
+    spyOn(sessionDisplayExports, "log").mockImplementation(() => undefined);
+    spyOn(sessionDisplayExports, "logStatusSection").mockImplementation(
+      () => undefined,
+    );
+
+    const executionFlow = await importFresh<
+      typeof import("../src/cli/execution-flow.js")
+    >("../src/cli/execution-flow.js", "resume-selection");
+
+    await executionFlow.cmdResume(
+      bundle.hash,
+      false,
+      false,
+      false,
+      {
+        indices: [2, 3],
+        kind: "only",
+      },
+      true,
+    );
+
+    expect(renderedSubjects).toEqual(["fix: second", "chore: third"]);
+    expect(executedGroups).toEqual(bundle.plan.slice(1, 3));
+    expect(executionOptions).toEqual([{ ignoreMessageBody: true }]);
+  });
+
+  test("valid-only resume filters out invalid saved commits before execution", async () => {
+    const executedGroups: { files: { path: string }[]; message: string }[] = [];
+    const bundle = {
+      contentHashes: {
+        bundleHash: "c".repeat(64),
+        files: [
+          {
+            fileHash: "d".repeat(64),
+            hunkHashes: ["e".repeat(64)],
+            path: "src/one.ts",
+          },
+          {
+            fileHash: "f".repeat(64),
+            hunkHashes: ["a".repeat(64)],
+            path: "src/two.ts",
+          },
+        ],
+      },
+      createdAt: "2026-05-25T00:00:00.000Z",
+      hash: "b".repeat(64),
+      headCommit: "a".repeat(40),
+      plan: [
+        { files: [{ path: "src/one.ts" }], message: "feat: first" },
+        { files: [{ path: "src/two.ts" }], message: "fix: second" },
+      ],
+      planCommitHashes: [
+        {
+          files: [
+            {
+              fileHash: "1".repeat(64),
+              hunkHashes: [],
+              hunkIndexes: [],
+              path: "src/one.ts",
+              wholeFile: true,
+            },
+          ],
+          hash: "2".repeat(64),
+        },
+        {
+          files: [
+            {
+              fileHash: "3".repeat(64),
+              hunkHashes: [],
+              hunkIndexes: [],
+              path: "src/two.ts",
+              wholeFile: true,
+            },
+          ],
+          hash: "4".repeat(64),
+        },
+      ],
+      planCommitPatches: ["patch-1\n", "patch-2\n"],
+      repoRoot: "/repo",
+      schemaVersion: 4,
+      stagedPatch: "patch",
+      stagedPatchHash: "9".repeat(64),
+    };
+
+    spyOn(commitPlanning, "loadPlanBundle").mockReturnValue(bundle as never);
+    spyOn(commitPlanning, "preparePlanBundleForResume").mockImplementation(
+      () => undefined,
+    );
+    spyOn(commitPlanning, "filterValidPlanCommitsForResume").mockReturnValue({
+      invalidCommits: [
+        {
+          index: 2,
+          message: "fix: second",
+          mismatch:
+            "file mismatch (src/two.ts): file missing from current staged patch; expected=src/two.ts, actual=<missing>",
+        },
+      ],
+      validPlan: [bundle.plan[0]],
+    } as never);
+    spyOn(commitPlanning, "getBundleFileDiffs").mockReturnValue([
+      { hunks: [], path: "src/one.ts" },
+      { hunks: [], path: "src/two.ts" },
+    ] as never);
+    spyOn(tokenConfirmation, "confirmCommitPlan").mockResolvedValue(true);
+    spyOn(commitExecution, "executePlannedCommits").mockImplementation(
+      (groups) => {
+        executedGroups.push(...groups);
+      },
+    );
+    spyOn(outputPresentation, "buildPlanCardLines").mockReturnValue(["line"]);
+    spyOn(outputUi, "writeTerminalLines").mockImplementation(() => undefined);
+    spyOn(viewport, "resolveDisplayWidth").mockReturnValue(72);
+    spyOn(sessionDisplayExports, "log").mockImplementation(() => undefined);
+    spyOn(sessionDisplayExports, "logStatusSection").mockImplementation(
+      () => undefined,
+    );
+
+    const executionFlow = await importFresh<
+      typeof import("../src/cli/execution-flow.js")
+    >("../src/cli/execution-flow.js", "resume-valid-only");
+
+    await executionFlow.cmdResume(
+      bundle.hash,
+      false,
+      false,
+      true,
+      {
+        kind: "all",
+      },
+      false,
+    );
+
+    expect(executedGroups).toEqual([bundle.plan[0]]);
   });
 
   test("commit execution restores staging on failure when recovery is available", async () => {
