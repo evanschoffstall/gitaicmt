@@ -594,7 +594,10 @@ describe("chunkDiffs", () => {
                 countNew: 60,
                 countOld: 0,
                 header: "@@ -1,0 +1,60 @@",
-                lines: Array.from({ length: 60 }, (_, index) => `+line ${index}`),
+                lines: Array.from(
+                  { length: 60 },
+                  (_, index) => `+line ${index}`,
+                ),
                 startNew: 1,
                 startOld: 1,
               },
@@ -759,7 +762,9 @@ describe("buildPatch", () => {
     const files = parseDiff(QUOTED_UTF8_PATH_DIFF);
     const patch = buildPatch(files[0]);
 
-    expect(patch).toContain('diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"');
+    expect(patch).toContain(
+      'diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"',
+    );
     expect(patch).toContain('--- "a/caf\\303\\251.txt"');
     expect(patch).toContain('+++ "b/caf\\303\\251.txt"');
   });

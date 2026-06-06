@@ -6,7 +6,8 @@ import {
 } from "../src/commit-planning/grouping/commit-coverage.js";
 
 type FileDiff = import("../src/git/diff.js").FileDiff;
-type PlannedCommit = import("../src/commit-planning/orchestration.js").PlannedCommit;
+type PlannedCommit =
+  import("../src/commit-planning/orchestration.js").PlannedCommit;
 
 function makeFile(path: string, hunks = 1): FileDiff {
   return {

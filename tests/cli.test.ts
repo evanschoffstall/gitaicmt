@@ -2,6 +2,7 @@ import { execSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -18,7 +19,8 @@ import {
 
 const { describe, expect, test } = await import("bun:test");
 
-type PlannedCommit = import("../src/commit-planning/orchestration.js").PlannedCommit;
+type PlannedCommit =
+  import("../src/commit-planning/orchestration.js").PlannedCommit;
 
 function getVisibleLineLengths(text: string): number[] {
   return stripAnsi(text)
@@ -31,7 +33,38 @@ function getVisibleLineLengths(text: string): number[] {
 // CLI integration tests — spawns the actual CLI binary
 // ═══════════════════════════════════════════════════════════════
 
-const CLI = join(import.meta.dir, "..", "dist", "cli", "command-line-interface.js");
+const CLI = join(import.meta.dir, "..", "dist", "cli", "main.js");
+
+/**
+ * Initializes an isolated Git repository for CLI integration tests. The local
+ * config disables signing and keeps hooks inside the temp repository so the
+ * suite does not depend on machine-specific Git configuration.
+ * @param dir - Temporary repository path.
+ * @param withInitialCommit - Whether to create an empty initial commit.
+ */
+function initializeGitRepo(dir: string, withInitialCommit = true): void {
+  execSync(
+    [
+      "git init",
+      'git config user.email "test@test.com"',
+      'git config user.name "Test User"',
+      "git config commit.gpgSign false",
+      "git config tag.gpgSign false",
+      "git config core.hooksPath .git/hooks",
+    ].join(" && "),
+    {
+      cwd: dir,
+      stdio: "pipe",
+    },
+  );
+
+  if (withInitialCommit) {
+    execSync("git commit --allow-empty -m 'init'", {
+      cwd: dir,
+      stdio: "pipe",
+    });
+  }
+}
 
 function run(
   args: string,
@@ -113,10 +146,47 @@ describe("CLI", () => {
       expect(stderr).toContain("--no-token-check");
     });
 
+    test("help mentions --enforce-commit-body", () => {
+      const { stderr } = run("help");
+      expect(stderr).toContain("--enforce-commit-body");
+      expect(stderr).toContain("Require bullet-body validation");
+    });
+
+    test("help mentions resume usage", () => {
+      const { stderr } = run("help");
+      expect(stderr).toContain("resume <hash>");
+      expect(stderr).toContain("saved plan bundle");
+    });
+
+    test("help mentions resume", () => {
+      const { stderr } = run("help");
+      expect(stderr).toContain("resume <hash>");
+      expect(stderr).toContain("saved plan bundle");
+    });
+
+    test("help mentions resume list", () => {
+      const { stderr } = run("help");
+      expect(stderr).toContain("resume list");
+      expect(stderr).toContain("current repository");
+      expect(stderr).toContain("--global");
+    });
+
     test("help mentions --trace", () => {
       const { stderr } = run("help");
       expect(stderr).toContain("--trace");
       expect(stderr).toContain("raw intermediate AI payloads");
+    });
+
+    test("help mentions --breaking", () => {
+      const { stderr } = run("help");
+      expect(stderr).toContain("-b, --breaking");
+      expect(stderr).toContain("breaking");
+    });
+
+    test("help mentions --no-breaking", () => {
+      const { stderr } = run("help");
+      expect(stderr).toContain("-n, --no-breaking");
+      expect(stderr).toContain("release-impact metadata");
     });
 
     test("wraps help output on narrow terminals", () => {
@@ -124,7 +194,9 @@ describe("CLI", () => {
         env: { COLUMNS: "36" },
       });
 
-      expect(Math.max(...getVisibleLineLengths(stderr))).toBeLessThanOrEqual(35);
+      expect(Math.max(...getVisibleLineLengths(stderr))).toBeLessThanOrEqual(
+        35,
+      );
     });
   });
 
@@ -140,7 +212,7 @@ describe("CLI", () => {
       expect(existsSync(configPath)).toBe(true);
 
       const cfg = JSON.parse(readFileSync(configPath, "utf-8"));
-      expect(cfg.openai.model).toBe("gpt-4o-mini");
+      expect(cfg.openai.model).toBe("gpt-5.3-codex");
       expect(cfg.analysis.promptOnTokenWarning).toBe(true);
 
       rmSync(dir, { recursive: true });
@@ -172,6 +244,147 @@ describe("CLI", () => {
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("Unknown command: foobar");
     });
+
+    test("resume fails when the bundle hash is missing", () => {
+      const { exitCode, stderr } = run("resume");
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Missing saved plan bundle hash");
+      const compact = stderr.replace(/\s+/gu, " ");
+      expect(compact).toContain("resume <hash>");
+    });
+
+    test("resume fails when the bundle hash is unknown", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-resume-"));
+      initializeGitRepo(dir);
+
+      const { exitCode, stderr } = run(
+        "resume 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        { cwd: dir },
+      );
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Unknown saved plan bundle");
+
+      rmSync(dir, { recursive: true });
+    });
+
+    test("resume list shows saved bundles oldest-first with the newest at the bottom", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-resume-list-"));
+      const cacheHome = mkdtempSync(join(tmpdir(), "gitaicmt-cli-cache-"));
+      initializeGitRepo(dir);
+
+      const bundleDirectory = join(cacheHome, "gitaicmt", "plan-bundles");
+      mkdirSync(bundleDirectory, { recursive: true });
+
+      const olderHash = "1".repeat(64);
+      const newerHash = "2".repeat(64);
+      writeFileSync(
+        join(bundleDirectory, `${olderHash}.json`),
+        JSON.stringify({
+          contentHashes: { files: [{ path: "src/old.ts" }] },
+          createdAt: "2026-05-24T08:30:00.000Z",
+          hash: olderHash,
+          plan: [{ message: "feat: older" }],
+          repoRoot: dir,
+        }),
+      );
+      writeFileSync(
+        join(bundleDirectory, `${newerHash}.json`),
+        JSON.stringify({
+          contentHashes: {
+            files: [{ path: "src/new.ts" }, { path: "src/next.ts" }],
+          },
+          createdAt: "2026-05-25T09:45:00.000Z",
+          hash: newerHash,
+          plan: [{ message: "feat: newer" }, { message: "fix: follow-up" }],
+          repoRoot: dir,
+        }),
+      );
+
+      const { exitCode, stderr } = run("resume list", {
+        cwd: dir,
+        env: { XDG_CACHE_HOME: cacheHome },
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("Saved Plan Bundles");
+      expect(stderr).toContain(olderHash);
+      expect(stderr).toContain(newerHash);
+      expect(stderr).toContain(dir);
+      expect(stderr.indexOf(olderHash)).toBeLessThan(stderr.indexOf(newerHash));
+
+      rmSync(dir, { recursive: true });
+      rmSync(cacheHome, { recursive: true });
+    });
+
+    test("resume list suggests --global outside a git repository", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nonrepo-"));
+
+      const { exitCode, stderr } = run("resume list", { cwd: dir });
+
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("git rev-parse --show-toplevel");
+      expect(stderr).toContain("resume list --global");
+
+      rmSync(dir, { recursive: true });
+    });
+
+    test("resume list --global shows saved bundles from multiple repositories", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "gitaicmt-cli-global-list-"));
+      const cacheHome = mkdtempSync(
+        join(tmpdir(), "gitaicmt-cli-global-cache-"),
+      );
+      const firstRepo = mkdtempSync(
+        join(tmpdir(), "gitaicmt-cli-global-repo-a-"),
+      );
+      const secondRepo = mkdtempSync(
+        join(tmpdir(), "gitaicmt-cli-global-repo-b-"),
+      );
+
+      const bundleDirectory = join(cacheHome, "gitaicmt", "plan-bundles");
+      mkdirSync(bundleDirectory, { recursive: true });
+
+      const firstHash = "3".repeat(64);
+      const secondHash = "4".repeat(64);
+      writeFileSync(
+        join(bundleDirectory, `${firstHash}.json`),
+        JSON.stringify({
+          contentHashes: { files: [{ path: "src/alpha.ts" }] },
+          createdAt: "2026-05-20T08:30:00.000Z",
+          hash: firstHash,
+          plan: [{ message: "feat: alpha" }],
+          repoRoot: firstRepo,
+        }),
+      );
+      writeFileSync(
+        join(bundleDirectory, `${secondHash}.json`),
+        JSON.stringify({
+          contentHashes: {
+            files: [{ path: "src/beta.ts" }, { path: "src/gamma.ts" }],
+          },
+          createdAt: "2026-05-21T09:45:00.000Z",
+          hash: secondHash,
+          plan: [{ message: "feat: beta" }, { message: "fix: gamma" }],
+          repoRoot: secondRepo,
+        }),
+      );
+
+      const { exitCode, stderr } = run("resume list --global", {
+        cwd,
+        env: { XDG_CACHE_HOME: cacheHome },
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("Saved Plan Bundles");
+      expect(stderr).toContain(firstHash);
+      expect(stderr).toContain(secondHash);
+      expect(stderr).toContain(firstRepo);
+      expect(stderr).toContain(secondRepo);
+
+      rmSync(cwd, { recursive: true });
+      rmSync(cacheHome, { recursive: true });
+      rmSync(firstRepo, { recursive: true });
+      rmSync(secondRepo, { recursive: true });
+    });
   });
 
   // ───── No staged changes ─────
@@ -180,10 +393,7 @@ describe("CLI", () => {
     test("'gen' fails without any changes", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nostage-"));
       // Init a git repo with no changes at all
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { exitCode, stderr } = run("gen", { cwd: dir });
       expect(exitCode).not.toBe(0);
@@ -194,10 +404,7 @@ describe("CLI", () => {
 
     test("'plan' fails without any changes", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nostage-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { exitCode, stderr } = run("plan", { cwd: dir });
       expect(exitCode).not.toBe(0);
@@ -208,10 +415,7 @@ describe("CLI", () => {
 
     test("default command fails without any changes", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nostage-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { exitCode, stderr } = run("", { cwd: dir });
       expect(exitCode).not.toBe(0);
@@ -222,10 +426,7 @@ describe("CLI", () => {
 
     test("'single' fails without any changes", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nostage-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { exitCode, stderr } = run("single", { cwd: dir });
       expect(exitCode).not.toBe(0);
@@ -236,13 +437,7 @@ describe("CLI", () => {
 
     test("'gen' fails with initial commit guidance when HEAD does not exist yet", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nohead-"));
-      execSync(
-        'git init && git config user.email "test@test.com" && git config user.name "Test User"',
-        {
-          cwd: dir,
-          stdio: "pipe",
-        },
-      );
+      initializeGitRepo(dir, false);
       writeFileSync(join(dir, "draft.txt"), "hello\n");
 
       const { exitCode, stderr } = run("gen", { cwd: dir });
@@ -259,10 +454,7 @@ describe("CLI", () => {
   describe("command aliases", () => {
     test("'c' is an alias for 'commit'", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-alias-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { stderr } = run("c", { cwd: dir });
       // Should fail with "No changes" not "Unknown command"
@@ -273,10 +465,7 @@ describe("CLI", () => {
 
     test("'p' is an alias for 'plan'", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-alias-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { stderr } = run("p", { cwd: dir });
       expect(stderr).toContain("No changes to commit");
@@ -286,10 +475,7 @@ describe("CLI", () => {
 
     test("'--plan' is an alias for 'plan'", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-alias-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { stderr } = run("--plan", { cwd: dir });
       expect(stderr).toContain("No changes to commit");
@@ -299,10 +485,7 @@ describe("CLI", () => {
 
     test("'s' is an alias for 'single'", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-alias-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { stderr } = run("s", { cwd: dir });
       expect(stderr).toContain("No changes to commit");
@@ -312,15 +495,18 @@ describe("CLI", () => {
 
     test("'g' is an alias for 'gen'", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-alias-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
 
       const { stderr } = run("g", { cwd: dir });
       expect(stderr).toContain("No changes to commit");
 
       rmSync(dir, { recursive: true });
+    });
+
+    test("'r' is an alias for 'resume'", () => {
+      const { exitCode, stderr } = run("r");
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Missing saved plan bundle hash");
     });
   });
 
@@ -329,10 +515,7 @@ describe("CLI", () => {
   describe("with staged changes but no API key", () => {
     test("'gen' fails with API key error when changes are staged", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-nokey-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(join(dir, "test.txt"), "hello");
       execSync("git add test.txt", { cwd: dir, stdio: "pipe" });
 
@@ -353,10 +536,7 @@ describe("CLI", () => {
 
     test("'gen' prints token estimate warnings before the API key failure", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-tokenwarn-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
@@ -374,7 +554,9 @@ describe("CLI", () => {
       });
       expect(exitCode).not.toBe(0);
       expect(stderr).toContain("Token Estimate");
-      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
+      expect(stderr).toContain(
+        "Estimated token usage may exceed threshold (1).",
+      );
       expect(stderr).toContain("No OpenAI API key");
 
       rmSync(dir, { recursive: true });
@@ -382,10 +564,7 @@ describe("CLI", () => {
 
     test("wraps token estimate output on narrow terminals", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-tokenwrap-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
@@ -404,17 +583,16 @@ describe("CLI", () => {
       });
 
       expect(exitCode).not.toBe(0);
-      expect(Math.max(...getVisibleLineLengths(stderr))).toBeLessThanOrEqual(37);
+      expect(Math.max(...getVisibleLineLengths(stderr))).toBeLessThanOrEqual(
+        37,
+      );
 
       rmSync(dir, { recursive: true });
     });
 
     test("'gen' prompts before a high-token AI request and aborts on 'n'", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-tokenprompt-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
@@ -424,15 +602,30 @@ describe("CLI", () => {
       mkdirSync(join(dir, "scripts"), { recursive: true });
       mkdirSync(join(dir, "docs"), { recursive: true });
       mkdirSync(join(dir, "src", "cache"), { recursive: true });
-      writeFileSync(join(dir, "src", "auth", "login.ts"), "export const login = true;\n");
-      writeFileSync(join(dir, "tests", "auth", "login.test.ts"), "export const loginTest = true;\n");
-      writeFileSync(join(dir, "scripts", "check.ts"), "export const check = true;\n");
+      writeFileSync(
+        join(dir, "src", "auth", "login.ts"),
+        "export const login = true;\n",
+      );
+      writeFileSync(
+        join(dir, "tests", "auth", "login.test.ts"),
+        "export const loginTest = true;\n",
+      );
+      writeFileSync(
+        join(dir, "scripts", "check.ts"),
+        "export const check = true;\n",
+      );
       writeFileSync(join(dir, "docs", "auth.md"), "# auth\n");
-      writeFileSync(join(dir, "src", "cache", "store.ts"), "export const store = true;\n");
-      execSync("git add src/auth/login.ts tests/auth/login.test.ts scripts/check.ts docs/auth.md src/cache/store.ts", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      writeFileSync(
+        join(dir, "src", "cache", "store.ts"),
+        "export const store = true;\n",
+      );
+      execSync(
+        "git add src/auth/login.ts tests/auth/login.test.ts scripts/check.ts docs/auth.md src/cache/store.ts",
+        {
+          cwd: dir,
+          stdio: "pipe",
+        },
+      );
 
       const { exitCode, stderr } = run("gen", {
         cwd: dir,
@@ -444,7 +637,9 @@ describe("CLI", () => {
         input: "n\n",
       });
       expect(exitCode).toBe(0);
-      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
+      expect(stderr).toContain(
+        "Estimated token usage may exceed threshold (1).",
+      );
       expect(stderr).toContain("\x1b[1mContinue?\x1b[0m");
       expect(
         stderr.match(/Estimated token usage may exceed threshold \(1\)/g),
@@ -457,10 +652,7 @@ describe("CLI", () => {
 
     test("'gen --no-token-check' bypasses the high-token prompt", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-tokenprompt-skip-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
@@ -478,7 +670,9 @@ describe("CLI", () => {
         },
       });
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
+      expect(stderr).toContain(
+        "Estimated token usage may exceed threshold (1).",
+      );
       expect(stderr).not.toContain(
         "Estimated token usage may exceed threshold (1). Continue",
       );
@@ -491,10 +685,7 @@ describe("CLI", () => {
       const dir = mkdtempSync(
         join(tmpdir(), "gitaicmt-cli-tokenprompt-config-"),
       );
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({
@@ -516,7 +707,9 @@ describe("CLI", () => {
         },
       });
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
+      expect(stderr).toContain(
+        "Estimated token usage may exceed threshold (1).",
+      );
       expect(stderr).not.toContain(
         "Estimated token usage may exceed threshold (1). Continue",
       );
@@ -527,10 +720,7 @@ describe("CLI", () => {
 
     test("'plan' prompts once when token usage crosses the threshold", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-plan-tokenprompt-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(
         join(dir, "gitaicmt.config.json"),
         JSON.stringify({ analysis: { tokenWarningThreshold: 1 } }),
@@ -555,7 +745,9 @@ describe("CLI", () => {
         input: "n\n",
       });
       expect(exitCode).toBe(0);
-      expect(stderr).toContain("Estimated token usage may exceed threshold (1).");
+      expect(stderr).toContain(
+        "Estimated token usage may exceed threshold (1).",
+      );
       expect(stderr).toContain("\x1b[1mContinue?\x1b[0m");
       expect(
         stderr.match(/Estimated token usage may exceed threshold \(1\)/g),
@@ -572,10 +764,7 @@ describe("CLI", () => {
   describe("auto-staging", () => {
     test("auto-stages unstaged changes and proceeds", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-autostage-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       // Create a file but DON'T git add it
       writeFileSync(join(dir, "unstaged.txt"), "hello");
 
@@ -597,10 +786,7 @@ describe("CLI", () => {
 
     test("auto-staging works for default commit command", () => {
       const dir = mkdtempSync(join(tmpdir(), "gitaicmt-cli-autostage-"));
-      execSync("git init && git commit --allow-empty -m 'init'", {
-        cwd: dir,
-        stdio: "pipe",
-      });
+      initializeGitRepo(dir);
       writeFileSync(join(dir, "file.txt"), "data");
 
       const { exitCode, stderr } = run("", {
@@ -625,26 +811,20 @@ describe("CLI", () => {
 
 describe("plannedCommitFilesOverlap", () => {
   test("whole-file vs whole-file → overlaps", () => {
-    expect(
-      plannedCommitFilesOverlap({ path: "a.ts" }, { path: "a.ts" }),
-    ).toBe(true);
+    expect(plannedCommitFilesOverlap({ path: "a.ts" }, { path: "a.ts" })).toBe(
+      true,
+    );
   });
 
   test("whole-file vs hunked → overlaps", () => {
     expect(
-      plannedCommitFilesOverlap(
-        { path: "a.ts" },
-        { hunks: [0], path: "a.ts" },
-      ),
+      plannedCommitFilesOverlap({ path: "a.ts" }, { hunks: [0], path: "a.ts" }),
     ).toBe(true);
   });
 
   test("hunked vs whole-file → overlaps", () => {
     expect(
-      plannedCommitFilesOverlap(
-        { hunks: [1], path: "a.ts" },
-        { path: "a.ts" },
-      ),
+      plannedCommitFilesOverlap({ hunks: [1], path: "a.ts" }, { path: "a.ts" }),
     ).toBe(true);
   });
 

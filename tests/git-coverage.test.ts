@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { GitCommandError, InvalidPathError } from "../src/application/errors.js";
+import {
+  GitCommandError,
+  InvalidPathError,
+} from "../src/application/errors.js";
 import {
   commitWithMessage,
   getStagedDiff,
@@ -147,7 +150,10 @@ describe("git coverage", () => {
       execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
 
       expect(() =>
-        commitWithMessage(commitMessage("feat(core): trigger hook failure"), dir),
+        commitWithMessage(
+          commitMessage("feat(core): trigger hook failure"),
+          dir,
+        ),
       ).toThrow(/commit-msg hook rejected this commit/u);
     } finally {
       cleanupDir(dir);

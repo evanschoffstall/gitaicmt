@@ -22,9 +22,7 @@ describe("git header helpers", () => {
   });
 
   test("encodeGitQuotedPath octal-escapes non-printable utf8 bytes", () => {
-    expect(encodeGitQuotedPath("src/na\u0001me.ts")).toBe(
-      '"src/na\\001me.ts"',
-    );
+    expect(encodeGitQuotedPath("src/na\u0001me.ts")).toBe('"src/na\\001me.ts"');
   });
 
   test("normalizeDiffPath decodes git-quoted escapes", () => {
@@ -69,19 +67,24 @@ describe("git header helpers", () => {
   });
 
   test("parseUnifiedDiffPathLine normalizes old, new, and dev-null markers", () => {
-    expect(parseUnifiedDiffPathLine("--- a/src/app.ts", DIFF_OLD_FILE_MARKER)).toBe(
-      "src/app.ts",
-    );
-    expect(parseUnifiedDiffPathLine("+++ b/src/app.ts", DIFF_NEW_FILE_MARKER)).toBe(
-      "src/app.ts",
-    );
     expect(
-      parseUnifiedDiffPathLine(`--- ${DIFF_DEV_NULL_PATH}`, DIFF_OLD_FILE_MARKER),
+      parseUnifiedDiffPathLine("--- a/src/app.ts", DIFF_OLD_FILE_MARKER),
+    ).toBe("src/app.ts");
+    expect(
+      parseUnifiedDiffPathLine("+++ b/src/app.ts", DIFF_NEW_FILE_MARKER),
+    ).toBe("src/app.ts");
+    expect(
+      parseUnifiedDiffPathLine(
+        `--- ${DIFF_DEV_NULL_PATH}`,
+        DIFF_OLD_FILE_MARKER,
+      ),
     ).toBe(DIFF_DEV_NULL_PATH);
   });
 
   test("parseUnifiedDiffPathLine rejects wrong markers and empty paths", () => {
-    expect(parseUnifiedDiffPathLine("@@ -1 +1 @@", DIFF_NEW_FILE_MARKER)).toBeNull();
+    expect(
+      parseUnifiedDiffPathLine("@@ -1 +1 @@", DIFF_NEW_FILE_MARKER),
+    ).toBeNull();
     expect(parseUnifiedDiffPathLine("+++   ", DIFF_NEW_FILE_MARKER)).toBeNull();
   });
 });
