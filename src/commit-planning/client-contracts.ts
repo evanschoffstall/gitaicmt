@@ -1,4 +1,8 @@
-import { ConfigError, OpenAIError, OpenAITimeoutError } from "../application/errors.js";
+import {
+  ConfigError,
+  OpenAIError,
+  OpenAITimeoutError,
+} from "../application/errors.js";
 
 interface CompleteOptions {
   maxTokens?: number;
@@ -67,8 +71,15 @@ export function rethrowTimeoutError(error: unknown, timeoutMs: number): void {
   }
 }
 
+/**
+ * Reports whether a model accepts the temperature parameter on the current API
+ * path. Reasoning-oriented OpenAI families reject temperature, while Codex-
+ * flavored GPT-5 models keep the traditional sampling controls.
+ * @param model - The configured OpenAI model name.
+ * @returns Whether temperature should be sent with requests for this model.
+ */
 export function supportsTemperature(model: string): boolean {
-  return !/^(o1|o2|o3|o4|gpt-5)/i.test(model);
+  return !/^(?:o1|o2|o3|o4|gpt-5(?![\w.-]*-codex(?:$|[-.])))/i.test(model);
 }
 
 export function toOpenAiCallError(error: unknown): OpenAIError {

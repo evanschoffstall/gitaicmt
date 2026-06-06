@@ -1,15 +1,26 @@
-import { MAX_COMMIT_GROUPS, MAX_COMMIT_MESSAGE_LENGTH } from "../application/constants.js";
+import {
+  MAX_COMMIT_GROUPS,
+  MAX_COMMIT_MESSAGE_LENGTH,
+} from "../application/constants.js";
 import { ValidationError } from "../application/errors.js";
-import { formatScalar, validateCommitMessage } from "../commit-messages/formatting.js";
+import {
+  formatScalar,
+  suppressCommitMessageBreaking,
+  validateCommitMessage,
+} from "../commit-messages/formatting.js";
 import { normalizeFileEntry } from "./entry-normalization.js";
-import { buildFilePathResolver } from "./path-resolver.js";
+import { buildFilePathResolver } from "./path/index.js";
+import { resolveBreakingChangeMode } from "./prompts/index.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./types.js";
 
+type CommitMessageRuleOptions =
+  import("./prompts/index.js").CommitMessageRuleOptions;
 type FileDiff = import("../git/diff.js").FileDiff;
 
 export function validateAndNormalizeGrouping(
   raw: unknown,
   fileByPath: Map<string, FileDiff>,
+  options: CommitMessageRuleOptions = {},
 ): PlannedCommit[] {
   const pathResolver = buildFilePathResolver(fileByPath);
   const rawGroups = validateRawGroupingArray(raw);
@@ -23,6 +34,7 @@ export function validateAndNormalizeGrouping(
         fileByPath,
         pathResolver,
         groupIndex,
+        options,
       ),
     );
   }
@@ -101,6 +113,7 @@ function normalizeCommitGroup(
   fileByPath: Map<string, FileDiff>,
   pathResolver: ReturnType<typeof buildFilePathResolver>,
   groupIndex: number,
+  options: CommitMessageRuleOptions,
 ): PlannedCommit {
   const group = validateRawGroupShape(candidate, fileByPath.size, groupIndex);
   const normalizedFiles = group.files.map((fileEntry, fileIndex) =>
@@ -121,7 +134,11 @@ function normalizeCommitGroup(
 
   return {
     files: mergedFiles,
-    message: validateCommitMessage(group.message),
+    message: validateCommitMessage(
+      resolveBreakingChangeMode(options) === "disabled"
+        ? suppressCommitMessageBreaking(group.message)
+        : group.message,
+    ),
   };
 }
 
@@ -169,10 +186,7 @@ function validateRawGroupingArray(raw: unknown): unknown[] {
   return raw;
 }
 
-function validateRawGroupMessage(
-  message: unknown,
-  groupIndex: number,
-): string {
+function validateRawGroupMessage(message: unknown, groupIndex: number): string {
   if (typeof message !== "string") {
     throw new ValidationError(
       `Commit group ${formatScalar(groupIndex)} has invalid 'message' field. Expected string, got: ${typeof message}`,
@@ -204,7 +218,11 @@ function validateRawGroupShape(
   }
 
   const group = candidate as { files?: unknown; message?: unknown };
-  const files = validateRawGroupFiles(group.files, availableFileCount, groupIndex);
+  const files = validateRawGroupFiles(
+    group.files,
+    availableFileCount,
+    groupIndex,
+  );
   const message = validateRawGroupMessage(group.message, groupIndex);
   return { files, message };
 }

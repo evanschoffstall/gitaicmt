@@ -1,4 +1,7 @@
-import { MAX_FILES_PER_BATCH, MAX_GROUPING_PROMPT_LINES } from "../application/constants.js";
+import {
+  MAX_FILES_PER_BATCH,
+  MAX_GROUPING_PROMPT_LINES,
+} from "../application/constants.js";
 
 type FileDiff = import("../git/diff.js").FileDiff;
 

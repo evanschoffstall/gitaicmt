@@ -35,10 +35,7 @@ describe("output-presentation", () => {
       [
         {
           label: "stages",
-          value: [
-            "grouping=10500 (1 req)",
-            "final-consolidation=2764 (1 req)",
-          ],
+          value: ["grouping=10500 (1 req)", "final-consolidation=2764 (1 req)"],
         },
       ],
       72,
@@ -99,11 +96,15 @@ describe("output-presentation", () => {
     expect(lines[0]).toBe("╭─ Commit 1 of 1");
     expect(lines.some((line) => line.includes("Subject"))).toBe(true);
     expect(lines.some((line) => line.includes("Impact"))).toBe(true);
-    expect(lines.some((line) => line.includes("2 files · 2 details"))).toBe(true);
+    expect(lines.some((line) => line.includes("2 files · 2 details"))).toBe(
+      true,
+    );
     expect(lines.some((line) => line.includes("Details"))).toBe(true);
     expect(lines.some((line) => line.includes("Files"))).toBe(true);
     expect(
-      lines.some((line) => line.includes("tests/ai-coverage.test.ts [hunks 0, 1]")),
+      lines.some((line) =>
+        line.includes("tests/ai-coverage.test.ts [hunks 0, 1]"),
+      ),
     ).toBe(true);
     expect(lines.at(-1)).toBe("╰─");
   });

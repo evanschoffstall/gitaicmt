@@ -14,8 +14,9 @@ import {
   buildMergePrompt,
   buildSystemPrompt,
   buildUserPrompt,
+  type CommitMessageRuleOptions,
   type GroupingPromptContext,
-} from "./prompt-builders/index.js";
+} from "./prompts/index.js";
 
 type DiffChunk = import("../git/diff.js").DiffChunk;
 type DiffStats = import("../git/diff.js").DiffStats;
@@ -64,6 +65,7 @@ export function estimateGenerateOperationTokens(
   chunks: DiffChunk[],
   stats: DiffStats,
   cfg: Config,
+  options: CommitMessageRuleOptions = {},
 ): TokenEstimateSummary {
   if (chunks.length === 0) {
     return emptySummary();
@@ -71,7 +73,7 @@ export function estimateGenerateOperationTokens(
 
   const requests = chunks.map((chunk) =>
     estimateCompletionTokens(
-      buildSystemPrompt(),
+      buildSystemPrompt(options),
       buildUserPrompt(chunk, stats),
       cfg.openai.maxTokens,
     ),
@@ -80,8 +82,12 @@ export function estimateGenerateOperationTokens(
   if (chunks.length > 1) {
     requests.push(
       estimateCompletionTokens(
-        buildSystemPrompt(),
-        buildMergePrompt(buildPlaceholderMessages(chunks.length), stats),
+        buildSystemPrompt(options),
+        buildMergePrompt(
+          buildPlaceholderMessages(chunks.length),
+          stats,
+          options,
+        ),
         cfg.openai.maxTokens,
       ),
     );
@@ -156,9 +162,8 @@ export function getPlannerResponseTokenBudget(
   return Math.max(
     configuredMaxTokens,
     MIN_GROUPING_TOKENS,
-    Math.ceil(
-      serializedPlanTokens * CONSOLIDATION_RESPONSE_SAFETY_FACTOR,
-    ) + CONSOLIDATION_RESPONSE_OVERHEAD_TOKENS,
+    Math.ceil(serializedPlanTokens * CONSOLIDATION_RESPONSE_SAFETY_FACTOR) +
+      CONSOLIDATION_RESPONSE_OVERHEAD_TOKENS,
   );
 }
 

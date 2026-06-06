@@ -80,6 +80,7 @@ export async function finalizePlannedCommitGroups(
   files: FileDiff[],
   groups: PlannedCommit[],
   shouldDeferFinalization: boolean,
+  breakingMode?: BreakingChangeMode,
 ): Promise<PlannedCommit[]> {
   const fileByPath = new Map(files.map((file) => [file.path, file]));
   if (shouldDeferFinalization) {
@@ -87,7 +88,9 @@ export async function finalizePlannedCommitGroups(
   }
 
   const finalizationStartedAtMs = performance.now();
-  const finalized = await finalizePlannedGroups(files, groups);
+  const finalized = await finalizePlannedGroups(files, groups, {
+    breakingMode,
+  });
   emitAiOutputEvent({
     content: JSON.stringify({
       decision: "plan-finalization",

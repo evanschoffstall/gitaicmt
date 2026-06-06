@@ -2,11 +2,9 @@ import {
   parseConventionalSubject,
   sanitizeSubjectWords,
 } from "../../../commit-messages/subject-parser.js";
-import {
-  groupsShareCoverage,
-  groupsSharePaths,
-} from "../commit-coverage.js";
+import { groupsShareCoverage, groupsSharePaths } from "../commit-coverage.js";
 import { type PlannedCommit, type SubjectWords } from "../grouping-types.js";
+import { hasCompactSurfaceRolloutMergeSignal } from "./compact-rollout-merge.js";
 import { getCommitAreas, hasMergeSignalForPair } from "./path-areas.js";
 
 /** Stop words are excluded so merge heuristics stay anchored on intent. */
@@ -62,6 +60,38 @@ export function filterSignificantWords(
   return words.filter(
     (word) => word.length >= minimumLength && !STOP_WORDS.has(word),
   );
+}
+
+/** Builds a subject key from only the narrative, ignoring type and scope. */
+export function getNormalizedSubjectDescriptionKey(subject: string): string {
+  const parsed = parseConventionalSubject(subject);
+  const descriptionWords = sanitizeSubjectWords(parsed.description);
+  const normalizedDescription = descriptionWords.join(" ").trim();
+  if (normalizedDescription.length > 0) {
+    return normalizedDescription;
+  }
+
+  return sanitizeSubjectWords(subject).join(" ").trim();
+}
+
+/**
+ * Builds a stable merge key for subject-equivalent commits while ignoring scope
+ * differences such as `test(cli)` vs `test(git)`.
+ */
+export function getNormalizedSubjectMergeKey(subject: string): string {
+  const parsed = parseConventionalSubject(subject);
+  const descriptionWords = sanitizeSubjectWords(parsed.description);
+  const normalizedDescription = descriptionWords.join(" ").trim();
+  if (normalizedDescription.length === 0) {
+    const fallbackWords = sanitizeSubjectWords(subject).join(" ").trim();
+    return parsed.type.length > 0
+      ? `${parsed.type}:${fallbackWords}`
+      : fallbackWords;
+  }
+
+  return parsed.type.length > 0
+    ? `${parsed.type}:${normalizedDescription}`
+    : normalizedDescription;
 }
 
 /**
@@ -135,11 +165,58 @@ export function hasPotentialMergeSignals(groups: PlannedCommit[]): boolean {
   return false;
 }
 
+export function haveCompleteSubjectWordOverlap(
+  subjects: SubjectWords[],
+  allowedMissingWords = 0,
+  requireNonEmpty = false,
+): boolean {
+  for (let leftIndex = 0; leftIndex < subjects.length; leftIndex++) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < subjects.length;
+      rightIndex++
+    ) {
+      const left = subjects[leftIndex];
+      const right = subjects[rightIndex];
+      const minimumWordCount = Math.min(left.words.size, right.words.size);
+      if (requireNonEmpty && minimumWordCount === 0) {
+        return false;
+      }
+
+      if (
+        countSharedSubjectWords(left.words, right.words) <
+        minimumWordCount - allowedMissingWords
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 /** Support-like types should attach to implementation work, not drive it. */
 export function isSupportLikeType(type: string): boolean {
   return (
     type === "chore" || type === "docs" || type === "style" || type === "test"
   );
+}
+
+/** Adds significant detail-line vocabulary to subject metadata for intent scoring. */
+export function parseMessageWords(message: string): SubjectWords {
+  const [subjectLine, ...bodyLines] = message.split("\n");
+  const subject = parseSubjectWords(subjectLine);
+  const bodyWords = filterSignificantWords(
+    sanitizeSubjectWords(
+      bodyLines.map((line) => line.replace(/^[\s*-]+/u, " ").trim()).join(" "),
+    ),
+  );
+
+  for (const word of bodyWords) {
+    subject.words.add(word);
+  }
+
+  return subject;
 }
 
 /** Extract conventional-commit subject metadata for planner heuristics. */
