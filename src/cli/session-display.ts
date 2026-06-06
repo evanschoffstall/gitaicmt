@@ -1,11 +1,34 @@
-import type { AiOutputEvent, TokenUsageSummary } from "../commit-planning/openai-client.js";
+import type {
+  AiOutputEvent,
+  TokenUsageSummary,
+} from "../commit-planning/openai-client.js";
 
-import { type PlannedCommitFile, type TokenEstimateSummary } from "../commit-planning/orchestration.js";
-import { formatCount, formatRequestCount, formatStageUsageLabel, formatTokenWarning, isHighTokenEstimate } from "./counts.js";
-import { buildStatusSectionLines, type PresentationStatusRow } from "./output-presentation.js";
+import {
+  type PlannedCommitFile,
+  type TokenEstimateSummary,
+} from "../commit-planning/orchestration.js";
+import {
+  formatCount,
+  formatRequestCount,
+  formatStageUsageLabel,
+  formatTokenWarning,
+  isHighTokenEstimate,
+} from "./counts.js";
+import { buildStatusSectionLines } from "./output-presentation.js";
 import { wrapTerminalTextBlock } from "./terminal/line-wrapping.js";
 import { writeTerminalLines } from "./terminal/output-ui.js";
-import { formatVerboseAiOutputLines, getVerboseAiOutputSequenceKey } from "./verbose-output.js";
+import { configureTracePersistence } from "./trace/index.js";
+import {
+  accumulateSubmoduleEntry,
+  createSubmoduleAccumulator,
+  formatSubmoduleReportLines,
+  type SubmoduleAccumulator,
+} from "./trace/submodule/index.js";
+import {
+  formatVerboseAiOutputLines,
+  getVerboseAiOutputSequenceKey,
+} from "./verbose-output.js";
+import { toNormalizedPlannerDecisionId } from "./verbose-rendering/index.js";
 import { resolveLogWidth, resolveVerboseWidth } from "./viewport.js";
 
 export type OutputMode = "off" | "summary" | "trace";
@@ -16,22 +39,44 @@ interface CommitPlanAnalysisSummary {
   plannerFallbackNotice: null | string;
 }
 
+// Accepted by callers for API compatibility; options are intentionally ignored
+// since the new per-submodule trace system flushes automatically on transitions.
+interface FlushVerboseOptions {
+  includeCoverageSummary?: boolean;
+}
+
 interface StatusRow {
   label: string;
   tone?: "default" | "warning";
   value: string | string[];
 }
 
-const DIM = "\x1b[2m";
-const RESET = "\x1b[0m";
-const YELLOW = "\x1b[33m";
+const DIM = "\u001b[2m";
+const RESET = "\u001b[0m";
+const YELLOW = "\u001b[33m";
 
 let outputMode: OutputMode = "off";
-let verboseEventCounts: Record<string, number> = Object.create(null) as Record<string, number>;
+let verboseEventCounts: Record<string, number> = Object.create(null) as Record<
+  string,
+  number
+>;
+
+// Per-submodule trace accumulation state
+let currentSubmoduleKey: null | string = null;
+let currentSubmoduleAcc: null | SubmoduleAccumulator = null;
 
 export function configureOutputMode(mode: OutputMode): void {
+  flushVerboseAiOutput();
   outputMode = mode;
   verboseEventCounts = Object.create(null) as Record<string, number>;
+  currentSubmoduleKey = null;
+  currentSubmoduleAcc = null;
+  configureTracePersistence(mode);
+}
+
+/** Flush any accumulated per-submodule trace entries before transitions. */
+export function flushVerboseAiOutput(_options?: FlushVerboseOptions): void {
+  flushCurrentSubmodule();
 }
 
 export function hasVisibleOutputMode(): boolean {
@@ -43,6 +88,9 @@ export function isVerboseModeEnabled(): boolean {
 }
 
 export function log(message: string): void {
+  if (outputMode !== "trace") {
+    flushVerboseAiOutput();
+  }
   writeTerminalLines(wrapTerminalTextBlock(message, resolveLogWidth()));
 }
 
@@ -69,8 +117,26 @@ export function logActualTokenUsage(
   ]);
 }
 
-export function logCommitPlanAnalysis(analysis: CommitPlanAnalysisSummary): void {
-  logPlannedCommits(analysis.groups, analysis.elapsed);
+export function logCommitPlanAnalysis(
+  analysis: CommitPlanAnalysisSummary,
+): void {
+  if (outputMode === "trace") {
+    flushVerboseAiOutput();
+  }
+
+  log("");
+  logStatusSection("Plan Summary", [
+    {
+      label: "commits",
+      value: `${formatCount(analysis.groups.length)} planned ${analysis.groups.length === 1 ? "commit" : "commits"}`,
+    },
+    {
+      label: "elapsed",
+      value: `${analysis.elapsed}s analysis time`,
+    },
+  ]);
+  log("");
+
   if (analysis.plannerFallbackNotice) {
     log(`${YELLOW}${analysis.plannerFallbackNotice}${RESET}`);
     log("");
@@ -98,18 +164,19 @@ export function logGenerationContext(
     },
   ]);
   if (tokenEstimate) {
-    logTokenEstimate(tokenEstimate, tokenWarningThreshold ?? 0, suppressWarning);
+    logTokenEstimate(
+      tokenEstimate,
+      tokenWarningThreshold ?? 0,
+      suppressWarning,
+    );
   }
 }
 
 export function logStatusSection(title: string, rows: StatusRow[]): void {
-  writeTerminalLines(
-    buildStatusSectionLines(
-      title,
-      rows as PresentationStatusRow[],
-      resolveLogWidth(),
-    ),
-  );
+  if (outputMode !== "trace") {
+    flushVerboseAiOutput();
+  }
+  writeTerminalLines(buildStatusSectionLines(title, rows, resolveLogWidth()));
 }
 
 export function logTokenEstimate(
@@ -157,14 +224,19 @@ export function logTokenEstimate(
 }
 
 export function logVerboseAiOutput(event: AiOutputEvent): void {
-  const eventKey = getVerboseAiOutputSequenceKey(event);
-  verboseEventCounts[eventKey] = (verboseEventCounts[eventKey] ?? 0) + 1;
-  const lines = formatVerboseAiOutputLines(event, {
-    maxWidth: resolveVerboseWidth(),
-    mode: outputMode === "trace" ? "trace" : "summary",
-    sequence: verboseEventCounts[eventKey],
-  });
-  logVerboseBlock(lines);
+  if (outputMode !== "trace" && outputMode !== "summary") {
+    return;
+  }
+
+  if (event.kind === "planner-decision" && outputMode === "trace") {
+    accumulateTracePlannerDecision(event);
+    return;
+  }
+
+  if (currentSubmoduleKey !== null) {
+    flushCurrentSubmodule();
+  }
+  renderVerboseAiOutput(event);
 }
 
 export function verbose(message: string): void {
@@ -176,29 +248,57 @@ export function verbose(message: string): void {
   log(`${DIM}[${label}] ${message}${RESET}`);
 }
 
-function logPlannedCommits(
-  groups: { files: PlannedCommitFile[] }[],
-  elapsed: string,
-): void {
-  log("");
-  logStatusSection("Plan Summary", [
-    {
-      label: "commits",
-      value: `${formatCount(groups.length)} planned ${groups.length === 1 ? "commit" : "commits"}`,
-    },
-    {
-      label: "elapsed",
-      value: `${elapsed}s analysis time`,
-    },
-  ]);
-  log("");
+function accumulateTracePlannerDecision(event: AiOutputEvent): boolean {
+  let payload: null | Record<string, unknown> = null;
+  try {
+    const parsed = JSON.parse(event.content) as unknown;
+    if (typeof parsed === "object" && !Array.isArray(parsed))
+      payload = parsed as Record<string, unknown>;
+  } catch {
+    /* ignore */
+  }
+  if (!payload) return false;
+  const decision = toNormalizedPlannerDecisionId(payload.decision);
+  if (!decision) return false;
+  const key = `${event.stage}:${decision}`;
+  if (currentSubmoduleKey !== null && currentSubmoduleKey !== key)
+    flushCurrentSubmodule();
+  if (currentSubmoduleKey === null) {
+    currentSubmoduleAcc = createSubmoduleAccumulator(event.stage, decision);
+    currentSubmoduleKey = key;
+  }
+  accumulateSubmoduleEntry(
+    currentSubmoduleAcc ?? createSubmoduleAccumulator(event.stage, decision),
+    payload,
+  );
+  return true;
 }
 
-function logVerboseBlock(lines: string[]): void {
-  if (!isVerboseModeEnabled()) {
-    return;
-  }
+function flushCurrentSubmodule(): void {
+  if (currentSubmoduleAcc === null) return;
+  const acc = currentSubmoduleAcc;
+  currentSubmoduleKey = null;
+  currentSubmoduleAcc = null;
+
+  if (!isVerboseModeEnabled()) return;
+
+  const lines = formatSubmoduleReportLines(acc, resolveVerboseWidth());
+  if (lines.length === 0) return;
 
   const label = outputMode === "trace" ? "trace" : "verbose";
   writeTerminalLines(lines.map((line) => `${DIM}[${label}]${RESET} ${line}`));
+}
+
+function renderVerboseAiOutput(event: AiOutputEvent): void {
+  const eventKey = getVerboseAiOutputSequenceKey(event);
+  verboseEventCounts[eventKey] = (verboseEventCounts[eventKey] ?? 0) + 1;
+  const lines = formatVerboseAiOutputLines(event, {
+    maxWidth: resolveVerboseWidth(),
+    mode: outputMode === "trace" ? "trace" : "summary",
+    sequence: verboseEventCounts[eventKey],
+  });
+  if (isVerboseModeEnabled()) {
+    const label = outputMode === "trace" ? "trace" : "verbose";
+    writeTerminalLines(lines.map((line) => `${DIM}[${label}]${RESET} ${line}`));
+  }
 }
