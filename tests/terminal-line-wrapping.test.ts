@@ -36,12 +36,9 @@ describe("terminal line wrapping", () => {
   });
 
   test("splits long plain tokens on very small screens", () => {
-    expect(
-      wrapTerminalTextLine("src/cli/command-line-interface.ts", 12),
-    ).toEqual([
-      "src/cli/comm",
-      "and-line-int",
-      "erface.ts",
+    expect(wrapTerminalTextLine("src/cli/main.ts", 12)).toEqual([
+      "src/cli/main",
+      ".ts",
     ]);
   });
 
