@@ -1,14 +1,14 @@
-import type { GroupingPromptContext } from "./prompt-builders/index.js";
+import type {
+  BreakingChangeMode,
+  GroupingPromptContext,
+} from "./prompts/index.js";
 import type { PlannedCommit, PlannedCommitFile } from "./types.js";
 
 import { ValidationError } from "../application/errors.js";
 import { formatSelectedFileDiff } from "../git/diff.js";
 import { finalizePlannedGroups, premergeBySubject } from "./grouping/index.js";
 import { emitAiOutputEvent } from "./openai-client.js";
-import {
-  getCachedPlan,
-  serializePlanCacheInput,
-} from "./result-cache.js";
+import { getCachedPlan, serializePlanCacheInput } from "./result-cache.js";
 
 type DiffChunk = import("../git/diff.js").DiffChunk;
 type FileDiff = import("../git/diff.js").FileDiff;
@@ -19,7 +19,9 @@ export function buildMissedFilesChunk(
   formatFileDiff: (f: FileDiff) => string,
 ): DiffChunk {
   const content = missedFiles
-    .map((missedFile) => formatMissedFileDiff(missedFile, fileByPath, formatFileDiff))
+    .map((missedFile) =>
+      formatMissedFileDiff(missedFile, fileByPath, formatFileDiff),
+    )
     .join("\n");
 
   return {
@@ -39,7 +41,11 @@ export function buildPlanCacheContext(
 
   return {
     formattedDiffs,
-    planCacheInput: serializePlanCacheInput(files, formattedDiffs, promptContext),
+    planCacheInput: serializePlanCacheInput(
+      files,
+      formattedDiffs,
+      promptContext,
+    ),
   };
 }
 
@@ -48,7 +54,10 @@ export function collectMissedPlannedFiles(
   files: FileDiff[],
   fileByPath: Map<string, FileDiff>,
 ): PlannedCommitFile[] {
-  const { assignedFiles, assignedHunks } = collectAssignedPlanCoverage(groups, fileByPath);
+  const { assignedFiles, assignedHunks } = collectAssignedPlanCoverage(
+    groups,
+    fileByPath,
+  );
   const missedFiles: PlannedCommitFile[] = [];
 
   for (const file of files) {
@@ -61,7 +70,11 @@ export function collectMissedPlannedFiles(
     }
 
     const assigned = assignedHunks.get(file.path);
-    if (!assigned || assigned.size === 0 || assigned.size >= file.hunks.length) {
+    if (
+      !assigned ||
+      assigned.size === 0 ||
+      assigned.size >= file.hunks.length
+    ) {
       continue;
     }
 
@@ -131,9 +144,7 @@ export function getEmittedCachedPlan(
 }
 
 export function parseGroupingResponse(raw: string): unknown {
-  const cleaned = raw
-    .replace(/^```(?:json)?\s*/m, "")
-    .replace(/\s*```$/m, "");
+  const cleaned = raw.replace(/^```(?:json)?\s*/m, "").replace(/\s*```$/m, "");
 
   try {
     return JSON.parse(cleaned);
@@ -177,7 +188,9 @@ function collectAssignedPlanCoverage(
 
       const file = fileByPath.get(fileRef.path);
       if (!file) {
-        throw new ValidationError(`Unknown file in commit group: ${fileRef.path}`);
+        throw new ValidationError(
+          `Unknown file in commit group: ${fileRef.path}`,
+        );
       }
 
       if (fileRef.hunks) {

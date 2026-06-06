@@ -36,7 +36,9 @@ export function buildPlaceholderPlanGroupsForEstimate(
 }
 
 /** Estimate how many consolidation passes are likely for a provisional plan size. */
-export function estimateLikelyConsolidationPassCount(groupCount: number): number {
+export function estimateLikelyConsolidationPassCount(
+  groupCount: number,
+): number {
   let remainingGroups = groupCount;
   let passCount = 0;
 
