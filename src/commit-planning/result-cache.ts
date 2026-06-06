@@ -38,12 +38,8 @@ export function getCachedPlan(planInput: string): null | PlannedCommit[] {
   if (!entry) {
     return null;
   }
-  if (Date.now() - entry.ts > cfg.performance.cacheTTLSeconds * 1000) {
-    planCache.delete(key);
-    return null;
-  }
 
-  return clonePlan(entry.plan);
+  return clonePlannedCommits(entry.plan);
 }
 
 export function resetAiCache(): void {

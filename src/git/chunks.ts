@@ -25,7 +25,9 @@ function chunkDiffsAcrossFiles(
     const text = formatFileDiff(file);
     const lineCount = countTextLines(text);
     if (bufferLineCount + lineCount > maxLines && buffer.length > 0) {
-      chunks.push(createChunk(buffer.join("\n"), bufferFiles, nextId++, bufferLineCount));
+      chunks.push(
+        createChunk(buffer.join("\n"), bufferFiles, nextId++, bufferLineCount),
+      );
       buffer = [];
       bufferFiles = [];
       bufferLineCount = 0;
@@ -36,7 +38,9 @@ function chunkDiffsAcrossFiles(
   }
 
   if (buffer.length > 0) {
-    chunks.push(createChunk(buffer.join("\n"), bufferFiles, nextId, bufferLineCount));
+    chunks.push(
+      createChunk(buffer.join("\n"), bufferFiles, nextId, bufferLineCount),
+    );
   }
 
   return chunks;

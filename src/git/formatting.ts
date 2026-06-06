@@ -4,9 +4,7 @@ import { DIFF_DEV_NULL_PATH } from "./header.js";
 
 export function formatDiffHeaderLines(file: FileDiff): string[] {
   const oldHeaderPath =
-    file.status === "added"
-      ? DIFF_DEV_NULL_PATH
-      : (file.oldPath ?? file.path);
+    file.status === "added" ? DIFF_DEV_NULL_PATH : (file.oldPath ?? file.path);
   const newHeaderPath =
     file.status === "deleted" ? DIFF_DEV_NULL_PATH : file.path;
 

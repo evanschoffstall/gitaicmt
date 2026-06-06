@@ -52,12 +52,16 @@ export function extractTokenUsage(
     return null;
   }
 
-  const inputTokens = readTokenUsageValue(usage.input_tokens, usage.prompt_tokens);
+  const inputTokens = readTokenUsageValue(
+    usage.input_tokens,
+    usage.prompt_tokens,
+  );
   const outputTokens = readTokenUsageValue(
     usage.output_tokens,
     usage.completion_tokens,
   );
-  const totalTokens = readUsageNumber(usage.total_tokens) ?? inputTokens + outputTokens;
+  const totalTokens =
+    readUsageNumber(usage.total_tokens) ?? inputTokens + outputTokens;
 
   return inputTokens === 0 && outputTokens === 0 && totalTokens === 0
     ? null
