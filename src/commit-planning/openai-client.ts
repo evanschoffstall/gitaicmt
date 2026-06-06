@@ -92,12 +92,7 @@ export async function complete(
     }
 
     try {
-      return await completeViaResponses(
-        system,
-        user,
-        request,
-        fileAliasMap,
-      );
+      return await completeViaResponses(system, user, request, fileAliasMap);
     } catch (fallbackErr: unknown) {
       rethrowTimeoutError(fallbackErr, request.timeoutMs);
       throw toOpenAiCallError(fallbackErr);
@@ -320,4 +315,3 @@ function recordTokenUsage(
 
   return usage;
 }
-

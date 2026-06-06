@@ -6,6 +6,7 @@ import {
 import { ValidationError } from "../application/errors.js";
 import {
   formatLabeledDiff,
+  suppressCommitMessageBreaking,
   validateCommitMessage,
 } from "../commit-messages/formatting.js";
 import {
@@ -16,13 +17,24 @@ import {
 import { finalizePlannedGroups } from "./grouping/index.js";
 import { complete, emitAiOutputEvent } from "./openai-client.js";
 import {
+  buildMissedFilesChunk,
+  buildPlanCacheContext,
+  collectMissedPlannedFiles,
+  finalizePlannedCommitGroups,
+  getEmittedCachedPlan,
+  parseGroupingResponse,
+  validatePlanRecursionDepth,
+} from "./planning-workflow.js";
+import {
+  type BreakingChangeMode,
   buildGroupingSystemPrompt,
   buildGroupingUserPrompt,
   buildMergePrompt,
   buildSystemPrompt,
   buildUserPrompt,
   type GroupingPromptContext,
-} from "./prompt-builders/index.js";
+  resolveBreakingChangeMode,
+} from "./prompts/index.js";
 import { validateAndNormalizeGrouping } from "./response-validation.js";
 import {
   getCachedMessage,
@@ -31,18 +43,13 @@ import {
 } from "./result-cache.js";
 import { getGroupingResponseTokenBudget } from "./token-estimation.js";
 import { type PlannedCommit, type PlannedCommitFile } from "./types.js";
-import {
-  buildMissedFilesChunk,
-  buildPlanCacheContext,
-  collectMissedPlannedFiles,
-  finalizePlannedCommitGroups,
-  getEmittedCachedPlan,
-  parseGroupingResponse,
-  validatePlanRecursionDepth,
-} from "./workflow-support.js";
 
+interface CommitGenerationOptions {
+  breakingMode?: BreakingChangeMode;
+}
 type DiffChunk = import("../git/diff.js").DiffChunk;
 type DiffStats = import("../git/diff.js").DiffStats;
+
 type FileDiff = import("../git/diff.js").FileDiff;
 
 export {
@@ -50,12 +57,18 @@ export {
   getTokenUsageSummary,
   resetTokenUsageSummary,
   setAiOutputObserver,
-  validateOpenAIConfiguration
+  validateOpenAIConfiguration,
 } from "./openai-client.js";
 export type { AiOutputEvent } from "./openai-client.js";
 export {
+  getBundleFileDiffs,
+  loadPlanBundle,
+  preparePlanBundleForResume,
+  savePlanBundle,
+} from "./plan-bundles/index.js";
+export {
   estimateGenerateOperationTokens,
-  estimatePlanOperationTokens
+  estimatePlanOperationTokens,
 } from "./token-estimation.js";
 export type { TokenEstimateSummary } from "./token-estimation.js";
 export { buildGroupingSystemPrompt, buildGroupingUserPrompt };
@@ -64,45 +77,80 @@ export type { PlannedCommit, PlannedCommitFile };
 export async function generateForChunk(
   chunk: DiffChunk,
   stats?: DiffStats,
+  options: CommitGenerationOptions = {},
 ): Promise<string> {
-  const cached = getCachedMessage(chunk.content);
+  const breakingMode = resolveBreakingChangeMode(options);
+  const promptMode =
+    breakingMode === "sensitive"
+      ? "breaking-sensitive"
+      : breakingMode === "disabled"
+        ? "no-breaking"
+        : "default";
+  const cached = getCachedMessage(chunk.content, promptMode);
   if (cached) {
     return cached;
   }
 
-  const sys = buildSystemPrompt();
+  const sys = buildSystemPrompt(options);
   const usr = buildUserPrompt(chunk, stats);
+  const rawMessage = await complete(sys, usr, { stage: "generate" });
   const msg = validateCommitMessage(
-    await complete(sys, usr, { stage: "generate" }),
+    breakingMode === "disabled"
+      ? suppressCommitMessageBreaking(rawMessage)
+      : rawMessage,
   );
-  setCachedMessage(chunk.content, msg);
+  setCachedMessage(chunk.content, msg, promptMode);
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: "message-generation",
+      fileCount: chunk.files.length,
+      files: chunk.files.slice(0, 6),
+      outputSubject: msg.split("\n")[0].trim().slice(0, 80),
+    }),
+    kind: "planner-decision",
+    stage: "generate",
+    transport: "internal",
+  });
   return msg;
 }
 
 export async function generateForChunks(
   chunks: DiffChunk[],
   stats: DiffStats,
+  options: CommitGenerationOptions = {},
 ): Promise<string> {
   const cfg = loadConfig();
 
   if (chunks.length === 0) return DEFAULT_EMPTY_COMMIT_MESSAGE;
-  if (chunks.length === 1) return generateForChunk(chunks[0], stats);
+  if (chunks.length === 1) return generateForChunk(chunks[0], stats, options);
 
-  let partials: string[];
-  if (cfg.performance.parallel) {
-    partials = await Promise.all(
-      chunks.map((chunk) => generateForChunk(chunk, stats)),
-    );
-  } else {
-    partials = [];
-    for (const chunk of chunks) {
-      partials.push(await generateForChunk(chunk, stats));
-    }
-  }
+  const partials = await generateChunkPartials(
+    chunks,
+    stats,
+    options,
+    cfg.performance.parallel,
+  );
 
-  const sys = buildSystemPrompt();
-  const usr = buildMergePrompt(partials, stats);
-  return validateCommitMessage(await complete(sys, usr, { stage: "merge" }));
+  const sys = buildSystemPrompt(options);
+  const usr = buildMergePrompt(partials, stats, options);
+  const breakingMode = resolveBreakingChangeMode(options);
+  const rawMessage = await complete(sys, usr, { stage: "merge" });
+  const mergedMsg = validateCommitMessage(
+    breakingMode === "disabled"
+      ? suppressCommitMessageBreaking(rawMessage)
+      : rawMessage,
+  );
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      chunkCount: chunks.length,
+      decision: "message-merge",
+      outputSubject: mergedMsg.split("\n")[0].trim().slice(0, 80),
+    }),
+    kind: "planner-decision",
+    stage: "merge",
+    transport: "internal",
+  });
+  return mergedMsg;
 }
 
 export async function planCommits(
@@ -149,6 +197,7 @@ export async function planCommits(
     files,
     groups,
     promptContext?.deferFinalization === true,
+    promptContext?.breakingMode,
   );
   setCachedPlan(planCacheInput, finalized);
   return finalized;
@@ -157,6 +206,7 @@ export async function planCommits(
 async function buildFallbackGroupingPlan(
   files: FileDiff[],
   formatFileDiff: (f: FileDiff) => string,
+  promptContext?: GroupingPromptContext,
 ): Promise<PlannedCommit[]> {
   const allContent = files
     .map((file) => formatLabeledDiff(file, formatFileDiff))
@@ -167,11 +217,11 @@ async function buildFallbackGroupingPlan(
     id: 0,
     lineCount: allContent.split("\n").length,
   };
-  const msg = await generateForChunk(allChunk);
+  const msg = await generateForChunk(allChunk, undefined, {
+    breakingMode: promptContext?.breakingMode,
+  });
 
-  return [
-    { files: files.map((file) => ({ path: file.path })), message: msg },
-  ];
+  return [{ files: files.map((file) => ({ path: file.path })), message: msg }];
 }
 
 async function buildRequestedGroupingPlan(
@@ -181,7 +231,7 @@ async function buildRequestedGroupingPlan(
   cfg: ReturnType<typeof loadConfig>,
 ): Promise<PlannedCommit[]> {
   const raw = await requestGroupingPlan(
-    buildGroupingSystemPrompt(),
+    buildGroupingSystemPrompt(promptContext),
     buildGroupingUserPrompt(files, formatFileDiff, promptContext),
     getGroupingResponseTokenBudget(cfg.openai.maxTokens, files.length),
     Math.max(cfg.performance.timeoutMs, GROUPING_TIMEOUT_MS),
@@ -190,7 +240,13 @@ async function buildRequestedGroupingPlan(
   const fileByPath = new Map(files.map((file) => [file.path, file]));
 
   try {
-    return await buildValidatedGroupingPlan(raw, files, formatFileDiff, fileByPath);
+    return await buildValidatedGroupingPlan(
+      raw,
+      files,
+      formatFileDiff,
+      fileByPath,
+      promptContext,
+    );
   } catch (error: unknown) {
     if (!(error instanceof ValidationError)) {
       throw error;
@@ -208,7 +264,7 @@ async function buildRequestedGroupingPlan(
       transport: "internal",
     });
 
-    return buildFallbackGroupingPlan(files, formatFileDiff);
+    return buildFallbackGroupingPlan(files, formatFileDiff, promptContext);
   }
 }
 
@@ -217,8 +273,13 @@ async function buildValidatedGroupingPlan(
   files: FileDiff[],
   formatFileDiff: (f: FileDiff) => string,
   fileByPath: Map<string, FileDiff>,
+  promptContext: GroupingPromptContext | undefined,
 ): Promise<PlannedCommit[]> {
-  const groups = validateAndNormalizeGrouping(parseGroupingResponse(raw), fileByPath);
+  const groups = validateAndNormalizeGrouping(
+    parseGroupingResponse(raw),
+    fileByPath,
+    promptContext,
+  );
   const missedFiles = collectMissedPlannedFiles(groups, files, fileByPath);
 
   if (missedFiles.length === 0) {
@@ -227,8 +288,24 @@ async function buildValidatedGroupingPlan(
 
   const missedMessage = await generateForChunk(
     buildMissedFilesChunk(missedFiles, fileByPath, formatFileDiff),
+    undefined,
+    { breakingMode: promptContext?.breakingMode },
   );
   return [...groups, { files: missedFiles, message: missedMessage }];
+}
+
+async function generateChunkPartials(
+  chunks: DiffChunk[],
+  stats: DiffStats,
+  options: CommitGenerationOptions,
+  parallel: boolean,
+): Promise<string[]> {
+  if (parallel)
+    return Promise.all(chunks.map((c) => generateForChunk(c, stats, options)));
+  const partials: string[] = [];
+  for (const chunk of chunks)
+    partials.push(await generateForChunk(chunk, stats, options));
+  return partials;
 }
 
 async function maybePlanIncrementally(
@@ -239,7 +316,12 @@ async function maybePlanIncrementally(
   promptContext: GroupingPromptContext | undefined,
 ): Promise<PlannedCommit[] | undefined> {
   if (files.length === 1 && files[0].hunks.length <= 1) {
-    return planSingleFileCommit(files[0], formattedDiffs[0], formatFileDiff);
+    return planSingleFileCommit(
+      files[0],
+      formattedDiffs[0],
+      formatFileDiff,
+      promptContext,
+    );
   }
 
   if (files.length <= 1 || !shouldBatchFiles(files)) {
@@ -274,12 +356,15 @@ async function planBatchedCommits(
         allFiles: promptContext?.allFiles ?? files,
         batchCount: batches.length,
         batchIndex,
+        breakingMode: promptContext?.breakingMode,
         deferFinalization: true,
       }),
     ),
   );
   const mergedGroups = batchResults.flat();
-  const finalized = await finalizePlannedGroups(files, mergedGroups);
+  const finalized = await finalizePlannedGroups(files, mergedGroups, {
+    breakingMode: promptContext?.breakingMode,
+  });
 
   emitAiOutputEvent({
     content: JSON.stringify({
@@ -303,6 +388,7 @@ async function planSingleFileCommit(
   file: FileDiff,
   formattedDiff: string | undefined,
   formatFileDiff: (f: FileDiff) => string,
+  promptContext?: GroupingPromptContext,
 ): Promise<PlannedCommit[]> {
   const content = formattedDiff ?? formatFileDiff(file);
   const chunk: DiffChunk = {
@@ -311,7 +397,9 @@ async function planSingleFileCommit(
     id: 0,
     lineCount: content.split("\n").length,
   };
-  const msg = await generateForChunk(chunk);
+  const msg = await generateForChunk(chunk, undefined, {
+    breakingMode: promptContext?.breakingMode,
+  });
 
   return [{ files: [{ path: file.path }], message: msg }];
 }
