@@ -1,5 +1,20 @@
-import { emitAiOutputEvent } from "../openai-client.js";
-import { type FileChangeSignals, type PlannedCommit } from "./grouping-types.js";
+import { emitAiOutputEvent } from "../../openai-client.js";
+import {
+  type FileChangeSignals,
+  type PlannedCommit,
+} from "../grouping-types.js";
+import {
+  getCommonActionWords,
+  getCommonIntentWords,
+  getDistinctActionScore,
+  getDistinctArtifactScore,
+  getDistinctIntentScore,
+  getSharedIntentScore,
+} from "../intent/index.js";
+import {
+  countSharedSubjectWords,
+  parseSubjectWords,
+} from "../subject/analysis.js";
 import {
   buildCommitOrderingProfile,
   buildDependencyContext,
@@ -9,11 +24,7 @@ import {
   type DependencyGraph,
   enqueueReadyDependents,
   scoreDependencyForFile,
-} from "./ordering-support.js";
-import {
-  countSharedSubjectWords,
-  parseSubjectWords,
-} from "./subject/analysis.js";
+} from "./rules.js";
 
 export {
   getCommonActionWords,
@@ -22,7 +33,7 @@ export {
   getDistinctArtifactScore,
   getDistinctIntentScore,
   getSharedIntentScore,
-} from "./intent-scoring.js";
+};
 
 /** Scores whether one planned commit should run before another. */
 export function getCommitDependencyScore(
@@ -154,8 +165,16 @@ function buildDependencyGraph(
     indegree: groups.map(() => 0),
   };
 
-  for (let dependentIndex = 0; dependentIndex < groups.length; dependentIndex++) {
-    for (let dependencyIndex = 0; dependencyIndex < groups.length; dependencyIndex++) {
+  for (
+    let dependentIndex = 0;
+    dependentIndex < groups.length;
+    dependentIndex++
+  ) {
+    for (
+      let dependencyIndex = 0;
+      dependencyIndex < groups.length;
+      dependencyIndex++
+    ) {
       if (dependentIndex === dependencyIndex) {
         continue;
       }
@@ -182,7 +201,9 @@ function consumeDependencyOrderQueue(
   edgeWeights: Map<string, number>,
 ): number[] {
   const orderedIndexes: number[] = [];
-  const remainingIndexes = new Set(Array.from({ length: groupCount }, (_, index) => index));
+  const remainingIndexes = new Set(
+    Array.from({ length: groupCount }, (_, index) => index),
+  );
 
   while (orderedIndexes.length < groupCount) {
     const index = takeNextDependencyIndex(
@@ -202,7 +223,14 @@ function consumeDependencyOrderQueue(
 
     remainingIndexes.delete(index);
     orderedIndexes.push(index);
-    enqueueReadyDependents(index, indegree, edges, queue, orderingProfiles, edgeWeights);
+    enqueueReadyDependents(
+      index,
+      indegree,
+      edges,
+      queue,
+      orderingProfiles,
+      edgeWeights,
+    );
   }
 
   return orderedIndexes;
@@ -216,11 +244,14 @@ function takeNextDependencyIndex(
   edges: Map<number, Set<number>>,
   edgeWeights: Map<string, number>,
 ): number | undefined {
-  return queue.shift() ?? chooseDependencyOrderIndex(
-    remainingIndexes,
-    orderingProfiles,
-    indegree,
-    edges,
-    edgeWeights,
+  return (
+    queue.shift() ??
+    chooseDependencyOrderIndex(
+      remainingIndexes,
+      orderingProfiles,
+      indegree,
+      edges,
+      edgeWeights,
+    )
   );
 }

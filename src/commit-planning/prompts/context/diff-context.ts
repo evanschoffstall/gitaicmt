@@ -2,12 +2,15 @@
  * File-context helpers shared across grouping, consolidation, and cluster
  * prompt builders: file aliases, area summaries, and diff preview lines.
  */
-import { formatLabeledDiff, formatScalar } from "../../commit-messages/formatting.js";
-import { parseConventionalSubject } from "../../commit-messages/subject-parser.js";
+import {
+  formatLabeledDiff,
+  formatScalar,
+} from "../../../commit-messages/formatting.js";
+import { parseConventionalSubject } from "../../../commit-messages/subject-parser.js";
 
-type FileDiff = import("../../git/diff.js").FileDiff;
-type PlannedCommit = import("../types.js").PlannedCommit;
-type PlannedCommitFile = import("../types.js").PlannedCommitFile;
+type FileDiff = import("../../../git/diff.js").FileDiff;
+type PlannedCommit = import("../../types.js").PlannedCommit;
+type PlannedCommitFile = import("../../types.js").PlannedCommitFile;
 
 const MAX_PREVIEW_FILES_PER_COMMIT = 2;
 const MAX_PREVIEW_HUNKS_PER_FILE = 1;

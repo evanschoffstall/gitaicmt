@@ -1,9 +1,13 @@
-import { type FileChangeSignals, type PlannedCommit } from "./grouping-types.js";
+import { isSupportLikePath } from "../../path/index.js";
+import {
+  type FileChangeSignals,
+  type PlannedCommit,
+} from "../grouping-types.js";
 import {
   countSharedSubjectWords,
   isSupportLikeType,
   parseSubjectWords,
-} from "./subject/analysis.js";
+} from "../subject/analysis.js";
 
 export interface CommitOrderingProfile {
   hasImplementationFiles: boolean;
@@ -39,7 +43,9 @@ export function buildCommitOrderingProfile(
   const hasImplementationFiles = group.files.some(
     (file) => !isTestLikePath(file.path),
   );
-  const hasOnlyTestFiles = group.files.every((file) => isTestLikePath(file.path));
+  const hasOnlyTestFiles = group.files.every((file) =>
+    isTestLikePath(file.path),
+  );
   const supportLike = isSupportLikeType(subject.type);
 
   return {
@@ -66,7 +72,9 @@ export function buildDependencyContext(
     dependencyPaths: new Set(dependency.files.map((file) => file.path)),
     dependencyPathWords: new Set<string>(),
     dependencyProvidedSymbols: new Set<string>(),
-    dependencySubject: parseSubjectWords(dependency.message.split("\n")[0] ?? ""),
+    dependencySubject: parseSubjectWords(
+      dependency.message.split("\n")[0] ?? "",
+    ),
   };
 
   for (const file of dependency.files) {
@@ -180,7 +188,9 @@ export function scoreDependencyForFile(
     scoreImportedPathDependencies(filePath, signals, dependencyContext) +
     scoreReferencedSymbolDependencies(signals, dependencyContext);
 
-  return score + scoreTestValidationAffinity(filePath, signals, dependencyContext);
+  return (
+    score + scoreTestValidationAffinity(filePath, signals, dependencyContext)
+  );
 }
 
 function compareCommitOrderingProfile(
@@ -214,8 +224,18 @@ function compareReadyIndexes(
   }
 
   const outgoingWeightDifference =
-    getOutgoingDependencyWeight(left, new Set([left, right]), edges, edgeWeights) -
-    getOutgoingDependencyWeight(right, new Set([left, right]), edges, edgeWeights);
+    getOutgoingDependencyWeight(
+      left,
+      new Set([left, right]),
+      edges,
+      edgeWeights,
+    ) -
+    getOutgoingDependencyWeight(
+      right,
+      new Set([left, right]),
+      edges,
+      edgeWeights,
+    );
   if (outgoingWeightDifference !== 0) {
     return outgoingWeightDifference > 0 ? -1 : 1;
   }
@@ -258,11 +278,7 @@ function getOutgoingDependencyWeight(
 }
 
 function isTestLikePath(path: string): boolean {
-  return (
-    path.includes("/__tests__/") ||
-    path.startsWith("tests/") ||
-    /(?:^|\/)[^.]+\.(?:spec|test)\.[^.]+$/u.test(path)
-  );
+  return isSupportLikePath(path);
 }
 
 function scoreImportedPathDependencies(
@@ -278,7 +294,8 @@ function scoreImportedPathDependencies(
     }
 
     score +=
-      isTestLikePath(filePath) && dependencyContext.dependencyHasImplementationFiles
+      isTestLikePath(filePath) &&
+      dependencyContext.dependencyHasImplementationFiles
         ? 8
         : 6;
   }
@@ -306,7 +323,10 @@ function scoreTestValidationAffinity(
   signals: FileChangeSignals,
   dependencyContext: DependencyContext,
 ): number {
-  if (!isTestLikePath(filePath) || !dependencyContext.dependencyHasImplementationFiles) {
+  if (
+    !isTestLikePath(filePath) ||
+    !dependencyContext.dependencyHasImplementationFiles
+  ) {
     return 0;
   }
 
@@ -341,8 +361,10 @@ function shouldSelectDependencyOrderCandidate(
     return outgoingWeight > selected.outgoingWeight;
   }
 
-  return compareCommitOrderingProfile(
-    orderingProfiles[index],
-    orderingProfiles[selected.index],
-  ) < 0;
+  return (
+    compareCommitOrderingProfile(
+      orderingProfiles[index],
+      orderingProfiles[selected.index],
+    ) < 0
+  );
 }
