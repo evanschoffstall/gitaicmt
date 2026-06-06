@@ -23,7 +23,10 @@ export function mergeCommitClusters(
     }
 
     mergedGroups.push(
-      mergeCommitsIntoGroup(cluster.map((index) => groups[index]), fileByPath),
+      mergeCommitsIntoGroup(
+        cluster.map((index) => groups[index]),
+        fileByPath,
+      ),
     );
   }
 
@@ -69,6 +72,32 @@ export function mergeCommitMessages(commits: PlannedCommit[]): string {
     .join("\n")}`;
 }
 
+/**
+ * Preserves a caller-selected subject line while rebuilding detail bullets
+ * from covered body-source commits only.
+ */
+export function mergeCommitMessagesWithPrimarySubject(
+  primaryMessage: string,
+  bodySourceCommits: PlannedCommit[],
+): string {
+  const primarySubject = primaryMessage.split("\n")[0]?.trim() ?? "";
+  if (primarySubject.length === 0) {
+    return mergeCommitMessages(bodySourceCommits);
+  }
+
+  const orderedBodySources = prioritizeMergedCommits(bodySourceCommits);
+  const dedupedBlocks = dedupeBulletBlocks(
+    collectCommitMessageBulletBlocks(orderedBodySources),
+  );
+  if (dedupedBlocks.length === 0) {
+    return primarySubject;
+  }
+
+  return `${primarySubject}\n\n${dedupedBlocks
+    .map((block) => block.join("\n"))
+    .join("\n")}`;
+}
+
 /** Create a single planned commit from multiple groups. */
 export function mergeCommitsIntoGroup(
   commits: PlannedCommit[],
@@ -86,9 +115,7 @@ export function prioritizeMergedCommits(
 ): PlannedCommit[] {
   return [...commits].sort((left, right) => {
     const leftSubject = parseSubjectWords(left.message.split("\n")[0] ?? "");
-    const rightSubject = parseSubjectWords(
-      right.message.split("\n")[0] ?? "",
-    );
+    const rightSubject = parseSubjectWords(right.message.split("\n")[0] ?? "");
     const leftScore =
       (isSupportLikeType(leftSubject.type) ? 0 : 10) +
       leftSubject.words.size +

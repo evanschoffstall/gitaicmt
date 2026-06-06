@@ -113,6 +113,23 @@ export function emitPlannerFallbackEvent(
   });
 }
 
+function emitClusterPartialSalvage(
+  inputGroupCount: number,
+  droppedDuplicateIndexCount: number,
+): void {
+  emitAiOutputEvent({
+    content: JSON.stringify({
+      decision: "cluster-partial-salvage",
+      droppedDuplicateIndexCount,
+      inputGroupCount,
+      reason: "duplicate-cluster-index",
+    }),
+    kind: "planner-decision",
+    stage: "cluster",
+    transport: "internal",
+  });
+}
+
 function emitPlannerFailure(
   stage: "cluster" | "consolidate",
   failedAttemptCount: number,
@@ -196,26 +213,46 @@ function isRetryablePlannerError(error: unknown): boolean {
   return false;
 }
 
-function normalizeClusters(parsed: unknown, groupCount: number): null | number[][] {
+function normalizeClusters(
+  parsed: unknown,
+  groupCount: number,
+): null | number[][] {
   if (!Array.isArray(parsed)) {
-    emitPlannerFallbackEvent("cluster-fallback", "invalid-cluster-shape", "cluster", {
-      inputGroupCount: groupCount,
-    });
+    emitPlannerFallbackEvent(
+      "cluster-fallback",
+      "invalid-cluster-shape",
+      "cluster",
+      {
+        inputGroupCount: groupCount,
+      },
+    );
     return null;
   }
 
   const seen = new Set<number>();
+  const clusters: number[][] = [];
+  let duplicateIndexCount = 0;
+
   for (const cluster of parsed) {
-    if (!recordClusterIndexes(cluster, groupCount, seen)) {
+    const normalizedCluster = recordClusterIndexes(cluster, groupCount, seen);
+    if (normalizedCluster === null) {
       return null;
+    }
+
+    duplicateIndexCount += normalizedCluster.duplicateIndexCount;
+    if (normalizedCluster.indexes.length > 0) {
+      clusters.push(normalizedCluster.indexes);
     }
   }
 
-  const clusters = parsed as number[][];
   for (let index = 0; index < groupCount; index++) {
     if (!seen.has(index)) {
       clusters.push([index]);
     }
+  }
+
+  if (duplicateIndexCount > 0) {
+    emitClusterPartialSalvage(groupCount, duplicateIndexCount);
   }
 
   return clusters.some((cluster) => cluster.length > 1) ? clusters : null;
@@ -246,31 +283,43 @@ function recordClusterIndexes(
   cluster: unknown,
   groupCount: number,
   seen: Set<number>,
-): boolean {
+): null | { duplicateIndexCount: number; indexes: number[] } {
   if (!Array.isArray(cluster)) {
-    emitPlannerFallbackEvent("cluster-fallback", "invalid-cluster-entry", "cluster", {
-      inputGroupCount: groupCount,
-    });
-    return false;
+    emitPlannerFallbackEvent(
+      "cluster-fallback",
+      "invalid-cluster-entry",
+      "cluster",
+      {
+        inputGroupCount: groupCount,
+      },
+    );
+    return null;
   }
+
+  const indexes: number[] = [];
+  let duplicateIndexCount = 0;
 
   for (const index of cluster) {
     if (typeof index !== "number" || index < 0 || index >= groupCount) {
-      emitPlannerFallbackEvent("cluster-fallback", "cluster-index-out-of-range", "cluster", {
-        inputGroupCount: groupCount,
-      });
-      return false;
+      emitPlannerFallbackEvent(
+        "cluster-fallback",
+        "cluster-index-out-of-range",
+        "cluster",
+        {
+          inputGroupCount: groupCount,
+        },
+      );
+      return null;
     }
     if (seen.has(index)) {
-      emitPlannerFallbackEvent("cluster-fallback", "duplicate-cluster-index", "cluster", {
-        inputGroupCount: groupCount,
-      });
-      return false;
+      duplicateIndexCount += 1;
+      continue;
     }
     seen.add(index);
+    indexes.push(index);
   }
 
-  return true;
+  return { duplicateIndexCount, indexes };
 }
 
 function shouldRetryPlannerCall(
