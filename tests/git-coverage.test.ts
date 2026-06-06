@@ -27,12 +27,29 @@ function commitMessage(subject: string, ...bullets: string[]): string {
   return [subject, "", ...body].join("\n");
 }
 
-function makeGitDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "gitaicmt-git-"));
+/**
+ * Initializes an isolated Git repository for integration-style tests. The
+ * local config disables signing and resets the hooks path so machine-specific
+ * global Git settings cannot stall commits in temporary repositories.
+ * @param dir - Temporary repository path.
+ */
+function initializeGitRepo(dir: string): void {
   execSync(
-    'git init && git config user.email "test@test.com" && git config user.name "Test User"',
+    [
+      "git init",
+      'git config user.email "test@test.com"',
+      'git config user.name "Test User"',
+      "git config commit.gpgSign false",
+      "git config tag.gpgSign false",
+      "git config core.hooksPath .git/hooks",
+    ].join(" && "),
     { cwd: dir, stdio: "pipe" },
   );
+}
+
+function makeGitDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "gitaicmt-git-"));
+  initializeGitRepo(dir);
   execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
   return dir;
 }
@@ -55,14 +72,14 @@ describe("git coverage", () => {
     const dir = mkdtempSync(join(tmpdir(), "gitaicmt-no-head-"));
 
     try {
-      execSync(
-        'git init && git config user.email "test@test.com" && git config user.name "Test User"',
-        { cwd: dir, stdio: "pipe" },
-      );
+      initializeGitRepo(dir);
 
       expect(hasCommitHistory(dir)).toBe(false);
 
-      execSync("git commit --allow-empty -m 'root'", { cwd: dir, stdio: "pipe" });
+      execSync("git commit --allow-empty -m 'root'", {
+        cwd: dir,
+        stdio: "pipe",
+      });
 
       expect(hasCommitHistory(dir)).toBe(true);
     } finally {
@@ -144,6 +161,23 @@ describe("git coverage", () => {
       expect(() => commitWithMessage("feat(core): missing body", dir)).toThrow(
         GitCommandError,
       );
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test("commitWithMessage can replay subject-only messages when body validation is ignored", () => {
+    const dir = makeGitDir();
+
+    try {
+      writeFileSync(join(dir, "file.txt"), "hello\n");
+      execSync("git add file.txt", { cwd: dir, stdio: "pipe" });
+
+      expect(() =>
+        commitWithMessage("feat(core): replay legacy subject", dir, {
+          ignoreMessageBody: true,
+        }),
+      ).not.toThrow();
     } finally {
       cleanupDir(dir);
     }
@@ -286,10 +320,7 @@ describe("git coverage", () => {
     const dir = mkdtempSync(join(tmpdir(), "gitaicmt-reset-no-head-"));
 
     try {
-      execSync(
-        'git init && git config user.email "test@test.com" && git config user.name "Test User"',
-        { cwd: dir, stdio: "pipe" },
-      );
+      initializeGitRepo(dir);
       writeFileSync(join(dir, "draft.txt"), "hello\n");
       execSync("git add draft.txt", { cwd: dir, stdio: "pipe" });
 
