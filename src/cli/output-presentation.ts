@@ -90,10 +90,12 @@ export function buildExecutionResultLines(
  * subject, impact summary, details, and file scope.
  */
 export function buildPlanCardLines(options: PlanCardOptions): string[] {
-  const [rawSubject = "(missing subject)", ...rawBodyLines] = options.message.split("\n");
+  const [rawSubject = "(missing subject)", ...rawBodyLines] =
+    options.message.split("\n");
   const subject = rawSubject.trim() || "(missing subject)";
   const body = rawBodyLines.join("\n").trim();
-  const detailLines = body.length > 0 ? formatPlanBodyLines(body, options.maxWidth - 8) : [];
+  const detailLines =
+    body.length > 0 ? formatPlanBodyLines(body, options.maxWidth - 8) : [];
   const detailCount = countDetailBullets(body);
   const impactSummary = [
     `${String(options.files.length)} ${options.files.length === 1 ? "file" : "files"}`,
@@ -108,7 +110,12 @@ export function buildPlanCardLines(options: PlanCardOptions): string[] {
   const lines = [
     `${ANSI_BOLD}${ANSI_CYAN}╭─ Commit ${String(options.index)} of ${String(options.total)}${ANSI_RESET}`,
     ...formatCardValueLines("Subject", subject, options.maxWidth, ANSI_CYAN),
-    ...formatCardValueLines("Impact", impactSummary, options.maxWidth, ANSI_DIM),
+    ...formatCardValueLines(
+      "Impact",
+      impactSummary,
+      options.maxWidth,
+      ANSI_DIM,
+    ),
   ];
 
   if (detailLines.length > 0) {
