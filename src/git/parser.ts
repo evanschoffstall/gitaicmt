@@ -165,7 +165,9 @@ function classifyMetadataLine(
   ) {
     return "noop";
   }
-  return STATUS_PREFIXES.some((prefix) => line.startsWith(prefix)) ? "noop" : false;
+  return STATUS_PREFIXES.some((prefix) => line.startsWith(prefix))
+    ? "noop"
+    : false;
 }
 
 function createParsedFile(oldPath: string, newPath: string): FileDiff {
@@ -188,7 +190,9 @@ function handleDiffLine(
   },
   line: string,
 ): void {
-  if (applyDiffPathUpdate(state.current, line, DIFF_OLD_FILE_MARKER, "oldPath")) {
+  if (
+    applyDiffPathUpdate(state.current, line, DIFF_OLD_FILE_MARKER, "oldPath")
+  ) {
     return;
   }
   if (applyDiffPathUpdate(state.current, line, DIFF_NEW_FILE_MARKER, "path")) {
