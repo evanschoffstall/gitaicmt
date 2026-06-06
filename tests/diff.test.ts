@@ -882,15 +882,32 @@ describe("combined parsing scenarios", () => {
 describe("git staging helpers", () => {
   // These tests require a real git repo
 
-  function makeGitDir(): string {
-    const dir = mkdtempSync(join(tmpdir(), "gitaicmt-diff-"));
+  /**
+   * Initializes an isolated Git repository for integration-style tests. The
+   * local config disables signing and resets the hooks path so machine-specific
+   * global Git settings cannot stall commits in temporary repositories.
+   * @param dir - Temporary repository path.
+   */
+  function initializeGitRepo(dir: string): void {
     execSync(
-      'git init && git config user.email "test@test.com" && git config user.name "Test"',
+      [
+        "git init",
+        'git config user.email "test@test.com"',
+        'git config user.name "Test"',
+        "git config commit.gpgSign false",
+        "git config tag.gpgSign false",
+        "git config core.hooksPath .git/hooks",
+      ].join(" && "),
       {
         cwd: dir,
         stdio: "pipe",
       },
     );
+  }
+
+  function makeGitDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "gitaicmt-diff-"));
+    initializeGitRepo(dir);
     execSync("git commit --allow-empty -m 'init'", {
       cwd: dir,
       stdio: "pipe",
@@ -992,7 +1009,14 @@ describe("hunk-level staging (buildPatch + stagePatch)", () => {
   function makeGitDir(): string {
     const dir = mkdtempSync(join(tmpdir(), "gitaicmt-hunk-"));
     execSync(
-      'git init && git config user.email "test@test.com" && git config user.name "Test"',
+      [
+        "git init",
+        'git config user.email "test@test.com"',
+        'git config user.name "Test"',
+        "git config commit.gpgSign false",
+        "git config tag.gpgSign false",
+        "git config core.hooksPath .git/hooks",
+      ].join(" && "),
       { cwd: dir, stdio: "pipe" },
     );
     return dir;
