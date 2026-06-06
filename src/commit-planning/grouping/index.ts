@@ -5,4 +5,4 @@ export {
   parseSubjectWords,
   wordsRelated,
 } from "./subject/analysis.js";
-export { premergeBySubject } from "./subject/premerge.js";
+export { premergeBySubject } from "./subject/premerge/index.js";

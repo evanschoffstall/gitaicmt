@@ -1,23 +1,41 @@
+import {
+  evaluateCoveredBaselineFallback,
+  shouldRestoreDistinctDirectFileBaseline,
+} from "./baseline-restoration.js";
+import { mergeCompactExactRolloutFamilies } from "./compact-rollout-families.js";
+import {
+  partitionGroupIndexes,
+  repartitionByIntent,
+} from "./component-routing.js";
+import { emitWeakConsolidationResolutionEvent } from "./group/events.js";
 import { mergeCommitsIntoGroup } from "./group/merge.js";
-import { type FileChangeSignals, type FileDiff, type PlannedCommit } from "./grouping-types.js";
+import { shouldPreserveFeatureSurfaceRollout } from "./group/rollout-preservation.js";
 import {
-  getCommonActionWords,
-  getCommonIntentWords,
-} from "./intent-scoring.js";
+  type FileChangeSignals,
+  type FileDiff,
+  type PlannedCommit,
+} from "./grouping-types.js";
 import {
-  chooseSupportAttachment,
-  getCoveredBaselineGroups,
-  hasImplementationMergeSignal,
-  isSupportGroup,
-} from "./merge-heuristics.js";
+  collapseSharedDescriptionStyleGroups,
+  getDominantGroupOwner,
+  mergeRepartitionComponents,
+} from "./implementation-components.js";
+import { getCoveredBaselineGroups } from "./merge-heuristics.js";
+import { getPathOwnerDescriptor } from "./ownership.js";
+import { shouldPreserveDivergentSupportBaseline } from "./preservation-rules.js";
+import { splitBroadStyleGroups } from "./style-splitting/index.js";
+import {
+  attachSupportIndexes,
+  shouldAttachStandaloneExactDescriptionTestSupport,
+  shouldSplitSupportGroupForAttachment,
+} from "./support-attachment/component-attachment.js";
+import { isFeatureSurfacePath } from "./surface-rollout-shape.js";
+import {
+  getPreservedWeakConsolidationGroups,
+  type PreservedWeakConsolidationEvaluation,
+} from "./weak-consolidation-preservation.js";
 
-interface ImplementationComponentContext {
-  commonActionWords: Set<string>;
-  commonIntentWords: Set<string>;
-  fileSignals: Map<string, FileChangeSignals>;
-  groups: PlannedCommit[];
-  implementationIndexes: number[];
-}
+export { buildSplitSupportMessage } from "./support-attachment/component-attachment.js";
 
 /**
  * Splits over-consolidated groups by re-grouping via intent affinity, then
@@ -37,193 +55,319 @@ export function splitWeakConsolidations(
       group,
       fileByPath,
     );
-
-    if (coveredGroups.length <= 1) {
-      result.push(group);
-      continue;
-    }
-
-    const repartitioned = repartitionByIntent(
+    const resolution = resolveWeakConsolidationGroup(
+      group,
       coveredGroups,
       fileByPath,
       fileSignals,
     );
-    if (repartitioned.length <= 1) {
-      result.push(group);
-      continue;
-    }
-
-    result.push(...repartitioned);
+    emitWeakConsolidationResolutionEvent({
+      coveredGroups,
+      diagnostics: resolution.diagnostics,
+      inputGroup: group,
+      outputGroups: resolution.outputGroups,
+      reason: resolution.reason,
+      resolution: resolution.resolution,
+    });
+    result.push(...resolution.outputGroups);
   }
 
-  return result;
-}
-
-function attachSupportIndexes(
-  groups: PlannedCommit[],
-  supportIndexes: number[],
-  components: number[][],
-  fileSignals: Map<string, FileChangeSignals>,
-): void {
-  for (const supportIndex of supportIndexes) {
-    const attachmentIndex = chooseSupportAttachment(
-      groups[supportIndex],
-      groups,
-      components,
-      fileSignals,
-    );
-
-    if (attachmentIndex === -1) {
-      components.push([supportIndex]);
-      continue;
-    }
-
-    components[attachmentIndex]?.push(supportIndex);
-  }
-}
-
-function buildImplementationComponents(
-  groups: PlannedCommit[],
-  implementationIndexes: number[],
-  fileSignals: Map<string, FileChangeSignals>,
-  commonActionWords: Set<string>,
-  commonIntentWords: Set<string>,
-): number[][] {
-  const components: number[][] = [];
-  const visited = new Set<number>();
-  const context: ImplementationComponentContext = {
-    commonActionWords,
-    commonIntentWords,
+  return finalizeRepartitionedGroups(
+    result,
+    fileByPath,
     fileSignals,
-    groups,
-    implementationIndexes,
-  };
-
-  for (const startIndex of implementationIndexes) {
-    if (visited.has(startIndex)) {
-      continue;
-    }
-
-    components.push(collectImplementationComponent(startIndex, visited, context));
-  }
-
-  return components;
+    consolidatedGroups.length <= 2,
+  );
 }
 
-function collectImplementationComponent(
-  startIndex: number,
-  visited: Set<number>,
-  context: ImplementationComponentContext,
-): number[] {
-  const stack = [startIndex];
-  const component: number[] = [];
-  visited.add(startIndex);
-
-  while (stack.length > 0) {
-    const currentIndex = stack.pop();
-    if (currentIndex === undefined) {
-      continue;
-    }
-
-    component.push(currentIndex);
-    enqueueImplementationNeighbors(currentIndex, visited, stack, context);
-  }
-
-  return component.sort((left, right) => left - right);
-}
-
-function enqueueImplementationNeighbors(
-  currentIndex: number,
-  visited: Set<number>,
-  stack: number[],
-  context: ImplementationComponentContext,
-): void {
-  for (const candidateIndex of context.implementationIndexes) {
-    if (visited.has(candidateIndex) || candidateIndex === currentIndex) {
-      continue;
-    }
-
-    if (
-      hasImplementationMergeSignal(
-        context.groups[currentIndex],
-        context.groups[candidateIndex],
-        context.fileSignals,
-        context.commonActionWords,
-        context.commonIntentWords,
-      )
-    ) {
-      visited.add(candidateIndex);
-      stack.push(candidateIndex);
-    }
-  }
-}
-
-function mergeRepartitionComponents(
+function attachStandaloneSupportGroups(
   groups: PlannedCommit[],
-  components: number[][],
   fileByPath: Map<string, FileDiff>,
+  fileSignals: Map<string, FileChangeSignals>,
+  allowCompactSupportAttachment: boolean,
 ): PlannedCommit[] {
-  return components
-    .map((component) => component.sort((left, right) => left - right))
-    .sort((left, right) => left[0] - right[0])
-    .map((component) =>
-      mergeCommitsIntoGroup(
-        component.map((index) => groups[index]),
+  const { implementationIndexes, supportIndexes } =
+    partitionGroupIndexes(groups);
+  const components = implementationIndexes.map((index) => [index]);
+  const attachableSupportIndexes = allowCompactSupportAttachment
+    ? supportIndexes
+    : supportIndexes.filter(
+        (index) =>
+          shouldSplitSupportGroupForAttachment(groups[index]) ||
+          shouldAttachStandaloneExactDescriptionTestSupport(
+            groups[index],
+            groups,
+            components,
+            fileSignals,
+          ),
+      );
+  if (
+    implementationIndexes.length === 0 ||
+    attachableSupportIndexes.length === 0
+  ) {
+    return groups;
+  }
+
+  attachSupportIndexes(
+    groups,
+    attachableSupportIndexes,
+    components,
+    fileSignals,
+  );
+
+  components.push(
+    ...supportIndexes
+      .filter((index) => !attachableSupportIndexes.includes(index))
+      .map((index) => [index]),
+  );
+
+  return mergeRepartitionComponents(groups, components, fileByPath);
+}
+
+function buildFallbackResolutionDiagnostics(
+  preservedDiagnostics: PreservedWeakConsolidationEvaluation["diagnostics"],
+  coveredBaselineFallbackResolution: string,
+  preserveShallowSurfaceRollout: boolean,
+  repartitionedGroupCount: number,
+  shouldRestoreDistinctDirectFileBaseline: boolean,
+  fallbackDiagnostics: Record<string, boolean | number | string> = {},
+): Record<string, boolean | number | string> {
+  return {
+    ...preservedDiagnostics,
+    ...fallbackDiagnostics,
+    coveredBaselineFallbackResolution,
+    preserveShallowSurfaceRollout,
+    repartitionedGroupCount,
+    shouldRestoreDistinctDirectFileBaseline,
+  };
+}
+
+function buildFallbackResolutionResult(input: {
+  diagnostics: PreservedWeakConsolidationEvaluation["diagnostics"];
+  fallbackDiagnostics?: Record<string, boolean | number | string>;
+  outputGroups: PlannedCommit[];
+  preserveShallowSurfaceRollout: boolean;
+  reason: string;
+  repartitionedGroupCount: number;
+  resolution: string;
+  shouldRestoreDistinctDirectFile: boolean;
+}): {
+  diagnostics: Record<string, boolean | number | string>;
+  outputGroups: PlannedCommit[];
+  reason: string;
+  resolution: string;
+} {
+  return {
+    diagnostics: buildFallbackResolutionDiagnostics(
+      input.diagnostics,
+      input.resolution,
+      input.preserveShallowSurfaceRollout,
+      input.repartitionedGroupCount,
+      input.shouldRestoreDistinctDirectFile,
+      input.fallbackDiagnostics,
+    ),
+    outputGroups: input.outputGroups,
+    reason: input.reason,
+    resolution: input.resolution,
+  };
+}
+
+function finalizeRepartitionedGroups(
+  groups: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+  fileSignals: Map<string, FileChangeSignals>,
+  allowCompactSupportAttachment: boolean,
+): PlannedCommit[] {
+  return splitBroadStyleGroups(
+    collapseSharedDescriptionStyleGroups(
+      mergeCompactExactRolloutFamilies(
+        attachStandaloneSupportGroups(
+          groups,
+          fileByPath,
+          fileSignals,
+          allowCompactSupportAttachment,
+        ),
         fileByPath,
       ),
-    );
+      fileByPath,
+    ),
+  );
 }
 
-function partitionGroupIndexes(groups: PlannedCommit[]): {
-  implementationIndexes: number[];
-  supportIndexes: number[];
+function getDistinctDirectFileRestoreResult(
+  fallbackResultBase: {
+    diagnostics: PreservedWeakConsolidationEvaluation["diagnostics"];
+    preserveShallowSurfaceRollout: boolean;
+    repartitionedGroupCount: number;
+    shouldRestoreDistinctDirectFile: boolean;
+  },
+  coveredGroups: PlannedCommit[],
+): null | {
+  diagnostics: Record<string, boolean | number | string>;
+  outputGroups: PlannedCommit[];
+  reason: string;
+  resolution: string;
 } {
-  const implementationIndexes: number[] = [];
-  const supportIndexes: number[] = [];
-
-  for (let index = 0; index < groups.length; index++) {
-    if (isSupportGroup(groups[index])) {
-      supportIndexes.push(index);
-      continue;
-    }
-
-    implementationIndexes.push(index);
+  if (
+    fallbackResultBase.repartitionedGroupCount > 1 ||
+    fallbackResultBase.preserveShallowSurfaceRollout ||
+    !fallbackResultBase.shouldRestoreDistinctDirectFile
+  ) {
+    return null;
   }
 
-  return { implementationIndexes, supportIndexes };
+  return buildFallbackResolutionResult({
+    ...fallbackResultBase,
+    outputGroups: coveredGroups,
+    reason: "distinct-direct-file-baseline",
+    resolution: "restore-covered-baseline",
+  });
 }
 
-function repartitionByIntent(
-  groups: PlannedCommit[],
+function getFeatureSurfaceCoveredRollout(
+  coveredGroups: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+): null | PlannedCommit {
+  const featureSurfaceGroups = coveredGroups
+    .map((group) => ({
+      ...group,
+      files: group.files.filter((file) => {
+        const owner = getPathOwnerDescriptor(file.path);
+        return isFeatureSurfacePath(file.path, owner);
+      }),
+    }))
+    .filter((group) => group.files.length > 0);
+
+  if (featureSurfaceGroups.length === 0) {
+    return null;
+  }
+
+  return mergeCommitsIntoGroup(featureSurfaceGroups, fileByPath);
+}
+
+function resolveCoveredBaselineFallback(
+  fallbackResultBase: {
+    diagnostics: PreservedWeakConsolidationEvaluation["diagnostics"];
+    preserveShallowSurfaceRollout: boolean;
+    repartitionedGroupCount: number;
+    shouldRestoreDistinctDirectFile: boolean;
+  },
+  group: PlannedCommit,
+  coveredGroups: PlannedCommit[],
+  repartitioned: PlannedCommit[],
+  preserveShallowSurfaceRollout: boolean,
+): {
+  diagnostics: Record<string, boolean | number | string>;
+  outputGroups: PlannedCommit[];
+  reason: string;
+  resolution: string;
+} {
+  const coveredBaselineFallback = evaluateCoveredBaselineFallback(
+    group,
+    coveredGroups,
+    repartitioned,
+    preserveShallowSurfaceRollout,
+    getDominantGroupOwner,
+  );
+  if (coveredBaselineFallback.groups !== null) {
+    return buildFallbackResolutionResult({
+      ...fallbackResultBase,
+      fallbackDiagnostics: coveredBaselineFallback.diagnostics,
+      outputGroups: coveredBaselineFallback.groups,
+      reason: coveredBaselineFallback.reason,
+      resolution: coveredBaselineFallback.resolution,
+    });
+  }
+
+  return buildFallbackResolutionResult({
+    ...fallbackResultBase,
+    fallbackDiagnostics: coveredBaselineFallback.diagnostics,
+    outputGroups: repartitioned,
+    reason: "use-repartitioned",
+    resolution: "use-repartitioned",
+  });
+}
+
+function resolveFallbackWeakConsolidationGroup(
+  group: PlannedCommit,
+  coveredGroups: PlannedCommit[],
+  repartitioned: PlannedCommit[],
+  fileByPath: Map<string, FileDiff>,
+  preservedEvaluation: PreservedWeakConsolidationEvaluation,
+): {
+  diagnostics: Record<string, boolean | number | string>;
+  outputGroups: PlannedCommit[];
+  reason: string;
+  resolution: string;
+} {
+  const coveredImplementationRollout = getFeatureSurfaceCoveredRollout(
+    coveredGroups,
+    fileByPath,
+  );
+  const preserveShallowSurfaceRollout =
+    coveredImplementationRollout !== null &&
+    shouldPreserveFeatureSurfaceRollout(coveredImplementationRollout);
+  const shouldRestoreDistinctDirectFile =
+    shouldRestoreDistinctDirectFileBaseline(group, coveredGroups);
+  const fallbackResultBase = {
+    diagnostics: preservedEvaluation.diagnostics,
+    preserveShallowSurfaceRollout,
+    repartitionedGroupCount: repartitioned.length,
+    shouldRestoreDistinctDirectFile,
+  };
+  const directFileRestoreResult = getDistinctDirectFileRestoreResult(
+    fallbackResultBase,
+    coveredGroups,
+  );
+  if (directFileRestoreResult !== null) {
+    return directFileRestoreResult;
+  }
+
+  return resolveCoveredBaselineFallback(
+    fallbackResultBase,
+    group,
+    coveredGroups,
+    repartitioned,
+    preserveShallowSurfaceRollout,
+  );
+}
+
+function resolveWeakConsolidationGroup(
+  group: PlannedCommit,
+  coveredGroups: PlannedCommit[],
   fileByPath: Map<string, FileDiff>,
   fileSignals: Map<string, FileChangeSignals>,
-): PlannedCommit[] {
-  const { implementationIndexes, supportIndexes } = partitionGroupIndexes(groups);
-
-  if (implementationIndexes.length <= 1) {
-    return [mergeCommitsIntoGroup(groups, fileByPath)];
-  }
-
-  const implementationGroups = implementationIndexes.map(
-    (index) => groups[index],
-  );
-  const commonActionWords = getCommonActionWords(implementationGroups);
-  const commonIntentWords = getCommonIntentWords(
-    implementationGroups,
+): {
+  diagnostics: Record<string, boolean | number | string>;
+  outputGroups: PlannedCommit[];
+  reason: string;
+  resolution: string;
+} {
+  const preservedEvaluation = getPreservedWeakConsolidationGroups(
+    group,
+    coveredGroups,
     fileSignals,
   );
-  const components = buildImplementationComponents(
-    groups,
-    implementationIndexes,
-    fileSignals,
-    commonActionWords,
-    commonIntentWords,
-  );
-
-  if (components.length <= 1) {
-    return [mergeCommitsIntoGroup(groups, fileByPath)];
+  if (preservedEvaluation.groups !== null) {
+    return {
+      diagnostics: preservedEvaluation.diagnostics,
+      outputGroups: preservedEvaluation.groups,
+      reason: preservedEvaluation.reason,
+      resolution: preservedEvaluation.resolution,
+    };
   }
 
-  attachSupportIndexes(groups, supportIndexes, components, fileSignals);
-  return mergeRepartitionComponents(groups, components, fileByPath);
+  const repartitioned = repartitionByIntent(
+    coveredGroups,
+    fileByPath,
+    fileSignals,
+    shouldPreserveDivergentSupportBaseline,
+  );
+  return resolveFallbackWeakConsolidationGroup(
+    group,
+    coveredGroups,
+    repartitioned,
+    fileByPath,
+    preservedEvaluation,
+  );
 }
