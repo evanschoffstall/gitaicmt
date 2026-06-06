@@ -1,4 +1,8 @@
-import { ConfigError, OpenAIError, OpenAITimeoutError } from "../src/application/errors.js";
+import {
+  ConfigError,
+  OpenAIError,
+  OpenAITimeoutError,
+} from "../src/application/errors.js";
 import {
   buildCompletionRequest,
   isNonChatModelError,
@@ -7,7 +11,14 @@ import {
   supportsTemperature,
   toOpenAiCallError,
   validateModelName,
-} from "../src/commit-planning/client-support.js";
+} from "../src/commit-planning/client-contracts.js";
+import { buildFileChangeSignals } from "../src/commit-planning/grouping/file/index.js";
+import { hasImplementationMergeSignal } from "../src/commit-planning/grouping/implementation-merge/index.js";
+import {
+  getCommonActionWords,
+  getCommonIntentWords,
+} from "../src/commit-planning/grouping/intent/index.js";
+import { chooseSupportAttachment } from "../src/commit-planning/grouping/support-attachment/index.js";
 import {
   buildPlaceholderPlanGroupsForEstimate,
   estimateLikelyConsolidationPassCount,
@@ -87,6 +98,183 @@ describe("planner helper coverage", () => {
       ]),
     ).toBe(3);
   });
+
+  test("hasImplementationMergeSignal rejects mixed direct-file and subtree work within one feature root", () => {
+    const groupingGroup = {
+      files: [
+        {
+          path: "src/commit-planning/grouping/repartition.ts",
+        },
+        {
+          path: "src/commit-planning/grouping/support-attachment/test-ownership.ts",
+        },
+      ],
+      message:
+        "fix(grouping): prevent weak-owner support attachment and improve premerge matching",
+    };
+    const pathResolverGroup = {
+      files: [{ path: "src/commit-planning/path/resolver.ts" }],
+      message:
+        "fix(paths): resolve unique basenames with directory compatibility",
+    };
+    const files = [
+      makeFile("src/commit-planning/grouping/repartition.ts"),
+      makeFile(
+        "src/commit-planning/grouping/support-attachment/test-ownership.ts",
+      ),
+      makeFile("src/commit-planning/path/resolver.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+    const implementationGroups = [groupingGroup, pathResolverGroup];
+
+    expect(
+      hasImplementationMergeSignal(
+        groupingGroup,
+        pathResolverGroup,
+        fileSignals,
+        getCommonActionWords(implementationGroups),
+        getCommonIntentWords(implementationGroups, fileSignals),
+      ),
+    ).toBe(false);
+  });
+
+  test("chooseSupportAttachment prefers the implementation whose details match a focused validation regression", () => {
+    const supportGroup = {
+      files: [{ path: "tests/response-validation.test.ts" }],
+      message:
+        "test(validation): cover dropped-directory path normalization\n\n- Verify basename fallback resolves canonical planner paths with directory checks.",
+    };
+    const pathResolverGroup = {
+      files: [{ path: "src/commit-planning/path/resolver.ts" }],
+      message:
+        "fix(commit-planning): resolve paths by compatible basename fallback\n\n- Add canonical basename fallback with directory compatibility checks.",
+    };
+    const groupingGroup = {
+      files: [
+        {
+          path: "src/commit-planning/grouping/repartition.ts",
+        },
+      ],
+      message:
+        "fix(grouping): split broad test support by owning implementation\n\n- Tighten weak support attachment decisions for broad test buckets.",
+    };
+    const files = [
+      makeFile("tests/response-validation.test.ts"),
+      makeFile("src/commit-planning/path/resolver.ts"),
+      makeFile("src/commit-planning/grouping/repartition.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+
+    expect(
+      chooseSupportAttachment(
+        supportGroup,
+        [pathResolverGroup, groupingGroup],
+        [[0], [1]],
+        fileSignals,
+      ),
+    ).toBe(0);
+  });
+
+  test("chooseSupportAttachment ignores generic test-root ownership overlap", () => {
+    const supportGroup = {
+      files: [{ path: "tests/cli.test.ts" }],
+      message:
+        "test(cli): cover single-commit breaking mode passthrough\n\n- Keep CLI help and single-commit wiring aligned with release-impact mode selection.",
+    };
+    const breakingMessagesGroup = {
+      files: [
+        { path: "src/commit-messages/breaking-change-footers.ts" },
+        { path: "src/commit-messages/subject-parser.ts" },
+        { path: "tests/commit-messages.test.ts" },
+      ],
+      message:
+        "feat(messages): enforce and manage breaking-change metadata\n\n- Add footer parsing and stricter breaking-subject handling.",
+    };
+    const files = [
+      makeFile("tests/cli.test.ts"),
+      makeFile("src/commit-messages/breaking-change-footers.ts"),
+      makeFile("src/commit-messages/subject-parser.ts"),
+      makeFile("tests/commit-messages.test.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+
+    expect(
+      chooseSupportAttachment(
+        supportGroup,
+        [breakingMessagesGroup],
+        [[0]],
+        fileSignals,
+      ),
+    ).toBe(-1);
+  });
+
+  test("chooseSupportAttachment prefers an exact implementation narrative match across test and feature scopes", () => {
+    const supportGroup = {
+      files: [{ path: "tests/session-display-trace-aggregation.test.ts" }],
+      message:
+        "test(session-display-trace-aggregation): summarize planner decisions and coverage in trace mode\n\n- Verify buffered trace summaries render in the session display.",
+    };
+    const traceDecisionGroup = {
+      files: [
+        { path: "src/cli/trace/decision/aggregation.ts" },
+        { path: "src/cli/session-display.ts" },
+      ],
+      message:
+        "feat(trace-decision): summarize planner decisions and coverage in trace mode\n\n- Buffer and render compact planner decision summaries.",
+    };
+    const resumeGroup = {
+      files: [{ path: "src/cli/resume/execution.ts" }],
+      message:
+        "feat(resume): add bundle listing and strict replay controls\n\n- Keep resume replay controls explicit.",
+    };
+    const files = [
+      makeFile("tests/session-display-trace-aggregation.test.ts"),
+      makeFile("src/cli/trace/decision/aggregation.ts"),
+      makeFile("src/cli/session-display.ts"),
+      makeFile("src/cli/resume/execution.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+
+    expect(
+      chooseSupportAttachment(
+        supportGroup,
+        [traceDecisionGroup, resumeGroup],
+        [[0], [1]],
+        fileSignals,
+      ),
+    ).toBe(0);
+  });
+
+  test("chooseSupportAttachment treats an exact implementation narrative as a decisive single-owner anchor", () => {
+    const supportGroup = {
+      files: [{ path: "tests/session-display-trace-aggregation.test.ts" }],
+      message:
+        "test(session-display-trace-aggregation): track saved bundle progress and list resumable plans\n\n- Verify trace summaries surface saved bundle progress in the session display.",
+    };
+    const traceDecisionGroup = {
+      files: [
+        { path: "src/cli/trace/decision/aggregation.ts" },
+        { path: "src/cli/session-display.ts" },
+      ],
+      message:
+        "feat(trace-decision): track saved bundle progress and list resumable plans\n\n- Surface saved bundle progress and resumable plan listings in trace mode.",
+    };
+    const files = [
+      makeFile("tests/session-display-trace-aggregation.test.ts"),
+      makeFile("src/cli/trace/decision/aggregation.ts"),
+      makeFile("src/cli/session-display.ts"),
+    ];
+    const fileSignals = buildFileChangeSignals(files);
+
+    expect(
+      chooseSupportAttachment(
+        supportGroup,
+        [traceDecisionGroup],
+        [[0]],
+        fileSignals,
+      ),
+    ).toBe(0);
+  });
 });
 
 describe("client support coverage", () => {
@@ -110,12 +298,12 @@ describe("client support coverage", () => {
     openai: {
       apiKey: "",
       maxTokens: 512,
-      model: "gpt-4o-mini",
+      model: "gpt-5.3-codex",
       temperature: 0.3,
     },
     performance: {
       cacheEnabled: true,
-      cacheTTLSeconds: 300,
+      maxSavedPlanBundles: 50,
       parallel: true,
       timeoutMs: 15000,
     },
@@ -139,35 +327,45 @@ describe("client support coverage", () => {
   });
 
   test("isNonChatModelError recognizes both supported message variants", () => {
-    expect(isNonChatModelError(new Error("This is not a chat model"))).toBe(true);
+    expect(isNonChatModelError(new Error("This is not a chat model"))).toBe(
+      true,
+    );
     expect(
-      isNonChatModelError("Model is not supported in the v1/chat/completions API"),
+      isNonChatModelError(
+        "Model is not supported in the v1/chat/completions API",
+      ),
     ).toBe(true);
     expect(isNonChatModelError(new Error("different failure"))).toBe(false);
   });
 
   test("readChatContent trims valid responses and rejects empty content", () => {
     expect(
-      readChatContent({ choices: [{ message: { content: "  hello world  " } }] }),
+      readChatContent({
+        choices: [{ message: { content: "  hello world  " } }],
+      }),
     ).toBe("hello world");
-    expect(() => readChatContent({ choices: [{ message: { content: "   " } }] })).toThrow(
-      OpenAIError,
-    );
+    expect(() =>
+      readChatContent({ choices: [{ message: { content: "   " } }] }),
+    ).toThrow(OpenAIError);
   });
 
   test("rethrowTimeoutError upgrades abort and timeout failures", () => {
     const abortError = new Error("aborted");
     abortError.name = "AbortError";
 
-    expect(() => rethrowTimeoutError(abortError, 2500)).toThrow(OpenAITimeoutError);
-    expect(() => rethrowTimeoutError(new Error("socket timeout"), 2500)).toThrow(
+    expect(() => rethrowTimeoutError(abortError, 2500)).toThrow(
       OpenAITimeoutError,
     );
-    expect(() => rethrowTimeoutError(new Error("other failure"), 2500)).not.toThrow();
+    expect(() =>
+      rethrowTimeoutError(new Error("socket timeout"), 2500),
+    ).toThrow(OpenAITimeoutError);
+    expect(() =>
+      rethrowTimeoutError(new Error("other failure"), 2500),
+    ).not.toThrow();
   });
 
   test("supportsTemperature and toOpenAiCallError cover model and error branches", () => {
-    expect(supportsTemperature("gpt-4o-mini")).toBe(true);
+    expect(supportsTemperature("gpt-5.3-codex")).toBe(true);
     expect(supportsTemperature("gpt-5.4")).toBe(false);
     expect(toOpenAiCallError(new Error("boom"))).toBeInstanceOf(OpenAIError);
     expect(toOpenAiCallError("boom")).toBeInstanceOf(OpenAIError);
@@ -177,6 +375,6 @@ describe("client support coverage", () => {
     expect(() => validateModelName("  ")).toThrow(ConfigError);
     expect(() => validateModelName("x".repeat(101))).toThrow(ConfigError);
     expect(() => validateModelName("bad/model")).toThrow(ConfigError);
-    expect(() => validateModelName("gpt-4o-mini")).not.toThrow();
+    expect(() => validateModelName("gpt-5.3-codex")).not.toThrow();
   });
 });
