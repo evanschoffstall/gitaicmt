@@ -24,9 +24,23 @@ const RED = "\x1b[31m";
 const RESET = "\x1b[0m";
 const YELLOW = "\x1b[33m";
 
+/**
+ * Commit execution options used when replaying previously saved plan entries.
+ *
+ * `enforceMessageBody` opts into full bullet-body validation; the default path
+ * skips body validation so legacy subject-only saved plans can still replay.
+ * `onCommittedGroup` fires after each successful individual commit, allowing
+ * callers to track per-commit progress (e.g., for resume bundle sidecars).
+ */
+export interface CommitExecutionOptions {
+  enforceMessageBody?: boolean;
+  onCommittedGroup?: (groupIndex: number) => void;
+}
+
 export function executePlannedCommits(
   groups: { files: PlannedCommitFile[]; message: string }[],
   fileMap: Map<string, FileDiff>,
+  options: CommitExecutionOptions = {},
 ): void {
   const startedAtMs = performance.now();
   let committed = 0;
@@ -34,7 +48,7 @@ export function executePlannedCommits(
 
   try {
     for (let index = 0; index < groups.length; index++) {
-      committed += executeCommitGroup(groups, fileMap, index);
+      committed += executeCommitGroup(groups, fileMap, index, options);
     }
 
     logCommitCompletion(committed, groups.length, startedAtMs);
@@ -52,7 +66,9 @@ function captureInitialStagingPatch(): string {
   try {
     return getStagedPatch();
   } catch {
-    log(`${YELLOW}Warning: Could not save initial staging state for recovery${RESET}`);
+    log(
+      `${YELLOW}Warning: Could not capture staged changes before this commit step for recovery${RESET}`,
+    );
     return "";
   }
 }
@@ -61,6 +77,7 @@ function executeCommitGroup(
   groups: { files: PlannedCommitFile[]; message: string }[],
   fileMap: Map<string, FileDiff>,
   index: number,
+  options: CommitExecutionOptions,
 ): 0 | 1 {
   const group = groups[index];
   renderCommitGroupHeader(group, groups.length, fileMap, index);
@@ -68,12 +85,20 @@ function executeCommitGroup(
   resetStaging();
   stageGroupFiles(group.files, fileMap);
   if (!hasStagedChanges()) {
-    log(`${YELLOW}  (skipped - no stageable changes remain for this group)${RESET}`);
+    log(
+      `${YELLOW}  (skipped - no stageable changes remain for this group)${RESET}`,
+    );
     log("");
     return 0;
   }
 
-  renderCommitExecutionResult(commitWithMessage(group.message));
+  renderCommitExecutionResult(
+    commitWithMessage(group.message, undefined, {
+      // Translate: enforceMessageBody=true → validate body; false/undefined → skip.
+      ignoreMessageBody: !options.enforceMessageBody,
+    }),
+  );
+  options.onCommittedGroup?.(index);
   log("");
   return 1;
 }
@@ -86,10 +111,15 @@ function logCommitCompletion(
   const totalElapsed = ((performance.now() - startedAtMs) / 1000).toFixed(1);
   const skipped = total - committed;
   const skippedNote = skipped > 0 ? `, ${formatCount(skipped)} skipped` : "";
-  log(`${GREEN}${BOLD}Done:${RESET} ${formatCount(committed)} commit(s) in ${totalElapsed}s${skippedNote}`);
+  log(
+    `${GREEN}${BOLD}Done:${RESET} ${formatCount(committed)} commit(s) in ${totalElapsed}s${skippedNote}`,
+  );
 }
 
-function renderCommitExecutionResult(result: { stderr: string; stdout: string }): void {
+function renderCommitExecutionResult(result: {
+  stderr: string;
+  stdout: string;
+}): void {
   const executionResultLines = buildExecutionResultLines(
     [result.stdout, result.stderr].filter(Boolean).join("\n"),
     resolveDisplayWidth(),
@@ -122,20 +152,30 @@ function restoreStagingAfterFailure(
   total: number,
   initialStagedPatch: string,
 ): void {
-  log(`${RED}${BOLD}Failed after ${formatCount(committed)}/${formatCount(total)} commits.${RESET}`);
+  log(
+    `${RED}${BOLD}Failed after ${formatCount(committed)}/${formatCount(total)} commits.${RESET}`,
+  );
   if (committed < total && initialStagedPatch.trim().length > 0) {
     log(`${YELLOW}Attempting to restore initial staging state...${RESET}`);
     try {
       resetStaging();
       restoreStagedPatch(initialStagedPatch);
-      log(`${GREEN}Initial staging state restored successfully.${RESET}`);
+      log(
+        `${GREEN}Restored staged changes that existed before the failed commit step.${RESET}`,
+      );
     } catch {
       log(`${RED}Failed to restore staging state.${RESET}`);
-      log(`${YELLOW}Manual recovery: Review 'git status' and 'git log' to assess state.${RESET}`);
-      log(`${YELLOW}Previous ${formatCount(committed)} commits were completed successfully.${RESET}`);
+      log(
+        `${YELLOW}Manual recovery: Review 'git status' and 'git log' to assess state.${RESET}`,
+      );
+      log(
+        `${YELLOW}Previous ${formatCount(committed)} commits were completed successfully.${RESET}`,
+      );
     }
     return;
   }
 
-  log(`${YELLOW}Manual recovery required: Check 'git status' and 'git log'.${RESET}`);
+  log(
+    `${YELLOW}Manual recovery: Review 'git status' and 'git log' to assess state.${RESET}`,
+  );
 }

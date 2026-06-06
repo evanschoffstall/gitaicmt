@@ -60,11 +60,13 @@ describe("planner helper coverage", () => {
     expect(buildPlaceholderPlanGroupsForEstimate(files, 3)).toEqual([
       {
         files: [{ path: "src/a.ts" }, { path: "src/b.ts" }],
-        message: "feat(plan): change 1\n\n- Cover the staged files grouped into change 1.",
+        message:
+          "feat(plan): change 1\n\n- Cover the staged files grouped into change 1.",
       },
       {
         files: [{ path: "src/c.ts" }, { path: "src/d.ts" }],
-        message: "feat(plan): change 2\n\n- Cover the staged files grouped into change 2.",
+        message:
+          "feat(plan): change 2\n\n- Cover the staged files grouped into change 2.",
       },
     ]);
   });

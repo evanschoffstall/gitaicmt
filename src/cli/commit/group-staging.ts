@@ -1,16 +1,21 @@
 /**
  * Hunk-level file staging helpers.
  *
- * Extracted from command-line-interface.ts so tests can import this module
- * without triggering command-line-interface.ts's unconditional `main()` invocation.
+ * Extracted from main.ts so tests can import this module
+ * without triggering main.ts's unconditional `main()` invocation.
  */
 import { ValidationError } from "../../application/errors.js";
 import { buildPatch, type FileDiff } from "../../git/diff.js";
-import { stageFiles, stagePatch } from "../../git/operations.js";
+import {
+  isPathTrackedInIndex,
+  stageFiles,
+  stagePatch,
+} from "../../git/operations.js";
 import { resolveTerminalColumns } from "../terminal/columns.js";
 import { wrapTerminalTextBlock } from "../terminal/line-wrapping.js";
 
-type PlannedCommitFile = import("../../commit-planning/orchestration.js").PlannedCommitFile;
+type PlannedCommitFile =
+  import("../../commit-planning/orchestration.js").PlannedCommitFile;
 
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
@@ -54,15 +59,24 @@ export function stageGroupFiles(
   // Stage all entries via patch (git apply --cached)
   for (const { file, hunkIndices } of entries) {
     const selectedHunks = hunkIndices.map((i) => file.hunks[i]);
-    const patch = buildPatch(file, selectedHunks);
+    const patchFile = resolvePatchFileForCurrentIndex(file, cwd);
+    const patch = buildPatch(patchFile, selectedHunks);
     if (!patch.trim()) {
-      if (file.hunks.length === 0) {
-        stageFiles([file.path], cwd);
-        continue;
-      }
+      // Empty patch: fall back to staging the whole file regardless of hunk count.
+      // This handles metadata-only changes, mode changes, and edge cases where
+      // patch reconstruction fails but the file still has stageable content.
       log(
-        `${YELLOW}Warning: empty patch for ${file.path} hunks [${hunkIndices.join(", ")}], skipping${RESET}`,
+        `${YELLOW}Warning: empty patch for ${file.path}, falling back to git add${RESET}`,
       );
+      try {
+        stageFiles([file.path], cwd);
+      } catch (err) {
+        log(
+          `${RED}Error staging ${file.path} via git add: ${String(err)}${RESET}`,
+        );
+        // Continue to next file instead of throwing - this group might have
+        // other stageable files
+      }
       continue;
     }
     try {
@@ -107,7 +121,41 @@ function log(msg: string) {
     fallbackColumns: 100,
     streams: [process.stderr],
   });
-  for (const line of wrapTerminalTextBlock(msg, Math.max(20, terminalColumns - 1))) {
+  for (const line of wrapTerminalTextBlock(
+    msg,
+    Math.max(20, terminalColumns - 1),
+  )) {
     process.stderr.write(`${line}\n`);
   }
+}
+
+/**
+ * Re-anchor later rename hunks to the current path after an earlier split
+ * commit has already recorded the rename in history.
+ */
+function resolvePatchFileForCurrentIndex(
+  file: FileDiff,
+  cwd?: string,
+): FileDiff {
+  if (file.status !== "renamed" || !file.oldPath) {
+    return file;
+  }
+
+  const effectiveCwd = cwd ?? process.cwd();
+  const oldPathTracked = isPathTrackedInIndex(file.oldPath, effectiveCwd);
+  if (oldPathTracked) {
+    return file;
+  }
+
+  const newPathTracked = isPathTrackedInIndex(file.path, effectiveCwd);
+  if (!newPathTracked) {
+    return file;
+  }
+
+  return {
+    ...file,
+    metadataLines: [],
+    oldPath: file.path,
+    status: "modified",
+  };
 }

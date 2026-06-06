@@ -1,3 +1,40 @@
-export * from "./config/index.js";
-export * from "./constants.js";
-export * from "./errors.js";
+export type { Config } from "./config/index.js";
+export {
+  DEFAULTS,
+  globalConfigPath,
+  initConfig,
+  loadConfig,
+  resetConfigCache,
+  userConfigPath,
+} from "./config/index.js";
+export {
+  CACHE_MAX_SIZE,
+  CLUSTERING_THRESHOLD,
+  CONSOLIDATION_RESPONSE_OVERHEAD_TOKENS,
+  CONSOLIDATION_RESPONSE_SAFETY_FACTOR,
+  DEFAULT_EMPTY_COMMIT_MESSAGE,
+  DIFF_CONTEXT_LINES,
+  GIT_MAX_BUFFER,
+  GROUPING_BASE_TOKENS,
+  GROUPING_TIMEOUT_MS,
+  MAX_CLUSTER_PASSES,
+  MAX_COMMIT_GROUPS,
+  MAX_COMMIT_MESSAGE_LENGTH,
+  MAX_CONSOLIDATION_PASSES,
+  MAX_FILES_PER_BATCH,
+  MAX_GROUPING_PROMPT_LINES,
+  MAX_PATH_LENGTH,
+  MIN_CLUSTERING_TOKENS,
+  MIN_COMMIT_MESSAGE_TOKENS,
+  MIN_GROUPING_TOKENS,
+  TOKENS_PER_CLUSTER_GROUP,
+  TOKENS_PER_FILE,
+} from "./constants.js";
+export {
+  ConfigError,
+  GitCommandError,
+  InvalidPathError,
+  OpenAIError,
+  OpenAITimeoutError,
+  ValidationError,
+} from "./errors.js";
