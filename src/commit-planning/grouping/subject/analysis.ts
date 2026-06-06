@@ -139,6 +139,17 @@ export function hasPotentialMergeSignals(groups: PlannedCommit[]): boolean {
       rightIndex++
     ) {
       if (
+        hasCompactSurfaceRolloutMergeSignal(
+          groups[leftIndex],
+          groups[rightIndex],
+          subjects[leftIndex],
+          subjects[rightIndex],
+          {
+            countSharedSubjectWords,
+            isSupportLikeType,
+            scopesRelated,
+          },
+        ) ||
         hasMergeSignalForPair(
           {
             leftAreas: areas[leftIndex],
@@ -149,6 +160,7 @@ export function hasPotentialMergeSignals(groups: PlannedCommit[]): boolean {
             rightSubject: subjects[rightIndex],
           },
           {
+            countSharedSubjectWords,
             groupsShareCoverage,
             groupsSharePaths,
             hasHighWordOverlap,
