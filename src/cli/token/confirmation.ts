@@ -35,6 +35,7 @@ export async function confirmCommitPlan(
   logActualTokenUsage(getTokenUsageSummary(), getTokenUsageByStage());
   const confirmed = await promptYesNo(
     buildReadyPromptLines(plannedCommitCount, resolveLogWidth()).join("\n"),
+    { defaultOnEof: false },
   );
   if (!confirmed) {
     log(`${YELLOW}Aborted.${RESET}`);

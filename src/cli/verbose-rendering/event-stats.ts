@@ -1,22 +1,9 @@
-type AiOutputEvent = import("../../commit-planning/openai-client.js").AiOutputEvent;
+type AiOutputEvent =
+  import("../../commit-planning/openai-client.js").AiOutputEvent;
 
-const PLANNER_DECISION_TITLES = {
-  "batched-plan-finalization": "Batched plan finalization",
-  "cluster-failed": "Cluster failed",
-  "cluster-fallback": "Cluster fallback",
-  "cluster-pass": "Cluster pass",
-  "cluster-stop": "Cluster stop",
-  "consolidation-failed": "Consolidation failed",
-  "consolidation-fallback": "Consolidation fallback",
-  "consolidation-noop": "Consolidation noop",
-  "consolidation-pass": "Consolidation pass",
-  "consolidation-retry-scheduled": "Consolidation retry scheduled",
-  "consolidation-stop": "Consolidation stop",
-  "dependency-ordering": "Dependency ordering",
-  "finalize-planned-groups": "Finalize planned groups",
-  "repartition-after-consolidation": "Repartition after consolidation",
-  "skip-consolidation": "Skip consolidation",
-} satisfies Record<string, string>;
+const DECISION_SEPARATOR_RE = /[\s_]+/g;
+const NON_DECISION_CHAR_RE = /[^a-z0-9-]/g;
+const DUPLICATE_DASH_RE = /-+/g;
 
 export function collectEventStatParts(event: AiOutputEvent): {
   summaryParts: string[];
@@ -45,12 +32,10 @@ export function describePlannerDecision(parsed: unknown): null | string {
     return null;
   }
 
-  const title = Object.hasOwn(PLANNER_DECISION_TITLES, decision)
-    ? PLANNER_DECISION_TITLES[
-        decision as keyof typeof PLANNER_DECISION_TITLES
-      ]
-    : undefined;
-  return title ?? formatPlannerDecisionTitle(decision);
+  const baseTitle = formatPlannerDecisionTitle(decision);
+  return isPlannerDecisionResultsSummary(parsed)
+    ? `${baseTitle} results`
+    : baseTitle;
 }
 
 export function getPlannerDecisionName(parsed: unknown): null | string {
@@ -63,7 +48,19 @@ export function getPlannerDecisionName(parsed: unknown): null | string {
     return null;
   }
 
-  return parsed.decision;
+  return toNormalizedPlannerDecisionId(parsed.decision);
+}
+
+export function toNormalizedPlannerDecisionId(value: unknown): null | string {
+  if (typeof value !== "string") return null;
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(DECISION_SEPARATOR_RE, "-")
+    .replace(NON_DECISION_CHAR_RE, "")
+    .replace(DUPLICATE_DASH_RE, "-")
+    .replace(/^-|-$/g, "");
+  return normalized.length === 0 ? null : normalized;
 }
 
 function formatDuration(durationMs: number): string {
@@ -83,6 +80,18 @@ function formatPlannerDecisionTitle(decision: string): string {
     .join(" ");
 }
 
-function formatUsagePart(value: number | undefined, suffix: string): string | undefined {
+function formatUsagePart(
+  value: number | undefined,
+  suffix: string,
+): string | undefined {
   return typeof value === "number" ? `${String(value)} ${suffix}` : undefined;
+}
+
+function isPlannerDecisionResultsSummary(parsed: unknown): boolean {
+  return (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    "summaryKind" in parsed &&
+    parsed.summaryKind === "results"
+  );
 }

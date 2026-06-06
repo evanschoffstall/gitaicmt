@@ -5,9 +5,9 @@ import {
   describePlannerDecision,
   getPlannerDecisionName,
 } from "./event-stats.js";
-import { formatJsonTraceValue } from "./json-trace.js";
 
-type AiOutputEvent = import("../../commit-planning/openai-client.js").AiOutputEvent;
+type AiOutputEvent =
+  import("../../commit-planning/openai-client.js").AiOutputEvent;
 
 export const ANSI_BOLD = "\x1b[1m";
 export const ANSI_CYAN = "\x1b[36m";
@@ -15,6 +15,12 @@ export const ANSI_DIM = "\x1b[2m";
 export const ANSI_RED = "\x1b[31m";
 export const ANSI_RESET = "\x1b[0m";
 export const ANSI_YELLOW = "\x1b[33m";
+
+const TRACE_SEVERITY_COLORS: Record<TraceFrameSeverity, string> = {
+  error: ANSI_RED,
+  info: ANSI_CYAN,
+  warning: ANSI_YELLOW,
+};
 
 export type TraceFrameSeverity = "error" | "info" | "warning";
 
@@ -84,17 +90,21 @@ export function formatEventStatLines(
   const lines: string[] = [];
 
   if (summaryParts.length > 0) {
-    lines.push(...formatWrappedStatLine("stats", summaryParts, maxWidth, severity));
+    lines.push(
+      ...formatWrappedStatLine("stats", summaryParts, maxWidth, severity),
+    );
   }
 
   if (usageParts.length > 0) {
-    lines.push(...formatWrappedStatLine("usage", usageParts, maxWidth, severity));
+    lines.push(
+      ...formatWrappedStatLine("usage", usageParts, maxWidth, severity),
+    );
   }
 
   return lines;
 }
 
-/** Renders a full trace block (raw/JSON expansion) for the given event. */
+/** Renders a compact trace-summary block for the given event. */
 export function formatTraceBlock(
   event: AiOutputEvent,
   parsed: unknown,
@@ -117,8 +127,8 @@ export function formatTraceBlock(
 
   const traceContent =
     parsed === undefined
-      ? rawContent
-      : formatJsonTraceValue(parsed, maxWidth - 2);
+      ? `content: ${rawContent.replace(/\s+/g, " ").trim()}`
+      : formatTracePayload(parsed, maxWidth - 2);
 
   for (const rawLine of traceContent.split("\n")) {
     lines.push(...wrapTraceLine(rawLine, maxWidth, severity));
@@ -174,7 +184,7 @@ export function styleTraceFooter(
   line: string,
   severity: TraceFrameSeverity = "info",
 ): string {
-  return `${ANSI_DIM}${getSeverityColor(severity)}${line}${ANSI_RESET}`;
+  return `${ANSI_DIM}${TRACE_SEVERITY_COLORS[severity]}${line}${ANSI_RESET}`;
 }
 
 /** Styles a trace-box header line with bold cyan. */
@@ -182,7 +192,7 @@ export function styleTraceHeader(
   line: string,
   severity: TraceFrameSeverity = "info",
 ): string {
-  return `${ANSI_BOLD}${getSeverityColor(severity)}${line}${ANSI_RESET}`;
+  return `${ANSI_BOLD}${TRACE_SEVERITY_COLORS[severity]}${line}${ANSI_RESET}`;
 }
 
 /** Styles a trace rail with dimmed content for secondary metadata lines. */
@@ -196,11 +206,11 @@ export function styleTraceMutedRail(
 
   const labelMatch = /^(│\s+)(stats:|usage:)(.*)$/u.exec(line);
   if (!labelMatch) {
-    return `${getSeverityColor(severity)}│${ANSI_RESET}${ANSI_DIM}${line.slice(1)}${ANSI_RESET}`;
+    return `${TRACE_SEVERITY_COLORS[severity]}│${ANSI_RESET}${ANSI_DIM}${line.slice(1)}${ANSI_RESET}`;
   }
 
   const [, prefix, label, suffix] = labelMatch;
-  return `${getSeverityColor(severity)}│${ANSI_RESET}${ANSI_DIM}${prefix.slice(1)}${ANSI_RESET}${ANSI_BOLD}${getSeverityColor(severity)}${label}${ANSI_RESET}${ANSI_DIM}${suffix}${ANSI_RESET}`;
+  return `${TRACE_SEVERITY_COLORS[severity]}│${ANSI_RESET}${ANSI_DIM}${prefix.slice(1)}${ANSI_RESET}${ANSI_BOLD}${TRACE_SEVERITY_COLORS[severity]}${label}${ANSI_RESET}${ANSI_DIM}${suffix}${ANSI_RESET}`;
 }
 
 /**
@@ -215,7 +225,7 @@ export function styleTraceRail(
     return line;
   }
 
-  return `${getSeverityColor(severity)}│${ANSI_RESET}${line.slice(1)}`;
+  return `${TRACE_SEVERITY_COLORS[severity]}│${ANSI_RESET}${line.slice(1)}`;
 }
 
 /**
@@ -228,13 +238,16 @@ export function wrapLine(
   firstPrefix: string,
   continuationPrefix: string,
 ): string[] {
-  const wrappedContentLines = wrapTokenizedTextBySeparatorPreference(text, maxWidth);
+  const wrappedContentLines = wrapTokenizedTextBySeparatorPreference(
+    text,
+    maxWidth,
+  );
   if (wrappedContentLines.length === 1 && wrappedContentLines[0].length === 0) {
     return [firstPrefix.trimEnd()];
   }
 
-  return wrappedContentLines.map((line, index) =>
-    `${index === 0 ? firstPrefix : continuationPrefix}${line}`,
+  return wrappedContentLines.map(
+    (line, index) => `${index === 0 ? firstPrefix : continuationPrefix}${line}`,
   );
 }
 
@@ -271,6 +284,31 @@ export function wrapTraceLine(
   ).map((line) => styleTraceRail(line, severity));
 }
 
+/**
+ * Formats a parsed JSON trace payload as human-readable text.
+ * Handles number matrices (cluster arrays) specially; falls back to JSON.
+ */
+function formatTracePayload(parsed: unknown, _maxWidth: number): string {
+  if (Array.isArray(parsed)) {
+    // Number matrix → cluster summary (e.g. [[0,6],[1,5,8],[3,4,7,9],[2]])
+    if (
+      (parsed as unknown[]).every(
+        (item) =>
+          Array.isArray(item) &&
+          (item as unknown[]).every((v) => typeof v === "number"),
+      )
+    ) {
+      const sizes = (parsed as number[][]).map((c) => String(c.length));
+      return `summary: ${String(parsed.length)} cluster(s) · sizes ${sizes.join(", ")}`;
+    }
+    return `summary: ${String(parsed.length)} item(s)`;
+  }
+  if (typeof parsed === "object" && parsed !== null) {
+    return JSON.stringify(parsed, null, 2);
+  }
+  return String(parsed);
+}
+
 function formatWrappedStatLine(
   label: "stats" | "usage",
   parts: string[],
@@ -283,18 +321,4 @@ function formatWrappedStatLine(
     "│   ",
     "│     ",
   ).map((line) => styleTraceMutedRail(line, severity));
-}
-
-function getSeverityColor(severity: TraceFrameSeverity): string {
-  switch (severity) {
-    case "error": {
-      return ANSI_RED;
-    }
-    case "warning": {
-      return ANSI_YELLOW;
-    }
-    default: {
-      return ANSI_CYAN;
-    }
-  }
 }

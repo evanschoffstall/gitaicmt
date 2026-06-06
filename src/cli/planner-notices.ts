@@ -1,4 +1,5 @@
 import { type AiOutputEvent } from "../commit-planning/orchestration.js";
+import { toNormalizedPlannerDecisionId } from "./verbose-rendering/index.js";
 
 export interface PlannerNoticeState {
   fallbackReason: null | string;
@@ -74,7 +75,7 @@ export function recordPlannerNotice(
 function parsePlannerDecision(content: string): null | string {
   try {
     const parsed = JSON.parse(content) as PlannerDecisionPayload;
-    return typeof parsed.decision === "string" ? parsed.decision : null;
+    return toNormalizedPlannerDecisionId(parsed.decision);
   } catch {
     return null;
   }

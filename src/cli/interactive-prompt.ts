@@ -7,16 +7,27 @@ import { resolveLogWidth } from "./viewport.js";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
-export async function promptYesNo(question: string): Promise<boolean> {
+interface PromptYesNoOptions {
+  defaultOnEof?: boolean;
+}
+
+export async function promptYesNo(
+  question: string,
+  options: PromptYesNoOptions = {},
+): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
-  const wrappedQuestionLines = wrapTerminalTextBlock(question, resolveLogWidth());
+  const wrappedQuestionLines = wrapTerminalTextBlock(
+    question,
+    resolveLogWidth(),
+  );
+  const defaultOnEof = options.defaultOnEof ?? true;
 
   try {
     for (;;) {
       const answer = await readPromptAnswer(rl, wrappedQuestionLines);
       if (answer === "__EOF__") {
         writeTerminalLines([""]);
-        return true;
+        return defaultOnEof;
       }
 
       const normalizedAnswer = answer.trim().toLowerCase();
